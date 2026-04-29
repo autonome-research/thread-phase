@@ -41,7 +41,10 @@ export {
   type AgentRunnerOptions,
   type AgentRunResult,
   type ActivityEntry,
-} from './agent-runner.js';
+  type AgentStreamEvent,
+  type FinishReason,
+  type UsageInfo,
+} from './agent/index.js';
 
 // Session: persisted event log + job runner (sqlite is the bundled default,
 // JobStore is the interface — bring your own backend if needed).

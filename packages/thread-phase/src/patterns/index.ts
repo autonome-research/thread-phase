@@ -8,10 +8,14 @@ export {
   type FanOutOptions,
 } from './parallel-fanout.js';
 
+export { parallelPhases } from './parallel-phases.js';
+
 export {
   boundedFanout,
+  streamingBoundedFanout,
   type BoundedFanOutOptions,
   type ItemDoneEvent,
+  type StreamingFanoutEvent,
 } from './bounded-fanout.js';
 
 export {

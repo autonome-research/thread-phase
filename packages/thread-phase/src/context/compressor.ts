@@ -115,6 +115,13 @@ export class AggressiveCompressor implements CompressorStrategy {
 // Ensures every assistant ToolCall has a matching tool-result message and
 // vice versa. Orphaned results get dropped; orphaned calls get stub results
 // inserted. Run AFTER compression and before the next API call.
+//
+// Partial-orphan handling: when an assistant emits multiple tool calls and
+// only some have matching results, stubs for the orphaned calls are
+// appended *after* the run of real tool-result messages (i.e. immediately
+// before whatever non-tool message comes next, or end-of-array). This
+// preserves the OpenAI invariant "every tool_call.id must have a tool
+// message" without re-ordering existing real results.
 // ---------------------------------------------------------------------------
 
 export function sanitizeToolPairs(messages: Message[]): Message[] {
@@ -129,10 +136,10 @@ export function sanitizeToolPairs(messages: Message[]): Message[] {
     }
   }
 
-  const orphanedCalls = [...callIds].filter((id) => !resultIds.has(id));
+  const orphanedCalls = new Set([...callIds].filter((id) => !resultIds.has(id)));
   const orphanedResults = new Set([...resultIds].filter((id) => !callIds.has(id)));
 
-  if (orphanedCalls.length === 0 && orphanedResults.size === 0) {
+  if (orphanedCalls.size === 0 && orphanedResults.size === 0) {
     return messages;
   }
 
@@ -148,15 +155,26 @@ export function sanitizeToolPairs(messages: Message[]): Message[] {
 
     result.push(msg);
 
-    // Insert stub results for orphaned calls right after the assistant
-    // message that contained them — but only if the next message isn't
-    // already a tool-result message (in which case real results follow).
+    // Insert stub results for orphaned calls right after the assistant +
+    // any contiguous run of (kept) real tool-result messages that follow
+    // it. This handles the partial-orphan case where some calls have real
+    // results and some don't — stubs go AFTER the real ones rather than
+    // being skipped entirely (which would leave the orphans unpaired).
     if (msg.role === 'assistant') {
-      const orphansHere = msg.toolCalls.map((tc) => tc.id).filter((id) => orphanedCalls.includes(id));
+      const orphansHere = msg.toolCalls.map((tc) => tc.id).filter((id) => orphanedCalls.has(id));
       if (orphansHere.length === 0) continue;
 
-      const nextMsg = messages[i + 1];
-      if (nextMsg?.role === 'tool') continue;
+      // Walk forward over any tool messages immediately following the
+      // assistant — append the kept ones to result first, then stub the
+      // orphans, so the final order is: assistant → real results → stubs.
+      let j = i + 1;
+      while (j < messages.length && messages[j]!.role === 'tool') {
+        const next = messages[j]! as Extract<Message, { role: 'tool' }>;
+        if (!orphanedResults.has(next.toolCallId)) {
+          result.push(next);
+        }
+        j++;
+      }
 
       for (const id of orphansHere) {
         result.push({
@@ -165,6 +183,10 @@ export function sanitizeToolPairs(messages: Message[]): Message[] {
           content: '[Result removed during context compression]',
         });
       }
+
+      // Skip past the tool messages we just consumed; the outer loop's
+      // `i++` lands on `j`.
+      i = j - 1;
     }
   }
 

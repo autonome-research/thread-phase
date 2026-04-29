@@ -73,25 +73,54 @@ describe('sanitizeToolPairs', () => {
     expect(sanitizeToolPairs(msgs)).toEqual(msgs); // no spurious stubs
   });
 
-  it('handles assistant with multiple calls where one is orphaned', () => {
+  it('appends stubs after real tool results when an assistant has partial orphans', () => {
+    // Regression test for the partial-orphan edge case: an assistant emits
+    // calls 'a' and 'b'; only 'a' has a real result. The fix preserves the
+    // real result and appends a stub for 'b' so the OpenAI invariant
+    // "every tool_call.id has a matching tool message" still holds.
     const msgs: Message[] = [
       sys('s'),
       assistant('two calls', [
         { id: 'a', name: 'foo' },
         { id: 'b', name: 'bar' },
       ]),
-      toolResult('a', 'ok'), // result for a present, b orphaned
+      toolResult('a', 'ok'),
       assistant('next', []),
     ];
     const out = sanitizeToolPairs(msgs);
-    // Original 4 + 1 stub = 5; stub for 'b' inserted right after the assistant
-    // (which is index 1), but the next message at index 2 is already a tool
-    // (for 'a'), so the stub must NOT be inserted there. Reading the impl:
-    // when nextMsg is role:'tool', stubs are skipped.
-    // Real expected behavior: skips the stub because a tool follows.
-    // That means orphan 'b' will trip the API. This is a known limitation
-    // worth documenting; here we just lock in the current behavior.
-    expect(out).toEqual(msgs);
+    expect(out).toHaveLength(5);
+    expect(out[0]).toEqual(sys('s'));
+    expect(out[1]).toEqual(msgs[1]); // assistant unchanged
+    expect(out[2]).toEqual(toolResult('a', 'ok')); // real result preserved
+    expect(out[3]).toEqual({
+      role: 'tool',
+      toolCallId: 'b',
+      content: '[Result removed during context compression]',
+    });
+    expect(out[4]).toEqual(assistant('next', [])); // follow-on assistant intact
+  });
+
+  it('preserves order of real results and appends stubs in tool-call order', () => {
+    const msgs: Message[] = [
+      sys('s'),
+      assistant('three calls', [
+        { id: 'a', name: 'foo' },
+        { id: 'b', name: 'bar' },
+        { id: 'c', name: 'baz' },
+      ]),
+      toolResult('b', 'real-b'),
+      toolResult('c', 'real-c'),
+      assistant('next', []),
+    ];
+    const out = sanitizeToolPairs(msgs);
+    expect(out.map((m) => (m.role === 'tool' ? `t:${m.toolCallId}` : m.role))).toEqual([
+      'system',
+      'assistant',
+      't:b',
+      't:c',
+      't:a',
+      'assistant',
+    ]);
   });
 
   it('strips multiple orphaned results in one pass', () => {

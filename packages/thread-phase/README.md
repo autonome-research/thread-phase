@@ -6,7 +6,7 @@ Compose multi-step agent workflows out of small, typed phases. Each phase has it
 
 ## Status
 
-`v0.0.1` — phase framework, agent runner, JobStore, patterns, tool registry. 57 tests passing.
+`v0.1` — phase framework, streaming agent runner with structured results, JobStore, patterns, tool registry, sqlite-backed event log. 98 tests passing. Used in production by chiya-library.
 
 ## Why
 
@@ -49,7 +49,7 @@ The framework assumes OpenAI-compatible chat completions with tool calls. Tested
 
 ## Status, limits, what's next
 
-- `npm test` — 49 tests across phase, cache, orchestrator, parseJSON, sanitizeToolPairs, ToolRegistry, SqliteJobStore.
+- `npm test` — 98 tests covering phase framework, agent runner streaming, cancellation, parallelPhases, sanitizeToolPairs, ToolRegistry, SqliteJobStore, SSE adapter.
 - `npm run smoke` — 4-stage end-to-end smoke against the configured inference endpoint.
 - See [`ROADMAP.md`](./ROADMAP.md) for known limitations, deferred features, and architectural cleanups grouped by severity.
 

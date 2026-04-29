@@ -12,3 +12,9 @@ export {
   JobRunner,
   type LiveEvent,
 } from './job-runner.js';
+
+export {
+  streamToSSE,
+  type SSEResponse,
+  type StreamToSSEOptions,
+} from './sse.js';

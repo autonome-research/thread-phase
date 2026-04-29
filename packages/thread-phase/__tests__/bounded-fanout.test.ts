@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { boundedFanout } from '../src/patterns/bounded-fanout.js';
+import {
+  boundedFanout,
+  streamingBoundedFanout,
+  type StreamingFanoutEvent,
+} from '../src/patterns/bounded-fanout.js';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -105,5 +109,124 @@ describe('boundedFanout', () => {
       },
     });
     expect(peak).toBeLessThanOrEqual(4);
+  });
+
+  it('rejects with abort reason when signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort('test-abort');
+    await expect(
+      boundedFanout({
+        items: [1, 2, 3],
+        runner: async (n) => n,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('test-abort');
+  });
+
+  it('stops dispatching new items after abort mid-flight', async () => {
+    const controller = new AbortController();
+    let started = 0;
+    const promise = boundedFanout({
+      items: Array.from({ length: 20 }, (_, i) => i),
+      concurrency: 2,
+      runner: async (n) => {
+        started++;
+        await sleep(10);
+        return n;
+      },
+      signal: controller.signal,
+    });
+    // Abort after the first batch has started.
+    setTimeout(() => controller.abort('cancelled'), 15);
+    await expect(promise).rejects.toThrow();
+    // We expect strictly fewer items started than total — not all 20.
+    expect(started).toBeLessThan(20);
+  });
+});
+
+describe('streamingBoundedFanout', () => {
+  it('yields one item_done event per item plus a final done event', async () => {
+    const events: StreamingFanoutEvent<number, number>[] = [];
+    for await (const e of streamingBoundedFanout({
+      items: [1, 2, 3, 4],
+      concurrency: 2,
+      runner: async (n) => n * 10,
+    })) {
+      events.push(e);
+    }
+    const itemEvents = events.filter((e) => e.type === 'item_done');
+    expect(itemEvents).toHaveLength(4);
+    const last = events[events.length - 1]!;
+    expect(last.type).toBe('done');
+    if (last.type === 'done') expect(last.results).toEqual([10, 20, 30, 40]);
+  });
+
+  it('reports progress monotonically increasing', async () => {
+    const progresses: number[] = [];
+    for await (const e of streamingBoundedFanout({
+      items: [1, 2, 3, 4, 5],
+      concurrency: 2,
+      runner: async (n) => {
+        await sleep(n);
+        return n;
+      },
+    })) {
+      if (e.type === 'item_done') progresses.push(e.progress);
+    }
+    expect(progresses).toHaveLength(5);
+    for (let i = 1; i < progresses.length; i++) {
+      expect(progresses[i]!).toBeGreaterThan(progresses[i - 1]!);
+    }
+    expect(progresses[progresses.length - 1]!).toBeCloseTo(1.0);
+  });
+
+  it('preserves input order in the final results array', async () => {
+    let final: number[] = [];
+    for await (const e of streamingBoundedFanout({
+      items: [50, 5, 30, 1],
+      concurrency: 4,
+      runner: async (n) => {
+        await sleep(n);
+        return n;
+      },
+    })) {
+      if (e.type === 'done') final = e.results;
+    }
+    expect(final).toEqual([50, 5, 30, 1]);
+  });
+
+  it('throws on first runner error', async () => {
+    const consume = async () => {
+      for await (const _ of streamingBoundedFanout({
+        items: [1, 2, 3],
+        concurrency: 1,
+        runner: async (n) => {
+          if (n === 2) throw new Error('boom');
+          return n;
+        },
+      })) {
+        // drain
+      }
+    };
+    await expect(consume()).rejects.toThrow('boom');
+  });
+
+  it('respects abort signal mid-stream', async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort('cancelled'), 15);
+    const consume = async () => {
+      for await (const _ of streamingBoundedFanout({
+        items: Array.from({ length: 30 }, (_, i) => i),
+        concurrency: 2,
+        runner: async (n) => {
+          await sleep(10);
+          return n;
+        },
+        signal: controller.signal,
+      })) {
+        // drain
+      }
+    };
+    await expect(consume()).rejects.toThrow();
   });
 });

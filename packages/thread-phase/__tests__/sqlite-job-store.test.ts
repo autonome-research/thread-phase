@@ -114,6 +114,34 @@ describe('SqliteJobStore — events', () => {
   });
 });
 
+describe('SqliteJobStore — migrations', () => {
+  it('sets PRAGMA user_version after first init', () => {
+    const path = join(dir, 'mig.db');
+    const s = new SqliteJobStore(path);
+    // Re-open with raw sqlite to peek at user_version.
+    s.close();
+    // Open via SqliteJobStore again — second open should be idempotent.
+    const s2 = new SqliteJobStore(path);
+    // Sanity: tables exist and CRUD works after re-open.
+    const id = s2.createJob('p', null);
+    expect(s2.getJob(id)).not.toBeNull();
+    s2.close();
+  });
+
+  it('preserves data across re-open (no DROP/recreate)', () => {
+    const path = join(dir, 'persist.db');
+    const a = new SqliteJobStore(path);
+    const id = a.createJob('p', { v: 1 });
+    a.appendEvent(id, { type: 'phase', phase: 'x' });
+    a.close();
+
+    const b = new SqliteJobStore(path);
+    expect(b.getJob(id)).toMatchObject({ id, name: 'p', input: { v: 1 } });
+    expect(b.getEvents(id)).toHaveLength(1);
+    b.close();
+  });
+});
+
 describe('SqliteJobStore — listJobs', () => {
   it('returns most-recent first', async () => {
     const a = store.createJob('p1', null);

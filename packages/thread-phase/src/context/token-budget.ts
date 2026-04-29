@@ -61,6 +61,19 @@ export interface TokenBudgetConfig {
   perResultCapChars: number;
   /** Preview size (chars) when a result is capped. */
   previewSizeChars: number;
+  /**
+   * Leading messages preserved verbatim during compression — typically the
+   * system prompt and the seed user message. Default 1.
+   */
+  protectFirst: number;
+  /**
+   * Trailing messages preserved verbatim during compression — recent context
+   * the model needs to make progress. Default 6 (deterministic) / 4 (aggressive).
+   * Set to a per-pipeline value when the workflow needs more or less recent history.
+   */
+  protectLast: number;
+  /** Trailing messages preserved during the aggressive (HARD_STOP) compressor. Default 4. */
+  protectLastAggressive: number;
 }
 
 const DEFAULT_CONFIG: TokenBudgetConfig = {
@@ -70,6 +83,9 @@ const DEFAULT_CONFIG: TokenBudgetConfig = {
   responseReserve: 4_096,
   perResultCapChars: 12_000,
   previewSizeChars: 1_500,
+  protectFirst: 1,
+  protectLast: 6,
+  protectLastAggressive: 4,
 };
 
 // ---------------------------------------------------------------------------
@@ -125,6 +141,18 @@ export class TokenBudgetTracker {
     return {
       maxChars: this.config.perResultCapChars,
       previewChars: this.config.previewSizeChars,
+    };
+  }
+
+  getProtectCounts(): {
+    protectFirst: number;
+    protectLast: number;
+    protectLastAggressive: number;
+  } {
+    return {
+      protectFirst: this.config.protectFirst,
+      protectLast: this.config.protectLast,
+      protectLastAggressive: this.config.protectLastAggressive,
     };
   }
 

@@ -15,6 +15,12 @@
  *
  * Downstream apps extend `BasePipelineContext` with their own typed fields
  * and parameterize `Phase` on that context type.
+ *
+ * Custom event types: `Phase` has a second optional type parameter `TEvent`
+ * for downstream apps that want a discriminated union of their own events
+ * instead of the generic `{ type: 'data', key, value }` shape. Default is
+ * the framework's `PipelineEvent`. The orchestrator and JobRunner are
+ * parameterized accordingly.
  */
 
 import type { PipelineCache } from './cache.js';
@@ -33,9 +39,10 @@ export interface BasePipelineContext {
 // ---------------------------------------------------------------------------
 // Streamed event shape — what phases yield.
 //
-// Domain-specific events (e.g. "citation", "confidence") are emitted via the
-// generic `data` event with a string `key`, so the framework's union doesn't
-// need to know about every downstream event type.
+// Domain-specific events (e.g. "citation", "confidence") can be emitted via
+// the generic `data` event with a string `key` for callers that don't want
+// to maintain a custom union, OR a downstream app can parameterize Phase
+// with its own TEvent type to get full discriminated-union narrowing.
 // ---------------------------------------------------------------------------
 
 export type PipelineEvent =
@@ -50,11 +57,22 @@ export type PipelineEvent =
 
 // ---------------------------------------------------------------------------
 // Phase interface
+//
+// `TEvent` defaults to the framework's `PipelineEvent` so existing code
+// stays valid. Downstream apps that want their own typed events can write:
+//
+//   type MyEvent = PipelineEvent | { type: 'citation'; ... };
+//   const phase: Phase<MyCtx, MyEvent> = { ... };
+//
+// and have `MyEvent` narrowing inside `run`.
 // ---------------------------------------------------------------------------
 
-export interface Phase<TCtx extends BasePipelineContext = BasePipelineContext> {
+export interface Phase<
+  TCtx extends BasePipelineContext = BasePipelineContext,
+  TEvent = PipelineEvent,
+> {
   readonly name: string;
-  run(ctx: TCtx): AsyncGenerator<PipelineEvent, void>;
+  run(ctx: TCtx): AsyncGenerator<TEvent, void>;
 }
 
 // ---------------------------------------------------------------------------
