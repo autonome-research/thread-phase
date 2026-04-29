@@ -1,0 +1,36 @@
+{
+  "name": "thread-phase",
+  "version": "0.0.1",
+  "description": "General-purpose phase-based agentic pipeline framework. Inference-provider agnostic (vLLM/OpenAI-compatible by default).",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./patterns": "./dist/patterns/index.js",
+    "./context": "./dist/context/index.js",
+    "./session": "./dist/session/index.js",
+    "./tools": "./dist/tools/index.js"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "openai": "^4.77.0",
+    "better-sqlite3": "^11.5.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0",
+    "@types/better-sqlite3": "^7.6.11",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
