@@ -6,7 +6,7 @@ Compose multi-step agent workflows out of small, typed phases. Each phase has it
 
 ## Status
 
-`v0.0.1` — scaffold.
+`v0.0.1` — phase framework, agent runner, JobStore, patterns, tool registry. 57 tests passing.
 
 ## Why
 
@@ -46,6 +46,12 @@ INFERENCE_MODEL=qwen3.6-27b
 ```
 
 The framework assumes OpenAI-compatible chat completions with tool calls. Tested first against vLLM with `--tool-call-parser qwen3_xml`.
+
+## Status, limits, what's next
+
+- `npm test` — 49 tests across phase, cache, orchestrator, parseJSON, sanitizeToolPairs, ToolRegistry, SqliteJobStore.
+- `npm run smoke` — 4-stage end-to-end smoke against the configured inference endpoint.
+- See [`ROADMAP.md`](./ROADMAP.md) for known limitations, deferred features, and architectural cleanups grouped by severity.
 
 ## License
 

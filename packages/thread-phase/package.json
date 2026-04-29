@@ -18,19 +18,23 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke": "tsx examples/smoke.ts",
+    "prepare": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "openai": "^4.77.0",
-    "better-sqlite3": "^11.5.0"
+    "better-sqlite3": "^11.5.0",
+    "ajv": "^8.17.0"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
+    "tsx": "^4.19.0",
     "@types/node": "^22.0.0",
     "@types/better-sqlite3": "^7.6.11",
     "vitest": "^2.1.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=18"
   }
 }
