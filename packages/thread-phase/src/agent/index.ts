@@ -1,10 +1,23 @@
 /**
  * Agent module barrel.
  *
- * The split is internal: external imports continue to use
- * `from 'thread-phase'` (re-exported from src/index.ts) — this barrel just
- * defines the agent module's surface for code that wants to dive in
- * deliberately.
+ * Two tiers of exports:
+ *
+ *   1. Stable (covered by semver, won't break in minor/patch releases):
+ *      `runAgentWithTools`, `parseJSON`, and the type surface
+ *      (`AgentConfig`, `AgentRunResult`, `AgentRunnerOptions`,
+ *      `AgentStreamEvent`, `FinishReason`, `UsageInfo`, `ActivityEntry`).
+ *
+ *   2. @internal (exported for advanced callers, NOT covered by semver):
+ *      `consumeStream`, `looksLikeToolCallText`, `normalizeFinishReason`,
+ *      `AccumulatedRound`, `toOpenAIMessages`, `toOpenAITools`,
+ *      `isRetryableError`, `isAbortError`. These exist so callers building
+ *      their own non-loop flows can reuse the building blocks; if you do,
+ *      pin the minor version and read the CHANGELOG before upgrading.
+ *
+ * The package's main `src/index.ts` re-exports only the stable surface —
+ * @internal items are reachable only via deep import (`thread-phase/agent`
+ * is intentionally NOT a configured package subpath).
  */
 
 export { runAgentWithTools } from './runner.js';
@@ -20,9 +33,7 @@ export type {
   UsageInfo,
 } from './types.js';
 
-// Lower-level pieces — exported so advanced callers (and tests) can use
-// them directly without having to vendor copies. Most users won't need
-// these.
+// @internal — see file header. Lower-level pieces for advanced callers.
 export { toOpenAIMessages, toOpenAITools } from './openai-adapter.js';
 export {
   consumeStream,

@@ -3,14 +3,38 @@
  * their event logs.
  *
  * SqliteJobStore is the bundled default (single-file, zero-config). Other
- * backends (Postgres for shared multi-process state, in-memory for tests)
- * just need to implement this interface.
+ * backends (in-memory for tests, custom file-based for embedded use) just
+ * need to implement this interface.
  *
- * Methods are intentionally synchronous: most callers (especially the agent
- * runner persisting events) want fire-and-forget writes that don't block the
- * event loop on every step. A future async backend can wrap async I/O behind
- * a sync façade or, if breaking the contract is acceptable, the interface
- * can evolve to Promise-returning methods. For now, keep it simple.
+ * # v1 stability commitment: sync interface
+ *
+ * Methods are synchronous on purpose. Three reasons:
+ *
+ *   1. Hot path: the agent runner persists events at every tool-call
+ *      boundary. With sqlite + WAL, a sync write is sub-millisecond and
+ *      doesn't add a microtask. Awaiting per-event would slow tight
+ *      fanouts (50-100 items × multiple events each) for no real benefit.
+ *
+ *   2. Single-process is the v1 sweet spot. The bundled SqliteJobStore
+ *      assumes one writer per database file (WAL handles same-DB
+ *      co-tenancy with separate connections, but there's no distributed
+ *      coordination). Going async to enable Postgres without an
+ *      established demand would be paying a real cost for hypothetical
+ *      flexibility.
+ *
+ *   3. Future async backends are an additive change, not a breaking one.
+ *      When a real consumer needs Postgres-backed jobs (e.g. multi-process
+ *      workers sharing state), the right move is to add a `JobStoreAsync`
+ *      interface as a *second* type and let `JobRunner` accept either via
+ *      method overload. Existing sync users keep their hot path; async
+ *      users opt in. That migration is mechanical, not breaking.
+ *
+ * If you're implementing a custom backend and your underlying I/O is async
+ * (e.g. a network call), wrap it with a small in-process queue + flush
+ * loop so the JobStore methods themselves remain sync. The agent runner's
+ * fire-and-forget pattern tolerates eventual consistency for events as
+ * long as the final state (job status, completion result) is durable
+ * before `setCompleted` returns.
  */
 
 import type { PipelineEvent } from '../phase.js';

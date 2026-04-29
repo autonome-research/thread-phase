@@ -5,6 +5,10 @@
  *
  * Tuned for OpenAI-compat endpoints (vLLM, OpenAI, Ollama) — they all use
  * roughly the same surface for transient failures.
+ *
+ * @internal — both predicates are exported for advanced callers wrapping
+ * the runner with their own retry/abort logic, but they are not part of
+ * the v1 stable surface. They may change as we discover new failure modes.
  */
 
 export function isRetryableError(err: unknown): boolean {

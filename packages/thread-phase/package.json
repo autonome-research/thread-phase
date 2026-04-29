@@ -1,7 +1,7 @@
 {
   "name": "thread-phase",
-  "version": "0.0.1",
-  "description": "General-purpose phase-based agentic pipeline framework. Inference-provider agnostic (vLLM/OpenAI-compatible by default).",
+  "version": "1.0.0",
+  "description": "TypeScript framework for the iterated tool-use loop against OpenAI-compatible inference (vLLM, Ollama, OpenAI, llama.cpp), composed into multi-phase pipelines with persistent event logs and concurrency-capped fanout.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -35,6 +35,6 @@
     "vitest": "^2.1.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   }
 }

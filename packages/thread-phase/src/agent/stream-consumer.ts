@@ -14,6 +14,12 @@ import type { ChatCompletionChunk } from 'openai/resources/chat/completions.js';
 import type { ToolCall } from '../messages.js';
 import type { FinishReason, UsageInfo } from './types.js';
 
+/**
+ * @internal
+ *
+ * Internal accumulator shape — not part of the public API. May change
+ * between minor versions.
+ */
 export interface AccumulatedRound {
   content: string;
   toolCalls: ToolCall[];
@@ -27,6 +33,13 @@ interface ToolCallBuffer {
   argsBuffer: string;
 }
 
+/**
+ * @internal
+ *
+ * Normalize OpenAI's finish_reason string into a `FinishReason` union.
+ * Exported for advanced callers (e.g. building a custom streaming consumer)
+ * but not part of the v1 stable surface.
+ */
 export function normalizeFinishReason(raw: string | null | undefined): FinishReason {
   switch (raw) {
     case 'stop':
@@ -41,9 +54,12 @@ export function normalizeFinishReason(raw: string | null | undefined): FinishRea
 }
 
 /**
+ * @internal
+ *
  * Heuristic: does this content look like a tool call that leaked through
  * as plain text? Used by the agent loop to flag a missing/wrong
- * inference-side `--tool-call-parser` configuration.
+ * inference-side `--tool-call-parser` configuration. Exported for callers
+ * that want to apply the same heuristic; not part of the v1 stable surface.
  */
 export function looksLikeToolCallText(text: string): boolean {
   const trimmed = text.trim();
@@ -57,11 +73,16 @@ export function looksLikeToolCallText(text: string): boolean {
 }
 
 /**
+ * @internal
+ *
  * Consume one streaming chat-completion response.
  *
  * Calls `onContentDelta` synchronously for each chunk's content fragment so
  * the caller can surface them upstream as they arrive. Returns the assembled
  * round once the stream ends.
+ *
+ * Exported for advanced callers (e.g. building a non-loop agent that just
+ * streams once and returns); not part of the v1 stable surface.
  */
 export async function consumeStream(
   stream: AsyncIterable<ChatCompletionChunk>,
