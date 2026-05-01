@@ -416,3 +416,152 @@ describe("streamingBoundedFanout — mode: 'collect'", () => {
     await expect(consume()).rejects.toThrow('default mode throws');
   });
 });
+
+describe("boundedFanout — soft-cancel in 'collect' mode", () => {
+  it('returns all-AbortError slots when signal is already aborted at call time', async () => {
+    const controller = new AbortController();
+    controller.abort('pre-aborted');
+    const out = await boundedFanout({
+      items: [1, 2, 3, 4],
+      mode: 'collect',
+      runner: async () => {
+        throw new Error('runner should never run');
+      },
+      signal: controller.signal,
+    });
+    expect(out).toHaveLength(4);
+    for (const slot of out) {
+      expect(slot.ok).toBe(false);
+      if (!slot.ok) expect(slot.error.message).toBe('pre-aborted');
+    }
+  });
+
+  it('returns partial collected results when aborted mid-flight', async () => {
+    const controller = new AbortController();
+    let started = 0;
+    let completed = 0;
+    const promise = boundedFanout({
+      items: Array.from({ length: 20 }, (_, i) => i),
+      concurrency: 2,
+      mode: 'collect',
+      runner: async (n, _i, signal) => {
+        started++;
+        // Quick runners — first few finish before the abort fires.
+        await new Promise<void>((resolve, reject) => {
+          const t = setTimeout(resolve, 10);
+          signal?.addEventListener('abort', () => {
+            clearTimeout(t);
+            reject(new Error('aborted'));
+          });
+        });
+        completed++;
+        return n;
+      },
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort('soft-cancel'), 25);
+    const out = await promise; // does NOT reject in collect mode
+    expect(out).toHaveLength(20);
+    // At least one item completed before the abort (the first batch).
+    const successes = out.filter((s) => s.ok).length;
+    expect(successes).toBeGreaterThan(0);
+    expect(successes).toBeLessThan(20);
+    // Every slot is filled (no undefined).
+    expect(out.every((s) => s !== undefined)).toBe(true);
+    // Items started < total items (cursor stopped advancing on abort).
+    expect(started).toBeLessThan(20);
+  });
+
+  it("preserves real per-item errors alongside synthetic AbortError fills", async () => {
+    const controller = new AbortController();
+    const out = await boundedFanout({
+      items: [1, 2, 3, 4, 5, 6, 7, 8],
+      concurrency: 2,
+      mode: 'collect',
+      runner: async (n, _i, signal) => {
+        if (n === 1) throw new Error('real failure for item 1');
+        await new Promise<void>((resolve, reject) => {
+          const t = setTimeout(resolve, 30);
+          signal?.addEventListener('abort', () => {
+            clearTimeout(t);
+            reject(new Error('aborted'));
+          });
+        });
+        return n;
+      },
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort('cancel'), 5);
+    // Allow promise to settle. (The inner `out = await` already did.)
+    expect(out).toHaveLength(8);
+    // Item 0 (n=1) had a real failure — not synthetic.
+    expect(out[0]).toMatchObject({ ok: false });
+    if (!out[0]!.ok) expect(out[0]!.error.message).toBe('real failure for item 1');
+  });
+
+  it("'reject' mode still throws on signal abort (unchanged from v1.2.0)", async () => {
+    const controller = new AbortController();
+    controller.abort('hard-cancel');
+    await expect(
+      boundedFanout({
+        items: [1, 2, 3],
+        runner: async (n) => n,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('hard-cancel');
+  });
+});
+
+describe("streamingBoundedFanout — soft-cancel in 'collect' mode", () => {
+  it('emits done_collected with partial results when aborted mid-flight', async () => {
+    const controller = new AbortController();
+    const events: StreamingFanoutEvent<number, number>[] = [];
+    const consume = async () => {
+      for await (const e of streamingBoundedFanout({
+        items: Array.from({ length: 12 }, (_, i) => i),
+        concurrency: 2,
+        mode: 'collect',
+        runner: async (n, _i, signal) => {
+          await new Promise<void>((resolve, reject) => {
+            const t = setTimeout(resolve, 10);
+            signal?.addEventListener('abort', () => {
+              clearTimeout(t);
+              reject(new Error('aborted'));
+            });
+          });
+          return n;
+        },
+        signal: controller.signal,
+      })) {
+        events.push(e);
+      }
+    };
+    setTimeout(() => controller.abort('streaming-soft-cancel'), 25);
+    await consume(); // does NOT throw
+    const final = events[events.length - 1]!;
+    expect(final.type).toBe('done_collected');
+    if (final.type === 'done_collected') {
+      expect(final.results).toHaveLength(12);
+      expect(final.results.every((s) => s !== undefined)).toBe(true);
+    }
+  });
+
+  it('emits done_collected with all-AbortError when signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort('pre-cancel');
+    const events: StreamingFanoutEvent<number, number>[] = [];
+    for await (const e of streamingBoundedFanout({
+      items: [1, 2, 3],
+      mode: 'collect',
+      runner: async (n) => n,
+      signal: controller.signal,
+    })) {
+      events.push(e);
+    }
+    expect(events).toHaveLength(1);
+    expect(events[0]!.type).toBe('done_collected');
+    if (events[0]!.type === 'done_collected') {
+      expect(events[0]!.results.every((s) => !s.ok)).toBe(true);
+    }
+  });
+});

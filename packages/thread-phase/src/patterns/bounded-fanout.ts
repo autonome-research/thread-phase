@@ -35,7 +35,18 @@
  *   - The signal is forwarded to runners as the third argument
  *     (`runner(item, index, signal)`), so a runner that respects it can
  *     unwind early — e.g. by passing it into `runAgentWithTools({signal})`.
- *   - The fanout rejects (in either mode) with the abort reason.
+ *
+ * Cancellation interacts with `mode`:
+ *
+ *   - `'reject'`: hard-cancel. The fanout rejects with the abort reason.
+ *     Partial results are discarded.
+ *   - `'collect'`: soft-cancel. Returns a full-length, position-stable
+ *     `FanOutResult<T>[]` — items that completed before the abort keep
+ *     their `{ ok: true, value }` or `{ ok: false, error }`, items that
+ *     were never started (or whose runner exited via the in-loop signal
+ *     check) get a synthetic `{ ok: false, error: AbortError }`. The
+ *     fanout does NOT reject. Use this when you want a soft deadline
+ *     that returns work-in-progress for downstream phases to flush.
  *
  * For per-item progress as items complete, see `streamingBoundedFanout`.
  */
@@ -112,7 +123,12 @@ export async function boundedFanout<TItem, TResult>(
   let cursor = 0;
   const signal = options.signal;
 
+  // Already aborted before any dispatch.
+  //   - 'reject' mode: throw, matches HTTP-cancel semantics.
+  //   - 'collect' mode: short-circuit with synthetic AbortError slots so
+  //     consumers always get a full-length, position-stable array.
   if (signal?.aborted) {
+    if (collect) return fillAbortedSlots([], items.length, signal);
     throw signalAbortError(signal);
   }
 
@@ -147,7 +163,17 @@ export async function boundedFanout<TItem, TResult>(
   for (let w = 0; w < concurrency; w++) workers.push(worker());
   await Promise.all(workers);
 
+  // Aborted at some point after dispatch began.
+  //   - 'reject' mode: throw, partial results discarded (matches v1.0/1.1).
+  //   - 'collect' mode: soft-cancel — return what completed, fill the slots
+  //     of items that were never started (or whose runner exited via the
+  //     in-loop signal check before writing a result) with synthetic
+  //     AbortError FanOutResults. onItemError does NOT fire for these
+  //     synthetic fills — the runner never ran for them.
   if (signal?.aborted) {
+    if (collect) {
+      return fillAbortedSlots(results as Array<FanOutResult<TResult> | undefined>, items.length, signal);
+    }
     throw signalAbortError(signal);
   }
 
@@ -213,7 +239,17 @@ export async function* streamingBoundedFanout<TItem, TResult>(
   const results: Array<TResult | FanOutResult<TResult> | undefined> = new Array(items.length);
   const signal = options.signal;
 
+  // Already aborted before any dispatch — same shape as boundedFanout's
+  // early-abort: 'reject' throws, 'collect' yields a done_collected event
+  // with all-AbortError slots and exits cleanly.
   if (signal?.aborted) {
+    if (collect) {
+      yield {
+        type: 'done_collected',
+        results: fillAbortedSlots([], items.length, signal),
+      };
+      return;
+    }
     throw signalAbortError(signal);
   }
 
@@ -277,14 +313,19 @@ export async function* streamingBoundedFanout<TItem, TResult>(
 
   while (done < items.length) {
     if (errored) throw errored;
-    if (signal?.aborted) throw signalAbortError(signal);
+    // 'reject' mode: hard-cancel on signal. 'collect' mode: keep draining
+    // the queue (workers exit early via their own signal check, so the
+    // loop will run out of events naturally and exit via the
+    // queue-empty-and-allDone branch below).
+    if (signal?.aborted && !collect) throw signalAbortError(signal);
     if (queue.length === 0) {
       await Promise.race([wait(), allDone]);
       if (errored) throw errored;
-      if (signal?.aborted) throw signalAbortError(signal);
+      if (signal?.aborted && !collect) throw signalAbortError(signal);
       if (queue.length === 0 && done < items.length) {
-        // Workers all finished but we didn't get all results — possible only
-        // if items array changed mid-flight, which shouldn't happen.
+        // Either soft-cancel in collect mode (workers exited without
+        // producing more events) or items array changed mid-flight.
+        // Either way, exit and let the post-loop emit what we have.
         break;
       }
       continue;
@@ -313,10 +354,40 @@ export async function* streamingBoundedFanout<TItem, TResult>(
   await allDone;
   if (errored) throw errored;
   if (collect) {
-    yield { type: 'done_collected', results: results as FanOutResult<TResult>[] };
+    // Soft-cancel: synthesize AbortError slots for items that were never
+    // started (or whose runner exited via the in-loop signal check before
+    // recording a result).
+    const filled =
+      signal?.aborted
+        ? fillAbortedSlots(results as Array<FanOutResult<TResult> | undefined>, items.length, signal)
+        : (results as FanOutResult<TResult>[]);
+    yield { type: 'done_collected', results: filled };
   } else {
     yield { type: 'done', results: results as TResult[] };
   }
+}
+
+/**
+ * Soft-cancel helper: fills any undefined slots in a collect-mode results
+ * array with synthetic { ok: false, error } AbortError entries so the
+ * returned array stays position-stable with the input items array.
+ *
+ * Items that were already recorded (whether { ok: true } or { ok: false }
+ * from a real runner error) are preserved. Items that never ran — either
+ * because the cursor never reached them or because the runner exited via
+ * the in-loop signal check before writing — get a synthetic slot.
+ */
+function fillAbortedSlots<TResult>(
+  partial: Array<FanOutResult<TResult> | undefined>,
+  total: number,
+  signal: AbortSignal,
+): FanOutResult<TResult>[] {
+  const abortErr = signalAbortError(signal);
+  const out: FanOutResult<TResult>[] = new Array(total);
+  for (let i = 0; i < total; i++) {
+    out[i] = partial[i] ?? { ok: false, error: abortErr };
+  }
+  return out;
 }
 
 function toError(e: unknown): Error {

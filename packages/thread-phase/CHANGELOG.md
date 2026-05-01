@@ -4,6 +4,21 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-05-01
+
+Tightens the `mode: 'collect'` + `signal` interaction. v1.2.0 still threw `AbortError` post-loop when the signal aborted, even in collect mode — which discarded the partial results that the consumer had paid for and that collect mode was supposed to preserve. This is the soft-cancel semantics that the cron-driven use case actually wants: stop dispatching new work, return what's done.
+
+### Changed
+- `boundedFanout` with `mode: 'collect'` no longer rejects on `signal` abort. Instead it returns a full-length, position-stable `FanOutResult<T>[]`: items that completed before the abort keep their `{ ok: true, value }` or real `{ ok: false, error }`; items that were never started (or whose runner exited via the in-loop signal check before recording a result) get a synthetic `{ ok: false, error: AbortError }` slot. `mode: 'reject'` (default) is unchanged — still throws on abort.
+- `streamingBoundedFanout` with `mode: 'collect'` mirrors the change: the generator no longer throws on abort. The terminal `done_collected` event carries the same partial-with-synthetic-fills `FanOutResult<T>[]`.
+- Header doc updated to spell out the cancellation × mode interaction.
+
+### Notes
+- `onItemError` does NOT fire for synthetic AbortError fills — the runner never ran for those items, so there's no per-item error to report. It still fires normally for real runner throws (including AbortError thrown by an in-flight runner that observed the forwarded signal and unwound).
+- Discriminate "in-flight aborted" from "never started" via the runner side effects, not the result shape: a real in-flight abort has whatever side effects the runner did before the throw (DB writes, etc.); a synthetic fill has none.
+- 6 new tests cover: pre-aborted call returning all-AbortError slots, mid-flight abort returning partial results with no rejection, real per-item errors preserved alongside synthetic fills, reject-mode unchanged, both streaming variants.
+- 127 tests pass (was 121).
+
 ## [1.2.0] — 2026-05-01
 
 Closes the cron/automation feedback loop on `boundedFanout`. Three layered footguns in the v1.0/1.1 surface:
