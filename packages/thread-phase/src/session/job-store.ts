@@ -72,6 +72,21 @@ export interface ListJobsOptions {
 export interface JobStore {
   /** Insert a PENDING job row, return its id. */
   createJob(name: string, input: unknown): string;
+  /**
+   * Atomically claim a single-runner slot for `name`. If no job with this
+   * name is currently RUNNING, insert a new job row directly in RUNNING
+   * state and return its id. Otherwise return null.
+   *
+   * Use this for cron-driven pipelines that should never overlap with
+   * themselves (e.g. a 10-minute timer where a run can occasionally take
+   * longer than the interval). Implementations must perform the
+   * existence check + insert in a single transaction.
+   *
+   * `JobRunner.run` will still call setRunning on the returned id; that's
+   * a no-op state transition and (with the COALESCE in setRunning) leaves
+   * the original startedAt intact.
+   */
+  acquireExclusive(name: string, input: unknown): string | null;
   setRunning(jobId: string): void;
   setCompleted(jobId: string, result: unknown): void;
   setFailed(jobId: string, error: string): void;

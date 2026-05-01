@@ -4,8 +4,18 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
-### Working toward v1.0.0
-- Path to v1 is in [ROADMAP.md](./ROADMAP.md). The codebase itself is ready; the work is in surfaces around it (README, examples, CI, docs, stability commitments).
+## [1.1.0] — 2026-04-30
+
+Driven by production experience with `Code4me2/chiya-library`: a 10-minute systemd timer with a 25-minute soft deadline could overlap with itself, leaving two pipelines racing on the same shared work-queue rows. Adding a framework primitive — instead of pushing every consumer to roll their own flock/pidfile/SQL guard — keeps the cron-driven use case (one of the README's two headline use cases) coherent.
+
+### Added
+- `JobStore.acquireExclusive(name, input)` — atomically claim a single-runner slot. If no job with `name` is currently RUNNING, inserts a new job row directly in RUNNING state and returns its id; otherwise returns `null`. The check + insert run inside one transaction. Use this from the entry point of cron-driven pipelines to make overlapping runs impossible.
+
+### Changed
+- `SqliteJobStore.setRunning` is now idempotent on `started_at` (`COALESCE(started_at, datetime('now'))`). Previously a second `setRunning` call would clobber the original start time. This matters because `JobRunner.run` always calls `setRunning` after `acquireExclusive` already set the timestamp at claim time.
+
+### Notes
+- This is technically a breaking change for *implementors* of `JobStore` (a new required method). The bundled `SqliteJobStore` is the only known implementation; downstream consumers using it directly are unaffected. Custom backends need to add a transactional `acquireExclusive`.
 
 ## [0.1.0] — 2026-04-29
 

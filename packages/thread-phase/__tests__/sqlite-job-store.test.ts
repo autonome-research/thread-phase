@@ -63,6 +63,74 @@ describe('SqliteJobStore — lifecycle', () => {
   it('getJob returns null for missing id', () => {
     expect(store.getJob('00000000-0000-0000-0000-000000000000')).toBeNull();
   });
+
+  it('setRunning preserves startedAt on second call (idempotent)', async () => {
+    const id = store.createJob('p', null);
+    store.setRunning(id);
+    const first = store.getJob(id)!.startedAt!;
+    // SQLite datetime resolution is 1s — wait long enough that a second
+    // datetime('now') would differ if COALESCE weren't doing its job.
+    await new Promise((r) => setTimeout(r, 1100));
+    store.setRunning(id);
+    const second = store.getJob(id)!.startedAt!;
+    expect(second.getTime()).toBe(first.getTime());
+  });
+});
+
+describe('SqliteJobStore — acquireExclusive', () => {
+  it('returns a uuid and inserts a RUNNING row when no prior runner exists', () => {
+    const id = store.acquireExclusive('librarian', { batch: 12 });
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    const job = store.getJob(id!)!;
+    expect(job.status).toBe('RUNNING');
+    expect(job.input).toEqual({ batch: 12 });
+    expect(job.startedAt).toBeInstanceOf(Date);
+  });
+
+  it('returns null when a job with this name is already RUNNING', () => {
+    const first = store.acquireExclusive('librarian', null);
+    expect(first).not.toBeNull();
+    const second = store.acquireExclusive('librarian', null);
+    expect(second).toBeNull();
+  });
+
+  it('lets a different name acquire even when one is running', () => {
+    expect(store.acquireExclusive('librarian', null)).not.toBeNull();
+    expect(store.acquireExclusive('digest', null)).not.toBeNull();
+  });
+
+  it('lets a new run acquire after the prior one COMPLETED', () => {
+    const first = store.acquireExclusive('librarian', null)!;
+    store.setCompleted(first, null);
+    const second = store.acquireExclusive('librarian', null);
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
+  });
+
+  it('lets a new run acquire after the prior one FAILED', () => {
+    const first = store.acquireExclusive('librarian', null)!;
+    store.setFailed(first, 'boom');
+    expect(store.acquireExclusive('librarian', null)).not.toBeNull();
+  });
+
+  it('ignores PENDING / COMPLETED / FAILED jobs of the same name', () => {
+    // PENDING shouldn't block a claim — only RUNNING does.
+    store.createJob('librarian', null); // status='PENDING'
+    const completed = store.createJob('librarian', null);
+    store.setCompleted(completed, null);
+    const failed = store.createJob('librarian', null);
+    store.setFailed(failed, 'x');
+    expect(store.acquireExclusive('librarian', null)).not.toBeNull();
+  });
+
+  it('subsequent setRunning on the acquired id preserves startedAt', async () => {
+    const id = store.acquireExclusive('librarian', null)!;
+    const first = store.getJob(id)!.startedAt!;
+    await new Promise((r) => setTimeout(r, 1100));
+    store.setRunning(id);
+    const second = store.getJob(id)!.startedAt!;
+    expect(second.getTime()).toBe(first.getTime());
+  });
 });
 
 describe('SqliteJobStore — events', () => {

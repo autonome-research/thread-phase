@@ -137,9 +137,39 @@ export class SqliteJobStore implements JobStore {
     return id;
   }
 
+  acquireExclusive(name: string, input: unknown): string | null {
+    // better-sqlite3's `db.transaction(fn)` wraps the callback in BEGIN…COMMIT
+    // (defaults to deferred, but the runtime upgrades to a write lock the
+    // moment we INSERT, which serializes concurrent acquireExclusive calls
+    // on the same DB file). The check + insert therefore happens atomically:
+    // a second caller racing on the same name will see the row we just
+    // inserted (status='RUNNING') and return null.
+    const tx = this.db.transaction((n: string, i: unknown): string | null => {
+      const existing = this.db
+        .prepare(`SELECT id FROM job WHERE name = ? AND status = 'RUNNING' LIMIT 1`)
+        .get(n) as { id: string } | undefined;
+      if (existing) return null;
+      const id = randomUUID();
+      this.db
+        .prepare(
+          `INSERT INTO job (id, name, input, status, started_at)
+           VALUES (?, ?, ?, 'RUNNING', datetime('now'))`,
+        )
+        .run(id, n, JSON.stringify(i));
+      return id;
+    });
+    return tx(name, input);
+  }
+
   setRunning(jobId: string): void {
+    // COALESCE on started_at: idempotent w.r.t. acquireExclusive, which
+    // already sets status='RUNNING' and started_at at claim time.
     this.db
-      .prepare(`UPDATE job SET status = 'RUNNING', started_at = datetime('now') WHERE id = ?`)
+      .prepare(
+        `UPDATE job SET status = 'RUNNING',
+                        started_at = COALESCE(started_at, datetime('now'))
+         WHERE id = ?`,
+      )
       .run(jobId);
   }
 

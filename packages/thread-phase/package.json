@@ -1,6 +1,6 @@
 {
   "name": "thread-phase",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "TypeScript framework for the iterated tool-use loop against OpenAI-compatible inference (vLLM, Ollama, OpenAI, llama.cpp), composed into multi-phase pipelines with persistent event logs and concurrency-capped fanout.",
   "license": "MIT",
   "type": "module",
