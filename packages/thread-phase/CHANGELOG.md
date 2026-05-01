@@ -4,6 +4,32 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-05-01
+
+Closes the cron/automation feedback loop on `boundedFanout`. Three layered footguns in the v1.0/1.1 surface:
+
+1. **Silent waste of expensive work.** When a runner threw, `Promise.all` rejected immediately, but the other workers kept pulling items off the cursor. Their results landed in a `results[]` array that the function had already abandoned — typically multi-second LLM calls whose tokens were paid for and discarded with no telemetry.
+2. **No mid-flight cancellation.** `signal` aborted *new* dispatches but couldn't reach a runner already in an in-flight call.
+3. **Lost error context.** Only the first thrown error became the rejection value; the rest were swallowed.
+
+Every consumer (chiya included) was rolling its own try/catch + per-runner deadline check + ArticleResult-shaped sum type to work around #1 and #2. This release pulls those workarounds into the framework.
+
+### Added
+- `BoundedFanOutOptions.mode: 'reject' | 'collect'`. Default `'reject'` preserves v1.1 behavior. `'collect'` never rejects on runner errors; each result slot is `FanOutResult<T> = { ok: true, value: T } | { ok: false, error: Error }`. Workers continue draining after individual failures.
+- `BoundedFanOutOptions.onItemError(event)`. Fires once per failed runner regardless of mode — in `'reject'` mode it fires *before* the rejection propagates, so consumers can capture context for telemetry. Pairs naturally with `onItemDone`.
+- `FanOutResult<T>` type union, exported from `thread-phase/patterns`.
+- `ItemErrorEvent<TItem>` type, exported from `thread-phase/patterns`.
+- `streamingBoundedFanout` yields a new `item_error` event in `'collect'` mode (with the same `progress` field as `item_done`). The terminal event is `done` in reject mode and `done_collected` in collect mode.
+
+### Changed
+- **`runner` signature** now receives the abort signal as its third argument: `(item, index, signal?: AbortSignal) => Promise<TResult>`. Forward this into any abortable downstream call (HTTP, `runAgentWithTools({signal})`) so cancellation can reach a runner already in-flight, not just gate the next dispatch. Existing callers that ignore the third arg are fully backward-compatible.
+- Function overloads on `boundedFanout` and `streamingBoundedFanout` so the return type discriminates on `mode` (`mode: 'collect'` → `FanOutResult<T>[]`; default → `T[]`).
+- Non-`Error` throws from a runner are coerced to `Error` (with the original value as the message) before being recorded or propagated. Previously a `throw 'string'` would surface as a non-Error rejection.
+
+### Notes
+- This is a fully additive release. No existing tests needed changes; 10 new tests cover collect-mode result shape, drain-after-failure semantics, onItemError ordering in both modes, signal forwarding into runner, and `done_collected` in the streaming variant.
+- The cron/automation use case (e.g. chiya-library's librarian) can now: (a) drop its inner try/catch wrapper and rely on `mode: 'collect'` for the result-or-error sum; (b) replace its bespoke `ctx.deadlineAt` checked-by-each-runner pattern with a `setTimeout(() => controller.abort(), N*60*1000)` at the entry point, forwarding the signal into `runAgentWithTools`. `parallelFanout` is unchanged in this release; if there's demand it can grow the same options later.
+
 ## [1.1.0] — 2026-04-30
 
 Driven by production experience with `Code4me2/chiya-library`: a 10-minute systemd timer with a 25-minute soft deadline could overlap with itself, leaving two pipelines racing on the same shared work-queue rows. Adding a framework primitive — instead of pushing every consumer to roll their own flock/pidfile/SQL guard — keeps the cron-driven use case (one of the README's two headline use cases) coherent.

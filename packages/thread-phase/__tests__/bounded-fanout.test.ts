@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   boundedFanout,
   streamingBoundedFanout,
+  type FanOutResult,
   type StreamingFanoutEvent,
 } from '../src/patterns/bounded-fanout.js';
 
@@ -228,5 +229,190 @@ describe('streamingBoundedFanout', () => {
       }
     };
     await expect(consume()).rejects.toThrow();
+  });
+});
+
+describe("boundedFanout — mode: 'collect'", () => {
+  it('returns FanOutResult slots in input order, never rejects on runner errors', async () => {
+    const out: FanOutResult<number>[] = await boundedFanout({
+      items: [1, 2, 3, 4, 5],
+      concurrency: 2,
+      mode: 'collect',
+      runner: async (n) => {
+        if (n % 2 === 0) throw new Error(`boom ${n}`);
+        return n * 10;
+      },
+    });
+    expect(out).toHaveLength(5);
+    expect(out[0]).toEqual({ ok: true, value: 10 });
+    expect(out[1]).toEqual({ ok: false, error: expect.any(Error) });
+    expect((out[1] as { ok: false; error: Error }).error.message).toBe('boom 2');
+    expect(out[2]).toEqual({ ok: true, value: 30 });
+    expect(out[3]).toEqual({ ok: false, error: expect.any(Error) });
+    expect(out[4]).toEqual({ ok: true, value: 50 });
+  });
+
+  it('drains the rest of the items even after the first failure', async () => {
+    let started = 0;
+    const out = await boundedFanout({
+      items: Array.from({ length: 10 }, (_, i) => i),
+      concurrency: 2,
+      mode: 'collect',
+      runner: async (n) => {
+        started++;
+        if (n === 0) throw new Error('first item fails');
+        return n;
+      },
+    });
+    expect(started).toBe(10); // all items dispatched, despite item 0 failing
+    expect(out[0]).toEqual({ ok: false, error: expect.any(Error) });
+    for (let i = 1; i < 10; i++) {
+      expect(out[i]).toEqual({ ok: true, value: i });
+    }
+  });
+
+  it("'reject' mode (default) still rejects on runner error", async () => {
+    await expect(
+      boundedFanout({
+        items: [1, 2, 3],
+        runner: async (n) => {
+          if (n === 2) throw new Error('reject mode kaboom');
+          return n;
+        },
+      }),
+    ).rejects.toThrow('reject mode kaboom');
+  });
+
+  it('non-Error throws are coerced to Error', async () => {
+    const out = await boundedFanout({
+      items: [1],
+      mode: 'collect',
+      runner: async () => {
+        throw 'a string, not an Error';
+      },
+    });
+    expect(out[0]).toEqual({ ok: false, error: expect.any(Error) });
+    expect((out[0] as { ok: false; error: Error }).error.message).toBe('a string, not an Error');
+  });
+});
+
+describe('boundedFanout — onItemError telemetry', () => {
+  it("fires onItemError per failed item in 'collect' mode", async () => {
+    const errors: Array<{ index: number; message: string }> = [];
+    await boundedFanout({
+      items: [1, 2, 3, 4],
+      mode: 'collect',
+      runner: async (n) => {
+        if (n % 2 === 0) throw new Error(`even ${n}`);
+        return n;
+      },
+      onItemError: (e) => errors.push({ index: e.index, message: e.error.message }),
+    });
+    expect(errors.map((e) => e.index).sort()).toEqual([1, 3]);
+    expect(errors.find((e) => e.index === 1)!.message).toBe('even 2');
+  });
+
+  it("fires onItemError before rejecting in 'reject' mode", async () => {
+    const onItemError = vi.fn();
+    await expect(
+      boundedFanout({
+        items: [1, 2, 3],
+        runner: async (n) => {
+          if (n === 2) throw new Error('mid-batch');
+          return n;
+        },
+        onItemError,
+      }),
+    ).rejects.toThrow('mid-batch');
+    expect(onItemError).toHaveBeenCalled();
+    const call = onItemError.mock.calls[0]![0];
+    expect(call.index).toBe(1);
+    expect(call.error.message).toBe('mid-batch');
+  });
+});
+
+describe('boundedFanout — signal forwarding', () => {
+  it('forwards the AbortSignal as the third arg to runner', async () => {
+    const controller = new AbortController();
+    const seenSignals: AbortSignal[] = [];
+    await boundedFanout({
+      items: [1, 2, 3],
+      runner: async (_n, _i, signal) => {
+        if (signal) seenSignals.push(signal);
+        return _n;
+      },
+      signal: controller.signal,
+    });
+    expect(seenSignals).toHaveLength(3);
+    expect(seenSignals.every((s) => s === controller.signal)).toBe(true);
+  });
+
+  it('runner can observe the forwarded signal to abort early', async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort('user cancelled'), 10);
+    let unwoundEarly = 0;
+    const promise = boundedFanout({
+      items: Array.from({ length: 8 }, (_, i) => i),
+      concurrency: 2,
+      runner: async (n, _i, signal) => {
+        // Simulate an abortable downstream call: race a timer against the signal.
+        await new Promise<void>((resolve, reject) => {
+          const t = setTimeout(resolve, 50);
+          signal?.addEventListener('abort', () => {
+            clearTimeout(t);
+            unwoundEarly++;
+            reject(new Error('aborted by signal in runner'));
+          });
+        });
+        return n;
+      },
+      signal: controller.signal,
+    });
+    await expect(promise).rejects.toThrow();
+    // At least one in-flight runner observed the signal and unwound rather
+    // than running its full 50ms timer.
+    expect(unwoundEarly).toBeGreaterThan(0);
+  });
+});
+
+describe("streamingBoundedFanout — mode: 'collect'", () => {
+  it("yields item_error events instead of throwing in 'collect' mode", async () => {
+    const events: StreamingFanoutEvent<number, number>[] = [];
+    for await (const e of streamingBoundedFanout({
+      items: [1, 2, 3, 4],
+      concurrency: 2,
+      mode: 'collect',
+      runner: async (n) => {
+        if (n === 3) throw new Error('three is bad');
+        return n * 10;
+      },
+    })) {
+      events.push(e);
+    }
+    const errors = events.filter((e) => e.type === 'item_error');
+    const dones = events.filter((e) => e.type === 'item_done');
+    const final = events[events.length - 1]!;
+    expect(errors).toHaveLength(1);
+    expect(dones).toHaveLength(3);
+    expect(final.type).toBe('done_collected');
+    if (final.type === 'done_collected') {
+      expect(final.results[0]).toEqual({ ok: true, value: 10 });
+      expect(final.results[2]).toEqual({ ok: false, error: expect.any(Error) });
+    }
+  });
+
+  it("preserves throw-on-first-error in default 'reject' mode", async () => {
+    const consume = async () => {
+      for await (const _ of streamingBoundedFanout({
+        items: [1, 2, 3],
+        runner: async (n) => {
+          if (n === 2) throw new Error('default mode throws');
+          return n;
+        },
+      })) {
+        // drain
+      }
+    };
+    await expect(consume()).rejects.toThrow('default mode throws');
   });
 });

@@ -15,6 +15,8 @@ export {
   streamingBoundedFanout,
   type BoundedFanOutOptions,
   type ItemDoneEvent,
+  type ItemErrorEvent,
+  type FanOutResult,
   type StreamingFanoutEvent,
 } from './bounded-fanout.js';
 
