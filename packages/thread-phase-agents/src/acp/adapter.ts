@@ -195,6 +195,10 @@ function makeAcpRun(source: string, config: AcpAgentConfig, options: AgentRunOpt
         );
       }
       iteratorVended = true;
+      // Lazy start: iterating events is one of the two entry points that
+      // kicks off the underlying run. Without this, the iterator would
+      // park a waiter on the first next() and deadlock forever.
+      void startIfNeeded();
       return {
         next(): Promise<IteratorResult<AgentEvent>> {
           if (queue.length > 0) {
