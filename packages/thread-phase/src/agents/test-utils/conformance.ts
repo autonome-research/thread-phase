@@ -13,7 +13,10 @@
  *   - `options.signal` is observed,
  *   - `options.eventBus` mirrors the full event stream,
  *   - every event carries `source === meta.id`,
- *   - the `events` AsyncIterable terminates.
+ *   - the `events` AsyncIterable terminates,
+ *   - `events` is single-consumer (second iteration attempt throws),
+ *   - `events` iterator `return()` cleanly closes the stream,
+ *   - `result` resolves even when `events` is never iterated.
  *
  * Adapters that can synthesize internal-error runs supply `buildErrorConfig`
  * to additionally assert the resolve-not-reject invariant on the error path.
@@ -197,6 +200,61 @@ export function runAdapterConformance<TConfig>(
         );
         expect(Array.isArray(events)).toBe(true);
         await run.result;
+      },
+      timeout,
+    );
+
+    it(
+      'events is single-consumer — second iteration attempt throws',
+      async () => {
+        const run = meta.adapter(buildConfig());
+        // First call must succeed.
+        run.events[Symbol.asyncIterator]();
+        // Second call must throw synchronously — splitting the stream
+        // across two consumers is a silent bug, so the protocol fails
+        // loudly. Callers wanting multi-cast wire AgentEventBus instead.
+        expect(() => run.events[Symbol.asyncIterator]()).toThrow();
+        // Drain so the run completes before the test ends.
+        await run.result.catch(() => undefined);
+      },
+      timeout,
+    );
+
+    it(
+      'events iterator return() cleanly closes the stream',
+      async () => {
+        const run = meta.adapter(buildConfig());
+        const iter = run.events[Symbol.asyncIterator]();
+        // Pull at least one event so the run is in flight, then abandon.
+        await withTimeout(iter.next(), timeout, 'first next() did not resolve');
+        await iter.return?.();
+        // Invariant: result still resolves. Whether the run was aborted
+        // by the early return is an adapter-design choice (mockAgent
+        // aborts; inferenceAgent lets the run complete) — but `result`
+        // must not deadlock either way.
+        const result = await withTimeout(
+          run.result,
+          timeout,
+          'result did not resolve after iterator.return()',
+        );
+        expect(result).toBeDefined();
+      },
+      timeout,
+    );
+
+    it(
+      'result resolves even when events is never iterated',
+      async () => {
+        const run = meta.adapter(buildConfig());
+        // No collectEvents call — adapters that block on consumption
+        // would deadlock here. The protocol requires events to queue
+        // (or drop) without blocking the producer.
+        const result = await withTimeout(
+          run.result,
+          timeout,
+          'result did not resolve without events iteration',
+        );
+        expect(result).toBeDefined();
       },
       timeout,
     );
