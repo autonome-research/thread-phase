@@ -220,8 +220,17 @@ export function createMockAgent(
         });
       };
 
+      // Single-consumer guard — matches inferenceAgent's behavior. A second
+      // iterator would silently split events between consumers.
+      let iteratorVended = false;
       const events: AsyncIterable<AgentEvent> = {
         [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
+          if (iteratorVended) {
+            throw new Error(
+              'AgentRun.events is single-consumer; iterate it once. Use AgentEventBus (options.eventBus) for multi-subscriber fan-out.',
+            );
+          }
+          iteratorVended = true;
           start();
           return {
             next(): Promise<IteratorResult<AgentEvent>> {
