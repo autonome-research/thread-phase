@@ -124,8 +124,17 @@ export interface AgentRunResult {
   executedToolCalls: ToolCall[];
   /** Adapter-native activity log; optional because not every adapter produces one. */
   activity?: ReadonlyArray<ActivityEntry>;
-  /** Populated when the adapter was given an `outputSchema`. */
+  /** Populated when the adapter was given an `outputSchema` and parsing succeeded. */
   parsed?: unknown;
+  /**
+   * Populated when the adapter was given an `outputSchema` and parsing
+   * FAILED. Mutually exclusive with `parsed` — at most one is set. Callers
+   * detect parse failure via `parsed === undefined && parseError !== undefined`
+   * and decide whether to retry (typically via `followUp()` on a
+   * `SteerableAgentRun`). Parse failures are NOT emitted as `error` events
+   * because the agent did its job — the output simply didn't match the schema.
+   */
+  parseError?: SerializableError;
   /** Adapter-produced continuation hint, persisted for a later run. */
   resumeToken?: ResumeToken;
   /**

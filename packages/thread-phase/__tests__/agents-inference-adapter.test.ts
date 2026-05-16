@@ -384,6 +384,38 @@ describe('inferenceAgent — structured output', () => {
     const result = await run.result;
     expect(result.parsed).toBeUndefined();
   });
+
+  it('populates result.parseError when the response block is missing', async () => {
+    const { client } = makeClient([[contentChunk('no block here', 'stop'), usageChunk(1, 1)]]);
+    const run = inferenceAgent.adapter(
+      cfg(client, { outputSchema: { schema: '{}' } }),
+    );
+    const result = await run.result;
+    expect(result.parsed).toBeUndefined();
+    expect(result.parseError).toBeDefined();
+    expect(result.parseError?.name).toBe('StructuredOutputParseError');
+    expect(result.parseError?.message).toContain('no <response> block');
+  });
+
+  it('populates result.parseError when JSON in the response block is invalid', async () => {
+    const { client } = makeClient([
+      [contentChunk('<response>{not valid json</response>', 'stop'), usageChunk(1, 1)],
+    ]);
+    const run = inferenceAgent.adapter(
+      cfg(client, { outputSchema: { schema: '{}' } }),
+    );
+    const result = await run.result;
+    expect(result.parsed).toBeUndefined();
+    expect(result.parseError?.message).toContain('invalid JSON');
+  });
+
+  it('leaves both parsed and parseError undefined when outputSchema is not set', async () => {
+    const { client } = makeClient([[contentChunk('plain text', 'stop'), usageChunk(1, 1)]]);
+    const run = inferenceAgent.adapter(cfg(client, {}));
+    const result = await run.result;
+    expect(result.parsed).toBeUndefined();
+    expect(result.parseError).toBeUndefined();
+  });
 });
 
 describe('inferenceAgent — adapter metadata', () => {
