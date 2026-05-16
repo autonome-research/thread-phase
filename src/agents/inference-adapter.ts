@@ -332,9 +332,15 @@ function createInferenceAdapter(
     // assignable to ours (required → optional widening), but we
     // re-shape explicitly so future changes to either side don't
     // silently couple.
-    const parsed = config.outputSchema
-      ? safeParseStructured(runnerResult.text, config.outputSchema)
-      : undefined;
+    let parsed: unknown = undefined;
+    let parseError: AgentRunResult['parseError'] = undefined;
+    if (config.outputSchema) {
+      try {
+        parsed = parseStructuredFromText(runnerResult.text, config.outputSchema);
+      } catch (err) {
+        parseError = serializeError(err);
+      }
+    }
 
     const result: AgentRunResult = {
       text: runnerResult.text,
@@ -343,6 +349,7 @@ function createInferenceAdapter(
       executedToolCalls: runnerResult.executedToolCalls,
       activity: runnerResult.activity,
       parsed,
+      parseError,
     };
 
     pushEvent({ type: 'agent_end', source, traceId, reason: finishReason });
@@ -401,22 +408,6 @@ function lazyEvents(
       return inner[Symbol.asyncIterator]();
     },
   };
-}
-
-/**
- * Run the prompted-output parser without throwing — failures leave
- * `parsed` undefined, which the caller can detect and decide whether to
- * retry via `followUp()`. The thrown error is intentionally swallowed
- * because `result` must always resolve; consumers that need the parse
- * error subscribe to `events` (no error event is emitted for parse
- * failures — the missing `parsed` field is the signal).
- */
-function safeParseStructured(text: string, spec: StructuredOutputConfig): unknown {
-  try {
-    return parseStructuredFromText(text, spec);
-  } catch {
-    return undefined;
-  }
 }
 
 // Re-exported for callers that need to wire an event bus before the run.
