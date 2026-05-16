@@ -62,3 +62,6 @@ export {
   inferenceAgent,
   type InferenceAgentConfig,
 } from './inference-adapter.js';
+
+// Helper for adapters whose runtime emits turn boundaries before tool calls.
+export { TurnAccumulator } from './turn-accumulator.js';

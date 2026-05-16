@@ -42,6 +42,7 @@ import {
   parseStructuredFromText,
   type StructuredOutputConfig,
 } from './structured-output.js';
+import { TurnAccumulator } from './turn-accumulator.js';
 
 const ADAPTER_ID = 'inference';
 
@@ -177,69 +178,24 @@ function createInferenceAdapter(
   };
 
   // Stream-event bridge: translate runner events to canonical AgentEvents.
-  //
-  // Tricky ordering: the runner emits `round_complete` BEFORE the
-  // `tool_call_started` events of that round (tool calls are emitted
-  // post-decode, immediately after the round marker, then executed). In
-  // canonical semantics, a `turn_end` belongs *after* its turn's tool
-  // calls — so we defer emission: when `round_complete` fires, stash a
-  // pending turn_end keyed by the text accumulated so far. The subsequent
-  // `tool_call_started`s of that same round contribute to its count. The
-  // pending turn_end is flushed when EITHER another round begins (first
-  // content_delta of the next round) OR the run ends (`flushPendingTurn`
-  // called from runOnce).
-  let turnText = '';
-  let pendingTurnText: string | null = null;
-  let pendingTurnToolCalls = 0;
-
-  const flushPendingTurn = (): void => {
-    if (pendingTurnText === null) return;
-    pushEvent({
-      type: 'turn_end',
-      source,
-      traceId,
-      assistantText: pendingTurnText,
-      toolCallCount: pendingTurnToolCalls,
-    });
-    pendingTurnText = null;
-    pendingTurnToolCalls = 0;
-  };
+  // The runner emits `round_complete` BEFORE that round's `tool_call_started`
+  // events — see `TurnAccumulator` for the deferral pattern that handles
+  // this without misattributing tool calls to the wrong turn.
+  const turns = new TurnAccumulator(pushEvent, source, traceId);
 
   const onStreamEvent = (e: AgentStreamEvent): void => {
     switch (e.type) {
       case 'content_delta':
-        // First content of a new turn flushes the prior pending turn_end.
-        if (pendingTurnText !== null) flushPendingTurn();
-        turnText += e.delta;
-        pushEvent({ type: 'text', source, traceId, delta: e.delta });
+        turns.text(e.delta);
         break;
       case 'tool_call_started':
-        pendingTurnToolCalls += 1;
-        pushEvent({
-          type: 'tool_call',
-          source,
-          traceId,
-          id: e.toolCall.id,
-          name: e.toolCall.name,
-          input: e.toolCall.input,
-        });
+        turns.toolCall(e.toolCall.id, e.toolCall.name, e.toolCall.input);
         break;
       case 'tool_call_complete':
-        pushEvent({
-          type: 'tool_result',
-          source,
-          traceId,
-          id: e.toolCall.id,
-          name: e.toolCall.name,
-          output: e.result.content,
-          isError: false,
-        });
+        turns.toolResult(e.toolCall.id, e.toolCall.name, e.result.content, false);
         break;
       case 'round_complete':
-        // Capture the turn's text and arm the pending turn_end. Tool-call
-        // counting continues against this pending entry until it's flushed.
-        pendingTurnText = turnText;
-        turnText = '';
+        turns.markTurnEnd();
         break;
     }
   };
@@ -286,7 +242,7 @@ function createInferenceAdapter(
       );
     } catch (err) {
       // Defensive path: emit error + agent_end + synthesize a result.
-      flushPendingTurn();
+      turns.close();
       pushEvent({
         type: 'error',
         source,
@@ -306,7 +262,7 @@ function createInferenceAdapter(
     }
 
     // Flush any pending turn_end armed during the last round_complete.
-    flushPendingTurn();
+    turns.close();
 
     // If the runner reported 'error' but we asked for abort, override
     // the finish reason — cancellation has a first-class encoding in
