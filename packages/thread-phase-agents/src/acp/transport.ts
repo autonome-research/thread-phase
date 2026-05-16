@@ -78,8 +78,16 @@ export function createAcpTransport(opts: AcpTransportOptions): AcpTransport {
     if (disposed) return;
     const line = JSON.stringify(msg) + '\n';
     // child.stdin is Writable; back-pressure is the caller's problem
-    // (we don't await drain — ACP messages are small).
-    child.stdin.write(line);
+    // (we don't await drain — ACP messages are small). Write callback
+    // catches EPIPE etc. when the subprocess has already exited — those
+    // are surfaced via onTransportError, not as uncaught exceptions.
+    try {
+      child.stdin.write(line, (err) => {
+        if (err && !disposed) onTransportError?.(err);
+      });
+    } catch (err) {
+      if (!disposed && err instanceof Error) onTransportError?.(err);
+    }
   };
 
   const handleParsed = (msg: unknown): void => {
@@ -179,6 +187,11 @@ export function createAcpTransport(opts: AcpTransportOptions): AcpTransport {
   child.stdout.on('data', onStdoutData);
   child.stdout.on('end', onStdoutEnd);
   child.stdout.on('error', (err) => onTransportError?.(err));
+  // EPIPE / EBADF on stdin after the child exits would otherwise bubble
+  // as an uncaught exception — route to onTransportError instead.
+  child.stdin.on('error', (err) => {
+    if (!disposed) onTransportError?.(err);
+  });
 
   return {
     request<T>(method: string, params?: unknown): Promise<T> {
