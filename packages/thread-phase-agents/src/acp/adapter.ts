@@ -28,12 +28,14 @@ import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 
 import {
+  composeAbort,
+  createEventQueue,
   defineAgentAdapter,
+  lazyEvents,
   serializeError,
   TurnAccumulator,
   type AgentAdapterMeta,
   type AgentEvent,
-  type AgentEventBus,
   type AgentRun,
   type AgentRunOptions,
   type AgentRunResult,
@@ -145,79 +147,13 @@ export const acpAgent = createAcpAdapter({ id: 'acp' });
 
 function makeAcpRun(source: string, config: AcpAgentConfig, options: AgentRunOptions): AgentRun {
   const traceId = options.traceId;
-  const bus = options.eventBus;
   const cancelGraceMs = config.cancelGraceMs ?? 2000;
   const killGraceMs = config.killGraceMs ?? 3000;
 
-  // Unified abort via AbortSignal.any (Node 20+).
-  const controller = new AbortController();
-  const compositeSignal: AbortSignal = options.signal
-    ? AbortSignal.any([options.signal, controller.signal])
-    : controller.signal;
-
-  // Queue-backed AsyncIterable, single-consumer guarded.
-  const queue: AgentEvent[] = [];
-  const waiters: Array<(v: IteratorResult<AgentEvent>) => void> = [];
-  let streamClosed = false;
-  let iteratorVended = false;
-
-  const pushEvent = (event: AgentEvent): void => {
-    if (streamClosed) return;
-    if (bus) {
-      try {
-        bus.emit(event);
-      } catch {
-        // bus errors are the bus's problem
-      }
-    }
-    const next = waiters.shift();
-    if (next) {
-      next({ value: event, done: false });
-    } else {
-      queue.push(event);
-    }
-  };
-
-  const closeStream = (): void => {
-    if (streamClosed) return;
-    streamClosed = true;
-    while (waiters.length > 0) {
-      const w = waiters.shift()!;
-      w({ value: undefined, done: true });
-    }
-  };
-
-  const events: AsyncIterable<AgentEvent> = {
-    [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
-      if (iteratorVended) {
-        throw new Error(
-          'AgentRun.events is single-consumer; iterate it once. Use AgentEventBus (options.eventBus) for multi-subscriber fan-out.',
-        );
-      }
-      iteratorVended = true;
-      // Lazy start: iterating events is one of the two entry points that
-      // kicks off the underlying run. Without this, the iterator would
-      // park a waiter on the first next() and deadlock forever.
-      void startIfNeeded();
-      return {
-        next(): Promise<IteratorResult<AgentEvent>> {
-          if (queue.length > 0) {
-            return Promise.resolve({ value: queue.shift()!, done: false });
-          }
-          if (streamClosed) {
-            return Promise.resolve({ value: undefined, done: true });
-          }
-          return new Promise<IteratorResult<AgentEvent>>((resolve) => {
-            waiters.push(resolve);
-          });
-        },
-        return(): Promise<IteratorResult<AgentEvent>> {
-          closeStream();
-          return Promise.resolve({ value: undefined, done: true });
-        },
-      };
-    },
-  };
+  const { signal: compositeSignal, controller } = composeAbort(options.signal);
+  const queue = createEventQueue(options.eventBus);
+  const pushEvent = queue.push;
+  const closeStream = queue.close;
 
   const turns = new TurnAccumulator(pushEvent, source, traceId);
 
@@ -537,7 +473,7 @@ function makeAcpRun(source: string, config: AcpAgentConfig, options: AgentRunOpt
   }
 
   return {
-    events,
+    events: lazyEvents(queue.events, startIfNeeded),
     get result(): Promise<AgentRunResult> {
       return startIfNeeded();
     },
