@@ -134,8 +134,19 @@ function createInferenceAdapter(
     }
   };
 
+  // Single-consumer guard: vending a second iterator from the same run
+  // would silently split events between consumers (each `next()` drains
+  // the shared queue). Throw loudly instead — callers wanting multi-cast
+  // wire an AgentEventBus via options.eventBus.
+  let iteratorVended = false;
   const events: AsyncIterable<AgentEvent> = {
     [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
+      if (iteratorVended) {
+        throw new Error(
+          'AgentRun.events is single-consumer; iterate it once. Use AgentEventBus (options.eventBus) for multi-subscriber fan-out.',
+        );
+      }
+      iteratorVended = true;
       return {
         next(): Promise<IteratorResult<AgentEvent>> {
           if (queue.length > 0) {
