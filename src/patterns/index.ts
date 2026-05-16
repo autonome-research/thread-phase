@@ -20,6 +20,9 @@ export {
   type StreamingFanoutEvent,
 } from './bounded-fanout.js';
 
+export { boundedFanoutOf, BoundedFanoutOfError } from './bounded-fanout-of.js';
+export type { BoundedFanoutOfOptions, BoundedFanoutOfMode } from './bounded-fanout-of.js';
+
 export {
   intentGate,
   type IntentClassification,
