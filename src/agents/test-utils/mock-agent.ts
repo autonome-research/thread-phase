@@ -101,7 +101,11 @@ export function createMockAgent(
       const bus = options?.eventBus;
       const externalSignal = options?.signal;
       const localController = new AbortController();
-      const composite = composeSignals(externalSignal, localController.signal);
+      // AbortSignal.any (Node 20+) composes without manual listeners that
+      // would pin our closure if the external signal outlives the run.
+      const composite: AbortSignal = externalSignal
+        ? AbortSignal.any([externalSignal, localController.signal])
+        : localController.signal;
 
       const emit = (event: AgentEvent): void => {
         if (bus) bus.emit(event);
@@ -273,17 +277,6 @@ export function createMockAgent(
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-
-function composeSignals(a: AbortSignal | undefined, b: AbortSignal): AbortSignal {
-  if (!a) return b;
-  if (a.aborted) return a;
-  const merged = new AbortController();
-  const onA = (): void => merged.abort();
-  const onB = (): void => merged.abort();
-  a.addEventListener('abort', onA, { once: true });
-  b.addEventListener('abort', onB, { once: true });
-  return merged.signal;
-}
 
 function delay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise<void>((resolve) => {
