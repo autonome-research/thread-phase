@@ -125,6 +125,12 @@ export type ToolCallStatus =
   | 'failed'
   | 'cancelled';
 
+/**
+ * Known session/update variants. Unknown variants (future versions, vendor
+ * extensions) are represented at runtime by the same shape with an
+ * unrecognized `sessionUpdate` string — the adapter routes those to
+ * `native` events without narrowing.
+ */
 export type SessionUpdate =
   | { sessionUpdate: 'agent_message_chunk'; content: ContentBlock }
   | { sessionUpdate: 'agent_thought_chunk'; content: ContentBlock }
@@ -148,8 +154,7 @@ export type SessionUpdate =
       rawOutput?: unknown;
     }
   | { sessionUpdate: 'plan'; entries?: unknown[] }
-  | { sessionUpdate: 'mode'; mode?: unknown }
-  | { sessionUpdate: string; [key: string]: unknown };
+  | { sessionUpdate: 'mode'; mode?: unknown };
 
 export interface SessionNotificationParams {
   sessionId: SessionId;
