@@ -124,6 +124,9 @@ export function threadToMessages(thread: Thread): Message[] {
       case 'agent_start':
       case 'error':
       case 'native':
+      case 'thinking':
+        // Reasoning content is not part of conversation history; downstream
+        // adapters should see the agent's text output, not its inner monologue.
         break;
     }
   }

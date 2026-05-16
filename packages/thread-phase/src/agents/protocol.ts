@@ -65,11 +65,22 @@ export interface SerializableError {
  * Ordering invariant: `agent_start` is the first non-`native` event,
  * `agent_end` the last; exactly one of each per run.
  *
+ * The `thinking` variant is for adapters that surface reasoning content
+ * separately from final text (Anthropic extended thinking, OpenAI Responses
+ * reasoning items, pi inner monologue). The in-tree `inferenceAgent` never
+ * emits it; OpenAI-compatible chat-completions has no reasoning channel.
+ *
+ * The `error.transient` flag distinguishes recoverable failures (rate limits,
+ * upstream 5xx, intermittent network) from terminal ones (invalid auth,
+ * malformed request, schema violation). Adapter authors set `true` only when
+ * a sensible retry policy could succeed without user intervention.
+ *
  * @internal
  */
 export type AgentEvent =
   | { type: 'agent_start';  source: string; traceId?: string; resumeToken?: ResumeToken }
   | { type: 'text';         source: string; traceId?: string; delta: string }
+  | { type: 'thinking';     source: string; traceId?: string; delta: string }
   | { type: 'tool_call';    source: string; traceId?: string; id: string; name: string; input: unknown }
   | { type: 'tool_result';  source: string; traceId?: string; id: string; name: string; output: unknown; isError: boolean }
   | { type: 'turn_end';     source: string; traceId?: string; assistantText: string; usage?: UsageInfo; toolCallCount: number }
