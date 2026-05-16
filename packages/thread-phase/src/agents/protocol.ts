@@ -10,7 +10,11 @@
  * AgentAdapter v1 ships. See `potential_feature.md` for the design spec.
  */
 
-import type { FinishReason, UsageInfo, AgentRunResult as RunnerResult } from '../agent/types.js';
+import type { ActivityEntry, FinishReason, UsageInfo } from '../agent/types.js';
+import type { ToolCall } from '../messages.js';
+import type { MemoryProvider, MemoryScope } from './memory.js';
+
+export type { MemoryProvider, MemoryScope } from './memory.js';
 
 // ---------------------------------------------------------------------------
 // Resumption
@@ -87,23 +91,36 @@ export type AgentFinishReason = FinishReason | 'aborted';
 // ---------------------------------------------------------------------------
 
 /**
- * Adapter run result. Strict superset of the runner `AgentRunResult` shape:
- * every field on the existing runner result is present here, with adapter
- * additions (`parsed`, `resumeToken`, `messages`) as optional fields and a
- * widened `finishReason` to include `'aborted'`.
+ * Adapter run result. Structural superset of the runner `AgentRunResult`:
+ * the runner's required fields appear here with the same shapes, and adapter
+ * additions (`activity`, `parsed`, `resumeToken`, `messages`) are optional so
+ * non-runner adapters can omit fields they don't naturally produce.
+ *
+ * The runner's `AgentRunResult` is assignable to this type without change
+ * (required → optional is widening); adapters that don't emit activity entries
+ * simply leave the field undefined.
  *
  * @internal
  */
-export interface AgentRunResult extends Omit<RunnerResult, 'finishReason'> {
+export interface AgentRunResult {
+  /** Final text output. May be JSON; callers parseJSON or parseStructured. */
+  text: string;
+  /** Reason the agent stopped, widened with `'aborted'`. */
   finishReason: AgentFinishReason;
+  /** Token usage summed across rounds. */
+  usage: UsageInfo;
+  /** Every tool call the adapter actually executed, in order. */
+  executedToolCalls: ToolCall[];
+  /** Adapter-native activity log; optional because not every adapter produces one. */
+  activity?: ReadonlyArray<ActivityEntry>;
   /** Populated when the adapter was given an `outputSchema`. */
   parsed?: unknown;
   /** Adapter-produced continuation hint, persisted for a later run. */
   resumeToken?: ResumeToken;
   /**
    * Adapter-native message log when available. Typed loosely because each
-   * adapter preserves a different fidelity (pi blocks, Claude Code content
-   * arrays, OpenAI reasoning items); consumers that need typed access
+   * adapter preserves a different fidelity (Claude Code content arrays,
+   * OpenAI reasoning items, etc.); consumers that need typed access
    * deserialize per `source`.
    */
   messages?: ReadonlyArray<unknown>;
@@ -145,35 +162,6 @@ export interface AgentCapabilities {
 export interface AgentEventBus {
   emit(event: AgentEvent): void;
   on(handler: (event: AgentEvent) => void | Promise<void>): () => void;
-}
-
-// ---------------------------------------------------------------------------
-// Memory (re-exported from ./memory.js when that module lands)
-// ---------------------------------------------------------------------------
-
-/**
- * Scope key for a memory provider. `userId` is required so backends with
- * per-user isolation (Honcho, Letta) can partition; `appId` and `sessionId`
- * narrow the scope further when an implementation supports nesting.
- *
- * @internal
- */
-export interface MemoryScope {
-  userId: string;
-  appId?: string;
-  sessionId?: string;
-}
-
-/**
- * Pluggable cross-run memory. thread-phase ships no implementations; callers
- * wire one via `AgentRunOptions.memoryProvider`. Implementations are not
- * required to provide read-your-writes consistency.
- *
- * @internal
- */
-export interface MemoryProvider {
-  recall(scope: MemoryScope, query?: string): Promise<string>;
-  remember(scope: MemoryScope, events: ReadonlyArray<AgentEvent>): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
