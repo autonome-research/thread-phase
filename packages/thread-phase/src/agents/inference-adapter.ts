@@ -91,31 +91,14 @@ function createInferenceAdapter(
   const traceId = options.traceId;
   const bus = options.eventBus;
 
-  // Unified cancellation: `abort()` and any external signal feed the same
-  // controller, so the runner only watches one signal.
+  // Unified cancellation via AbortSignal.any (Node 20+): the run watches a
+  // single composite signal that aborts when EITHER `run.abort()` is called
+  // OR `options.signal` aborts. No manual listener — avoids the leak where
+  // an external signal that outlives the run pins our closure.
   const controller = new AbortController();
-  let abortRequested = false;
-  const requestAbort = (reason?: string): void => {
-    if (abortRequested) return;
-    abortRequested = true;
-    try {
-      controller.abort(reason);
-    } catch {
-      // Older runtimes throw when aborting twice; the guard above already
-      // covers the common case.
-    }
-  };
-  if (options.signal) {
-    if (options.signal.aborted) {
-      requestAbort(typeof options.signal.reason === 'string' ? options.signal.reason : 'aborted');
-    } else {
-      options.signal.addEventListener('abort', () => {
-        requestAbort(
-          typeof options.signal!.reason === 'string' ? options.signal!.reason : 'aborted',
-        );
-      });
-    }
-  }
+  const compositeSignal: AbortSignal = options.signal
+    ? AbortSignal.any([options.signal, controller.signal])
+    : controller.signal;
 
   // Unbounded queue-backed AsyncIterable. Single producer (the runner
   // bridging callback), single consumer (whoever iterates `run.events`).
@@ -235,7 +218,7 @@ function createInferenceAdapter(
         config.messages,
         {
           ...config.runnerOptions,
-          signal: controller.signal,
+          signal: compositeSignal,
           onStreamEvent,
         },
         config.config.name,
@@ -250,7 +233,7 @@ function createInferenceAdapter(
         error: serializeError(err),
         transient: false,
       });
-      const reason = abortRequested ? 'aborted' : 'error';
+      const reason = compositeSignal.aborted ? 'aborted' : 'error';
       pushEvent({ type: 'agent_end', source, traceId, reason });
       closeStream();
       return {
@@ -266,9 +249,10 @@ function createInferenceAdapter(
 
     // If the runner reported 'error' but we asked for abort, override
     // the finish reason — cancellation has a first-class encoding in
-    // the canonical vocabulary.
+    // the canonical vocabulary. `compositeSignal.aborted` reflects both
+    // `run.abort()` and `options.signal` paths via AbortSignal.any.
     let finishReason: AgentRunResult['finishReason'] = runnerResult.finishReason;
-    if (abortRequested) {
+    if (compositeSignal.aborted) {
       finishReason = 'aborted';
     } else if (finishReason === 'error') {
       // The runner encoded an error inside the result; surface it as an
@@ -319,7 +303,8 @@ function createInferenceAdapter(
       return startIfNeeded();
     },
     abort(reason?: string): void {
-      requestAbort(reason);
+      // AbortController.abort is idempotent — second call is a no-op.
+      controller.abort(reason);
       // If the run hasn't started yet, kick it off now so the queued
       // abort takes effect — otherwise `result` would never resolve.
       if (!started) startIfNeeded();
