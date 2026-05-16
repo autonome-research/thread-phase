@@ -30,12 +30,12 @@ import type { Message } from '../messages.js';
 import {
   defineAgentAdapter,
   type AgentAdapterMeta,
-  type AgentEvent,
   type AgentEventBus,
   type AgentRun,
   type AgentRunOptions,
   type AgentRunResult,
 } from './protocol.js';
+import { composeAbort, createEventQueue, lazyEvents } from './run-helpers.js';
 import { serializeError } from './serialize-error.js';
 import {
   applyStructuredOutputPrompt,
@@ -89,87 +89,11 @@ function createInferenceAdapter(
 ): AgentRun {
   const source = ADAPTER_ID;
   const traceId = options.traceId;
-  const bus = options.eventBus;
 
-  // Unified cancellation via AbortSignal.any (Node 20+): the run watches a
-  // single composite signal that aborts when EITHER `run.abort()` is called
-  // OR `options.signal` aborts. No manual listener — avoids the leak where
-  // an external signal that outlives the run pins our closure.
-  const controller = new AbortController();
-  const compositeSignal: AbortSignal = options.signal
-    ? AbortSignal.any([options.signal, controller.signal])
-    : controller.signal;
-
-  // Unbounded queue-backed AsyncIterable. Single producer (the runner
-  // bridging callback), single consumer (whoever iterates `run.events`).
-  // The producer never blocks: if no waiter is parked, events queue.
-  const queue: AgentEvent[] = [];
-  const waiters: Array<(v: IteratorResult<AgentEvent>) => void> = [];
-  let streamClosed = false;
-
-  const pushEvent = (event: AgentEvent): void => {
-    if (streamClosed) return;
-    if (bus) {
-      try {
-        bus.emit(event);
-      } catch {
-        // Bus errors must not poison the run; the bus implementation is
-        // expected to swallow handler errors itself.
-      }
-    }
-    const next = waiters.shift();
-    if (next) {
-      next({ value: event, done: false });
-    } else {
-      queue.push(event);
-    }
-  };
-
-  const closeStream = (): void => {
-    if (streamClosed) return;
-    streamClosed = true;
-    while (waiters.length > 0) {
-      const w = waiters.shift()!;
-      w({ value: undefined, done: true });
-    }
-  };
-
-  // Single-consumer guard: vending a second iterator from the same run
-  // would silently split events between consumers (each `next()` drains
-  // the shared queue). Throw loudly instead — callers wanting multi-cast
-  // wire an AgentEventBus via options.eventBus.
-  let iteratorVended = false;
-  const events: AsyncIterable<AgentEvent> = {
-    [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
-      if (iteratorVended) {
-        throw new Error(
-          'AgentRun.events is single-consumer; iterate it once. Use AgentEventBus (options.eventBus) for multi-subscriber fan-out.',
-        );
-      }
-      iteratorVended = true;
-      return {
-        next(): Promise<IteratorResult<AgentEvent>> {
-          if (queue.length > 0) {
-            const value = queue.shift()!;
-            return Promise.resolve({ value, done: false });
-          }
-          if (streamClosed) {
-            return Promise.resolve({ value: undefined, done: true });
-          }
-          return new Promise<IteratorResult<AgentEvent>>((resolve) => {
-            waiters.push(resolve);
-          });
-        },
-        return(): Promise<IteratorResult<AgentEvent>> {
-          // Consumer abandoned the iterator; close cleanly so no waiters
-          // hang. Does not abort the run — the result promise still
-          // resolves on its own timeline.
-          closeStream();
-          return Promise.resolve({ value: undefined, done: true });
-        },
-      };
-    },
-  };
+  const { signal: compositeSignal, controller } = composeAbort(options.signal);
+  const queue = createEventQueue(options.eventBus);
+  const pushEvent = queue.push;
+  const closeStream = queue.close;
 
   // Stream-event bridge: translate runner events to canonical AgentEvents.
   // The runner emits `round_complete` BEFORE that round's `tool_call_started`
@@ -309,7 +233,7 @@ function createInferenceAdapter(
   }
 
   return {
-    events: lazyEvents(events, startIfNeeded),
+    events: lazyEvents(queue.events, startIfNeeded),
     get result(): Promise<AgentRunResult> {
       return startIfNeeded();
     },
@@ -343,23 +267,6 @@ function tryExtractErrorMessage(text: string): string {
     // not JSON
   }
   return text || 'agent error';
-}
-
-/**
- * Wrap the queue-backed iterable so consumers that iterate `events`
- * implicitly start the run. Without this, awaiting `result` first would be
- * fine, but iterating `events` first would deadlock on an empty queue.
- */
-function lazyEvents(
-  inner: AsyncIterable<AgentEvent>,
-  start: () => Promise<unknown>,
-): AsyncIterable<AgentEvent> {
-  return {
-    [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
-      void start();
-      return inner[Symbol.asyncIterator]();
-    },
-  };
 }
 
 // Re-exported for callers that need to wire an event bus before the run.

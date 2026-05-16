@@ -65,3 +65,12 @@ export {
 
 // Helper for adapters whose runtime emits turn boundaries before tool calls.
 export { TurnAccumulator } from './turn-accumulator.js';
+
+// Helpers for adapter authors: composite abort, single-consumer event queue, lazy-start wrapper.
+export {
+  composeAbort,
+  createEventQueue,
+  lazyEvents,
+  type CompositeAbort,
+  type EventQueue,
+} from './run-helpers.js';
