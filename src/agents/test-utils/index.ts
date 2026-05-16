@@ -14,3 +14,9 @@ export {
   type CreateMockAgentOptions,
   type MockAgentConfig,
 } from './mock-agent.js';
+
+export {
+  runAdapterConformance,
+  type ConformanceConfigBuilder,
+  type RunConformanceSuiteOptions,
+} from './conformance.js';
