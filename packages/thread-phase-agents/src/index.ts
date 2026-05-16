@@ -20,3 +20,4 @@ export {
 export { hermesAgent, type HermesAgentConfig } from './hermes/index.js';
 export { openClawAgent, type OpenClawAgentConfig } from './openclaw/index.js';
 export { anthropicAgent, type AnthropicAgentConfig } from './anthropic/index.js';
+export { codexAgent, type CodexAgentConfig } from './codex/index.js';
