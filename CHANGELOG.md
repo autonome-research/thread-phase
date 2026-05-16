@@ -4,6 +4,38 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-05-16
+
+The headline change: thread-phase now composes deterministic phases over **heterogeneous agents**. `runAgentWithTools` remains the canonical primitive for raw OpenAI-compatible inference; the new `AgentAdapter` protocol is the surface for delegating to ready agents (Claude Code, Hermes, Codex, OpenClaw, Anthropic SDK). Sibling adapter implementations live in the new [`thread-phase-agents`](https://github.com/Code4me2/thread-phase-agents) package; the protocol itself ships here.
+
+This is a fully additive release. Every existing export is unchanged; new exports land under the `thread-phase/agents` and `thread-phase/agents/test-utils` subpaths. The protocol surface is marked `@internal` while it stabilizes — pin the minor version if you depend on it.
+
+### Added
+
+- **`AgentAdapter` protocol** (`thread-phase/agents`) — `AgentRun` (events / result / abort), `AgentRunResult`, `AgentEvent` (discriminated union of `agent_start | text | thinking | tool_call | tool_result | turn_end | agent_end | error | native`), `AgentCapabilities`, `AgentAdapterMeta`, `defineAgentAdapter`, `ResumeToken`, `SerializableError`, `SteerableAgentRun`. Every event carries a `source` field naming the emitting adapter.
+- **`Thread` primitive** for cross-phase conversation state. Holds canonical events plus per-adapter resume tokens; `threadToMessages` renders to OpenAI-style messages for cross-adapter handoff when no native resume path exists.
+- **`MemoryProvider` interface** — `recall(scope, query?)` / `remember(scope, events)`. thread-phase ships no implementations; bind Honcho, Letta, Mem0, or a custom backend yourself. See `examples/honcho-memory.ts`.
+- **`inferenceAgent`** — the in-tree reference adapter, wraps `runAgentWithTools` 1:1. Declares `streaming: 'text'`, `cancellation: 'cooperative'`, `resumption: 'none'`, `structuredOutput: 'prompted'`.
+- **Run helpers** for adapter authors — `composeAbort` (combines `options.signal` with an internal controller via `AbortSignal.any`), `createEventQueue` (single-consumer queue with optional bus mirroring, throws on second iterator), `lazyEvents` (wraps an iterable so that iterating it kicks off the underlying run), `TurnAccumulator` (handles turn-marker-before-tool-calls deferral so adapters don't reimplement it).
+- **Structured output helpers** — `applyStructuredOutputPrompt`, `extractResponseBlock`, `parseStructuredFromText`, `parseStructured`, `StructuredOutputParseError`. Adapters declaring `structuredOutput: 'prompted'` apply the instruction up front and parse the `<response>` block on completion; parse failures land in `AgentRunResult.parseError` for caller diagnosis.
+- **`AgentEventBus`** + `createEventBus` — multi-subscriber pub/sub for orchestrator-side observation. Adapters that receive one via `AgentRunOptions.eventBus` mirror their event stream automatically.
+- **`AgentCapabilityError` + `requireCapability`** — patterns assert adapter capabilities at construction time so pipelines fail fast.
+- **`boundedFanoutOf` pattern** (`thread-phase/patterns`) — adapter-driven variant of `boundedFanout` with automatic event-bus and signal propagation. Returns `AgentRunResult[]` in input order; `mode: 'fail-fast' | 'collect'` mirrors `boundedFanout`'s shape. Includes `BoundedFanoutOfError` for fail-fast rejections.
+- **Adapter conformance suite** (`thread-phase/agents/test-utils`) — `runAdapterConformance({ meta, buildConfig })` asserts the 14 lifecycle invariants every adapter must satisfy. Imported by both in-tree tests and sibling-package adapters.
+- **`createMockAgent`** for tests that need a scripted `AgentAdapter` (`thread-phase/agents/test-utils`).
+- New events on `AgentEvent`: `thinking` (intra-turn reasoning content for adapters that surface it separately from final text), with `error.transient` semantics documented (`true` for retryable errors — rate limits, transient 5xx — `false` for terminal ones).
+- **`examples/honcho-memory.ts`** — runnable example wiring Honcho as a `MemoryProvider`. Adds `@honcho-ai/sdk` as a devDep.
+
+### Changed
+
+- `package.json` adds new subpath exports: `./agents`, `./agents/test-utils`. Existing subpaths (`./patterns`, `./context`, `./session`, `./tools`, `.`) unchanged.
+- `vitest` moved to `peerDependenciesMeta` (optional) — only consumers of `thread-phase/agents/test-utils` need it.
+
+### Notes
+
+- The `AgentAdapter` surface is `@internal` in all JSDoc. The protocol stabilizes when the first sibling-package release tags 1.0; until then, every export here may move in a minor release.
+- 211 tests pass in this repo. The sibling [`thread-phase-agents`](https://github.com/Code4me2/thread-phase-agents) ships its own 89-test conformance + integration suite against `acpAgent`, `hermesAgent`, `openClawAgent`, `anthropicAgent`, `codexAgent`, `claudeCodeAgent`.
+
 ## [1.2.1] — 2026-05-01
 
 Tightens the `mode: 'collect'` + `signal` interaction. v1.2.0 still threw `AbortError` post-loop when the signal aborted, even in collect mode — which discarded the partial results that the consumer had paid for and that collect mode was supposed to preserve. This is the soft-cancel semantics that the cron-driven use case actually wants: stop dispatching new work, return what's done.
@@ -105,6 +137,11 @@ Initial scaffold. Phase framework, agent runner, token-budget machinery, tool re
 - 49 tests across 7 files
 - Smoke test suite caught two real bugs (empty content from `tools: null` serialization; empty content from no-tools nudge)
 
-[Unreleased]: https://github.com/Code4me2/thread-phase/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Code4me2/thread-phase/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Code4me2/thread-phase/compare/v1.2.1...v1.3.0
+[1.2.1]: https://github.com/Code4me2/thread-phase/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/Code4me2/thread-phase/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/Code4me2/thread-phase/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/Code4me2/thread-phase/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/Code4me2/thread-phase/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/Code4me2/thread-phase/releases/tag/v0.0.1

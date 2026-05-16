@@ -1,6 +1,6 @@
 # thread-phase
 
-A TypeScript framework for the iterated tool-use loop against OpenAI-compatible inference (vLLM, Ollama, OpenAI, llama.cpp), composed into multi-phase pipelines with a typed shared context, persistent event logs, and concurrency-capped fanout.
+A TypeScript framework that composes deterministic phases over **heterogeneous agents** — the iterated tool-use loop against OpenAI-compatible inference for raw model calls, the `AgentAdapter` protocol for delegating to ready agents (Claude Code, Hermes, Codex, OpenClaw, Anthropic SDK). Multi-phase pipelines with a typed shared context, persistent event logs, and concurrency-capped fanout.
 
 ```bash
 npm install thread-phase
@@ -69,7 +69,7 @@ result.executedToolCalls;  // [{ id, name: 'add', input: { a: 17, b: 25 } }]
 
 ## Architecture
 
-Three primitives.
+Three primitives plus one extension surface.
 
 ### `runAgentWithTools(config, messages, options) → AgentRunResult`
 
@@ -122,14 +122,35 @@ await runner.run(jobId, [phaseA, phaseB], ctx);
 
 The interface is sync by design (sqlite hot path; fire-and-forget event writes). Async backends will land as an additive `JobStoreAsync` interface if/when needed; see [ROADMAP](./ROADMAP.md).
 
+### `AgentAdapter` — the extension surface
+
+`AgentAdapter` is the protocol every ready-agent integration speaks. The in-tree `inferenceAgent` wraps `runAgentWithTools`; sibling implementations in [`thread-phase-agents`](https://github.com/Code4me2/thread-phase-agents) wrap `hermes`, `openclaw`, `claude`, the OpenAI Responses API (Codex), and the Anthropic SDK directly.
+
+Every adapter returns the same shape:
+
+```ts
+interface AgentRun {
+  readonly events: AsyncIterable<AgentEvent>;  // single-consumer stream
+  readonly result: Promise<AgentRunResult>;     // always resolves, never rejects
+  abort(reason?: string): void;
+}
+```
+
+Canonical events: `agent_start | text | thinking | tool_call | tool_result | turn_end | agent_end | error | native`. Every event carries a `source` field (the adapter's id) so heterogeneous adapter events flow through one `AgentEventBus` without losing provenance.
+
+Conversation state across phases lives in the `Thread` primitive — canonical events plus per-adapter resume tokens. Same-adapter chains (claude-code → claude-code) resume natively via the adapter's session; cross-adapter chains render events back to text via `threadToMessages`.
+
+Memory across runs is outsourced: `MemoryProvider` is just a TypeScript interface (`recall(scope, query?) / remember(scope, events)`). thread-phase ships no implementations; bind Honcho, Letta, Mem0, or a custom backend yourself. See [`examples/honcho-memory.ts`](./examples/honcho-memory.ts).
+
 ## Patterns
 
 In `thread-phase/patterns`:
 
 | Pattern | Shape |
 |---|---|
-| `boundedFanout` | N items, agent per item, capped concurrency, results in input order |
-| `streamingBoundedFanout` | Same, yields per-item events as items finish |
+| `boundedFanout` | N items, free-function runner per item, capped concurrency, results in input order |
+| `boundedFanoutOf` | Same, but the runner is an `AgentAdapter` + buildConfig — automatic event-bus propagation |
+| `streamingBoundedFanout` | `boundedFanout`-style scheduling, yields per-item events as items finish |
 | `parallelFanout` | Uncapped per-item parallel runs |
 | `parallelPhases` | Several phases run concurrently as one composite |
 | `intentGate` | Cheap classifier decides whether the rest of the pipeline runs |
@@ -164,6 +185,7 @@ In [`examples/`](./examples), runnable via `npx tsx examples/<name>.ts`:
 | `bounded-fanout.ts` | Per-item agent over a list, concurrency-capped |
 | `sse-server.ts` | `JobRunner` + `streamToSSE` in an HTTP handler |
 | `agent-authored-cron.ts` | End-to-end automation skeleton — fetch / triage / summarize / compose, with `verifyResult` and `JobRunner` |
+| `honcho-memory.ts` | `MemoryProvider` bound to Honcho — recall before an agent call, remember after |
 
 ## Stability
 

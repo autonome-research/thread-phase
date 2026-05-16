@@ -6,8 +6,9 @@ thread-phase's `patterns/*` are *named shapes*, not abstractions you have to sat
 
 | I want to... | Use | When **not** to use |
 |---|---|---|
-| Run an agent per item over a list, capped concurrency | [`boundedFanout`](#boundedfanout) | List has ≤2 items (just `Promise.all`) |
-| Same, but show progress as items finish | [`streamingBoundedFanout`](#streamingboundedfanout) | You only care about final results |
+| Run a free-function runner per item over a list, capped concurrency | [`boundedFanout`](#boundedfanout) | List has ≤2 items (just `Promise.all`); the runner is an `AgentAdapter` and you want bus propagation |
+| Run an `AgentAdapter` per item with shared event-bus propagation | [`boundedFanoutOf`](#boundedfanoutof) | The runner isn't adapter-shaped; you want a free-function callback |
+| Same as boundedFanout, but show progress as items finish | [`streamingBoundedFanout`](#streamingboundedfanout) | You only care about final results |
 | Run agents in parallel without a concurrency cap | [`parallelFanout`](#parallelfanout) | More than ~10 items (use `boundedFanout`) |
 | Run several distinct phases concurrently | [`parallelPhases`](#parallelphases) | Phases share mutable state on the same ctx field |
 | Cheaply decide whether the rest of the pipeline should run | [`intentGate`](#intentgate) | The check is itself expensive — just write the phase directly |
@@ -28,6 +29,35 @@ thread-phase's `patterns/*` are *named shapes*, not abstractions you have to sat
 **Failure semantics:** mirrors `Promise.all` — first thrown error rejects the whole call; in-flight runners complete but their results are discarded. Wrap your runner with try/catch if you want partial-results-on-failure.
 
 [Source](../src/patterns/bounded-fanout.ts) · 80 LOC
+
+---
+
+## `boundedFanoutOf`
+
+**Shape:** N items → `AgentAdapter` + `buildConfig` per item → `AgentRunResult[]` in input order, max K runs in flight.
+
+**When to use:** the canonical batch shape when each item should run through an adapter (`claudeCodeAgent`, `hermesAgent`, `codexAgent`, etc.) rather than a free-function runner. The pattern wires `options.eventBus` and `options.signal` automatically so every parallel adapter run lands events on one shared bus and cancellation propagates with one signal. Result type discriminates on `mode`: default `'fail-fast'` rejects with `BoundedFanoutOfError` on the first error; `'collect'` returns the full `AgentRunResult[]` with failed items having `finishReason: 'error'`.
+
+**When not to use:** when your runner is a free function (HTTP call, `runAgentWithTools` with custom verification, etc.) — `boundedFanout`'s callback form is more direct. If you have only one item, just call the adapter directly.
+
+**Failure semantics:** `'fail-fast'` aborts all in-flight runs on the first failure via `controller.abort()` and `run.abort()` (belt-and-suspenders) and rejects with `BoundedFanoutOfError { itemIndex, result }`. `'collect'` continues through failures; items not dispatched before a signal abort get synthetic `'aborted'` slots in the result array to preserve position stability.
+
+```ts
+import { boundedFanoutOf } from 'thread-phase/patterns';
+import { claudeCodeAgent } from 'thread-phase-agents';
+
+const results = await boundedFanoutOf({
+  items: filesToReview,
+  concurrency: 3,
+  adapter: claudeCodeAgent,
+  buildConfig: (file) => ({ cwd: '/repo', prompt: `Review ${file}` }),
+  eventBus: ctx.bus,
+  signal: ctx.signal,
+  mode: 'collect',
+});
+```
+
+[Source](../src/patterns/bounded-fanout-of.ts) · ~190 LOC
 
 ---
 
