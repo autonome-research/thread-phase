@@ -10,11 +10,12 @@
 
 ## TL;DR
 
-thread-phase is a TypeScript framework for **iterated tool-use agents composed into multi-phase pipelines**. The headline use case is *structuring repeatable agentic automations* — cron jobs, systemd timers, CI steps — beyond a single `claude -p "..."` invocation. The framework gives you typed phase boundaries, persistent event logs, and structured agent results so the parts of the automation that should be reliable are reliable, and the parts that should be agent judgment stay agent judgment.
+thread-phase composes deterministic phases over **heterogeneous agents**. Each phase reads typed context, runs one or more agent calls — via `runAgentWithTools` for raw OpenAI-compatible models, via `AgentAdapter` for ready agents (Claude Code, Hermes, Codex, OpenClaw, Anthropic SDK) — and writes typed context back. Pipelines are linear arrays of phases composed in TypeScript. Concurrency, retry, and cancellation are owned by `JobRunner`. Context flow between agent calls within a thread is handled by the `Thread` primitive. Memory across pipeline runs is outsourced to a `MemoryProvider` — thread-phase does not persist anything beyond the `JobStore` event log.
 
 You are most often using thread-phase when:
 - A task has 2+ steps that need to run in a specific order
-- One or more steps involve calling an LLM, possibly with tools
+- One or more steps involve calling an LLM (raw model or a ready agent), possibly with tools
+- You want to mix heterogeneous agents in one pipeline (a cheap local model for triage, claude-code for implementation, codex for verification)
 - The task is repeatable (cron / systemd / CI) and shouldn't re-derive its plan every run
 - You want to verify the agent's claimed output before recording success
 - You want event logs you can read back later to debug what happened
@@ -22,13 +23,13 @@ You are most often using thread-phase when:
 You are NOT using thread-phase when:
 - The task is "ask the LLM one question and print the answer" — just call `runAgentWithTools` directly, no pipeline needed
 - The task is a complex DAG with cross-edges — use Temporal/LangGraph/Inngest, embedding `runAgentWithTools` inside their nodes
-- The task needs Anthropic's content-block model (vision, citations, extended thinking) — use the Anthropic SDK directly
+- You need a per-user memory store as a built-in concept — thread-phase ships only the `MemoryProvider` interface; you wire in Honcho/Letta/Mem0 yourself
 
 ---
 
 ## The mental model
 
-Three primitives. Memorize these — everything else is composition.
+Three primitives plus one extension surface. Memorize these — everything else is composition.
 
 ```ts
 // 1. A Phase is a typed unit of work. It reads from a shared ctx, yields
@@ -42,16 +43,31 @@ interface Phase<TCtx extends BasePipelineContext> {
 //    No DAG framework — the array IS the pipeline.
 async function* runPipeline<TCtx>(phases: Phase<TCtx>[], ctx: TCtx): AsyncGenerator<PipelineEvent>;
 
-// 3. runAgentWithTools is the streaming tool-use loop. Calls happen
-//    inside phases (or directly, if you don't need a pipeline).
+// 3. runAgentWithTools is the streaming tool-use loop against an OpenAI-
+//    compatible inference endpoint. Calls happen inside phases (or
+//    directly, if you don't need a pipeline).
 async function runAgentWithTools(
   config: AgentConfig,
   messages: Message[],
   options: AgentRunnerOptions,
 ): Promise<AgentRunResult>;
+
+// 4. AgentAdapter is the protocol every "ready agent" satisfies. Use the
+//    in-tree inferenceAgent for OpenAI-compatible inference (wraps #3) or
+//    a sibling adapter (hermes, openclaw, anthropic, codex, claude-code)
+//    when you want to delegate to a pre-built agent.
+type AgentAdapter<TConfig> = (
+  config: TConfig,
+  options?: AgentRunOptions,
+) => AgentRun;
 ```
 
 Composition rule: **mutate `ctx` for results, `yield` for progress events.** Never return data from `run` — write it to ctx and read it back in a downstream phase via `requireCtx`.
+
+When to reach for `runAgentWithTools` vs an `AgentAdapter`:
+
+- **`runAgentWithTools`** — a single raw model call inside a phase, you write the system prompt and tools. The canonical primitive; ~5 lines of setup. This is the right call for ~80% of cases.
+- **`AgentAdapter`** — you're delegating to a *ready agent* (claude-code, hermes, codex, …) that has its own system prompt, tool set, and turn behavior, OR you want adapter-shaped composition (one shared event bus across heterogeneous adapters, `boundedFanoutOf` over a list, `Thread`-based handoff). Adapters live in `thread-phase` (`inferenceAgent`) and the sibling package [`thread-phase-agents`](https://github.com/Code4me2/thread-phase-agents).
 
 ---
 
@@ -182,8 +198,9 @@ import { /* one of these */ } from 'thread-phase/patterns';
 
 | You have... | Use |
 |---|---|
-| N items, want to run an agent on each, capped concurrency | `boundedFanout` |
-| Same, want progress events as items finish | `streamingBoundedFanout` |
+| N items, want to run a raw-model agent on each, capped concurrency | `boundedFanout` |
+| N items, want to run an `AgentAdapter` on each (claude-code, hermes, etc.) | `boundedFanoutOf` |
+| Either of the above, with progress events as items finish | `streamingBoundedFanout` / iterate the shared event bus |
 | ≤2 items where concurrency-capping is overhead | `parallelFanout` (or just `Promise.all`) |
 | Two distinct phases that should run concurrently as one composite | `parallelPhases` |
 | Cheap classifier that decides whether the rest of the pipeline runs | `intentGate` |
@@ -192,6 +209,31 @@ import { /* one of these */ } from 'thread-phase/patterns';
 | Want to verify a sample of typed claims | `spotCheck` |
 
 If none fit, write a `Phase` directly. Patterns are convenience, not requirement.
+
+### `boundedFanoutOf` — the adapter-driven sibling of `boundedFanout`
+
+Use when each item should run through an `AgentAdapter` (claude-code, hermes, codex, anthropic, …) rather than a free-function runner. Headline differences vs `boundedFanout`:
+
+- Wires `options.eventBus` automatically so events from every parallel adapter run land on one bus
+- `options.signal` propagates into every adapter call via `AbortSignal.any`
+- Result type is `AgentRunResult[]` in input order (not the caller's free choice)
+
+```ts
+import { boundedFanoutOf } from 'thread-phase/patterns';
+import { claudeCodeAgent } from 'thread-phase-agents';
+
+const results = await boundedFanoutOf({
+  items: filesToReview,
+  concurrency: 3,
+  adapter: claudeCodeAgent,
+  buildConfig: (file) => ({ cwd: '/repo', prompt: `Review ${file}` }),
+  signal: ctx.signal,
+  eventBus: ctx.bus,    // every parallel run's events land here
+  mode: 'collect',
+});
+```
+
+Reach for plain `boundedFanout` when you control the runner directly (an HTTP call, a `runAgentWithTools` invocation with custom verification, etc.) — the callback form is more direct.
 
 ---
 
@@ -357,6 +399,81 @@ When you (the agent) are writing a thread-phase automation for a human, these ar
 
 ---
 
+## Using `AgentAdapter` from a phase
+
+```ts
+import {
+  inferenceAgent,
+  createEventBus,
+  type AgentEvent,
+  type AgentRun,
+} from 'thread-phase/agents';
+
+const bus = createEventBus();
+const observed: AgentEvent[] = [];
+bus.on((event) => observed.push(event));   // or pipe to JobStore, SSE, etc.
+
+const run: AgentRun = inferenceAgent.adapter(
+  {
+    config: { name: 'classifier', systemPrompt: '...', model: '...', tools: [], maxToolRounds: 1, maxTokens: 200 },
+    messages: [{ role: 'user', content: '...' }],
+    runnerOptions: { client, toolExecutor: noTools },
+    outputSchema: { schema: '{"relevant":boolean}' },  // optional prompted-output
+  },
+  { signal: ctx.signal, eventBus: bus },
+);
+
+const result = await run.result;  // never rejects; finishReason encodes the outcome
+if (result.parsed) ctx.relevant = (result.parsed as { relevant: boolean }).relevant;
+if (result.parseError) /* parse failed — caller decides whether to retry */
+```
+
+For sibling adapters (`hermesAgent`, `claudeCodeAgent`, `codexAgent`, etc.), the config shape is adapter-specific but the resulting `AgentRun` is identical — same `events` iterable, same `result` promise, same `abort()` method. Iterate events for streaming UX; await result for final text + tool calls + resume token.
+
+**Cross-adapter Thread handoff:** use the `Thread` primitive to flow conversation state across phases:
+
+```ts
+import { createThread, appendEvent, resumeTokenFor, threadToMessages } from 'thread-phase/agents';
+
+const thread = ctx.thread ?? createThread();
+
+// In phase A — capture events:
+for await (const event of runA.events) {
+  appendEvent(thread, event);
+}
+ctx.thread = thread;
+
+// In phase B with the same adapter — adapter resumes natively:
+const runB = claudeCodeAgent.adapter({
+  cwd, prompt: 'continue',
+  resumeSessionId: resumeTokenFor(thread, 'claude-code')?.data,
+});
+
+// In phase B with a different adapter — render history to messages:
+const history = threadToMessages(thread);
+const runC = anthropicAgent.adapter({ model: '...', messages: [...history, /* new user turn */] });
+```
+
+## Memory across pipeline runs
+
+`thread-phase` ships only the `MemoryProvider` interface — it does not bundle Honcho, Letta, Mem0, or any other backend.
+
+```ts
+import type { MemoryProvider, MemoryScope } from 'thread-phase/agents';
+
+const provider: MemoryProvider = {
+  async recall(scope, query) { /* return prompt-ready string */ return ''; },
+  async remember(scope, events) { /* persist this run's events */ },
+};
+
+// Pass in options when calling an adapter — or call directly in your phase:
+const memory = await provider.recall({ userId: ctx.userId });
+const r = await runAgentWithTools({ ...config, systemPrompt: `${baseSystem}\n${memory}` }, messages, opts);
+await provider.remember({ userId: ctx.userId }, run.events /* etc */);
+```
+
+Adapter authors who declare a memoryProvider via `AgentRunOptions.memoryProvider` get the hook plumbed automatically. See `examples/honcho-memory.ts` for a complete Honcho binding.
+
 ## Reference card — public API
 
 Stable surface (covered by semver from v1.0.0):
@@ -421,6 +538,7 @@ import {
 import {
   parallelFanout,
   boundedFanout,
+  boundedFanoutOf,
   streamingBoundedFanout,
   parallelPhases,
   intentGate,
@@ -428,6 +546,61 @@ import {
   synthesizeWithFollowup,
   spotCheck,
 } from 'thread-phase/patterns';
+
+// AgentAdapter protocol + helpers (separate subpath)
+import {
+  defineAgentAdapter,
+  inferenceAgent,
+  createThread,
+  appendEvent,
+  resumeTokenFor,
+  setResumeToken,
+  threadToMessages,
+  createEventBus,
+  composeAbort,
+  createEventQueue,
+  lazyEvents,
+  TurnAccumulator,
+  parseStructured,
+  parseStructuredFromText,
+  applyStructuredOutputPrompt,
+  requireCapability,
+  AgentCapabilityError,
+  StructuredOutputParseError,
+  serializeError,
+  type AgentRun,
+  type AgentRunOptions,
+  type AgentRunResult,
+  type AgentEvent,
+  type AgentEventBus,
+  type AgentCapabilities,
+  type AgentAdapter,
+  type AgentAdapterMeta,
+  type Thread,
+  type ResumeToken,
+  type SerializableError,
+  type MemoryProvider,
+  type MemoryScope,
+  type StructuredOutputConfig,
+  type InferenceAgentConfig,
+} from 'thread-phase/agents';
+
+// Adapter conformance suite for test files (separate subpath)
+import {
+  createMockAgent,
+  runAdapterConformance,
+  type MockAgentConfig,
+} from 'thread-phase/agents/test-utils';
+
+// Sibling adapter implementations (separate package)
+import {
+  acpAgent,
+  hermesAgent,
+  openClawAgent,
+  anthropicAgent,
+  codexAgent,
+  claudeCodeAgent,
+} from 'thread-phase-agents';
 ```
 
 Items marked `@internal` in their JSDoc (e.g. `consumeStream`, `toOpenAIMessages`) are reachable for advanced cases but not covered by semver. Do not generate code that depends on them unless the user explicitly asks for low-level access.
