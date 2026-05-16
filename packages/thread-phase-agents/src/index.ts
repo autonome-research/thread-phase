@@ -16,3 +16,6 @@ export {
   type StopReason,
   type ToolCallStatus,
 } from './acp/index.js';
+
+export { hermesAgent, type HermesAgentConfig } from './hermes/index.js';
+export { openClawAgent, type OpenClawAgentConfig } from './openclaw/index.js';
