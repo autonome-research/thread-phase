@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-05-16
+
+First release with a complete adapter set. Seven adapters covering CLI-based coding agents (claude-code, codex CLI) and in-process SDK agents (anthropic, codex Responses, pi), plus the ACP chassis and its two wrappers (hermes, openclaw). All four adapters that have binaries on the development machine (claude-code, hermes, codex-cli, pi) verified end-to-end via real-binary smoke scripts under `scripts/`.
+
 ### Added — adapters
 
 - **`codexCliAgent`** — subprocess wrapper around `codex exec --json`. Uses codex's own auth (ChatGPT subscription OAuth or API key, whichever's configured via `codex login`); no `OPENAI_API_KEY` required. Sister adapter to `codexAgent` (which uses the OpenAI SDK Responses API directly). Translates codex's higher-level event vocabulary (`thread.started`, `turn.started`, `item.started`/`item.completed` with type-discriminated items, `turn.completed`) into canonical events. Tool use surfaces as `tool_call` / `tool_result` for `command_execution` items; agent_message items become `text`; reasoning items become `thinking`. Real-binary smoke against codex v0.130.0: passes end-to-end with usage capture and thread-id resumeToken.
@@ -54,4 +58,5 @@ Initial adapter set on top of [`thread-phase`](https://github.com/Code4me2/threa
 - This package is pre-1.0; expect the `AcpAgentConfig`, `HermesAgentConfig`, etc. surfaces to evolve as real-binary integration surfaces churn.
 - Peer dependency on `thread-phase ^1.3.0`. Each adapter's underlying SDK / CLI is the caller's responsibility — install `@anthropic-ai/sdk` only if you import `anthropicAgent`, `openai` only for `codexAgent`, etc.
 
-[Unreleased]: https://github.com/Code4me2/thread-phase-agents/commits/master
+[Unreleased]: https://github.com/Code4me2/thread-phase-agents/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Code4me2/thread-phase-agents/releases/tag/v0.1.0

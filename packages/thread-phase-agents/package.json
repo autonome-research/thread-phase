@@ -1,6 +1,6 @@
 {
   "name": "thread-phase-agents",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Agent adapters for thread-phase — wraps hermes, openclaw, anthropic, codex, claude-code behind a uniform AgentAdapter protocol.",
   "license": "MIT",
   "type": "module",
