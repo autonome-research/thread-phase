@@ -226,17 +226,52 @@ export interface AgentRun<TResult extends AgentRunResult = AgentRunResult> {
 }
 
 /**
- * Subtype for adapters that support mid-stream steering. Sibling packages
- * (the `thread-phase-agents` extension surface) return this from adapters
- * whose underlying runtime accepts in-flight messages. Core patterns target
- * `AgentRun`; consumers that need steering narrow to `SteerableAgentRun`.
+ * Subtype for adapters that support mid-stream steering or post-turn
+ * follow-up. Sibling packages (the `thread-phase-agents` extension surface)
+ * return this from adapters whose underlying runtime accepts these calls —
+ * e.g. ACP sessions, which can take multiple `session/prompt` requests
+ * before the session is closed.
+ *
+ * `AgentAdapter`'s declared return type stays `AgentRun` for variance
+ * (SteerableAgentRun is a subtype). Consumers narrow at the call site
+ * via `isSteerable(run)`.
  *
  * @internal
  */
 export interface SteerableAgentRun<TResult extends AgentRunResult = AgentRunResult>
   extends AgentRun<TResult> {
+  /**
+   * Send a steering message mid-stream — only meaningful for runtimes
+   * that accept in-flight input (currently none in the bundled adapter
+   * set; ACP-based adapters reject with a clear capability error).
+   */
   steer(message: string): Promise<void>;
+  /**
+   * Queue an additional prompt to send after the current prompt response
+   * completes. Multiple follow-ups can stack; the chassis drains the
+   * queue between turns. Throws after the run has reached `agent_end`.
+   */
   followUp(message: string): Promise<void>;
+}
+
+/**
+ * Type guard for `SteerableAgentRun`. Use at consumer call sites to
+ * safely narrow an `AgentRun` returned by an adapter that may or may
+ * not be steerable:
+ *
+ *     const run = hermesAgent.adapter(...);
+ *     if (isSteerable(run)) await run.followUp('also do X');
+ *
+ * @internal
+ */
+export function isSteerable<TResult extends AgentRunResult>(
+  run: AgentRun<TResult>,
+): run is SteerableAgentRun<TResult> {
+  const candidate = run as Partial<SteerableAgentRun<TResult>>;
+  return (
+    typeof candidate.followUp === 'function' &&
+    typeof candidate.steer === 'function'
+  );
 }
 
 /**
