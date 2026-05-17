@@ -74,3 +74,7 @@ export {
   type CompositeAbort,
   type EventQueue,
 } from './run-helpers.js';
+
+// Adapter decorators: auto-handle memory and Thread wiring.
+export { withMemory, type WithMemoryOptions } from './with-memory.js';
+export { withThread, type WithThreadOptions } from './with-thread.js';
