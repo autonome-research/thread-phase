@@ -79,3 +79,9 @@ export {
 // Adapter decorators: auto-handle memory and Thread wiring.
 export { withMemory, type WithMemoryOptions } from './with-memory.js';
 export { withThread, type WithThreadOptions } from './with-thread.js';
+
+// Bridge adapter events to a JobStore event log.
+export {
+  pipeAgentEventsToJobStore,
+  type PipeAgentEventsOptions,
+} from './job-store-bridge.js';
