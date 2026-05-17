@@ -465,14 +465,82 @@ const provider: MemoryProvider = {
   async recall(scope, query) { /* return prompt-ready string */ return ''; },
   async remember(scope, events) { /* persist this run's events */ },
 };
-
-// Pass in options when calling an adapter — or call directly in your phase:
-const memory = await provider.recall({ userId: ctx.userId });
-const r = await runAgentWithTools({ ...config, systemPrompt: `${baseSystem}\n${memory}` }, messages, opts);
-await provider.remember({ userId: ctx.userId }, run.events /* etc */);
 ```
 
-Adapter authors who declare a memoryProvider via `AgentRunOptions.memoryProvider` get the hook plumbed automatically. See `examples/honcho-memory.ts` for a complete Honcho binding.
+Pass via `AgentRunOptions.memoryProvider` and wrap the adapter with `withMemory` to plumb both ends automatically:
+
+```ts
+import { withMemory, inferenceAgent } from 'thread-phase/agents';
+
+const memoryAware = withMemory(inferenceAgent, {
+  scope: { userId: ctx.userId },
+  inject: (cfg, memory) => ({
+    ...cfg,
+    config: {
+      ...cfg.config,
+      systemPrompt: `${cfg.config.systemPrompt}\n\nContext about the user:\n${memory}`,
+    },
+  }),
+  query: (cfg) => cfg.messages[cfg.messages.length - 1]?.content?.toString(),
+});
+
+const run = memoryAware.adapter(cfg, { memoryProvider: provider });
+// recall happens before the run starts; remember happens after agent_end
+// before run.result resolves. Recall/remember failures surface as
+// native events on the bus; the run never fails because of memory.
+```
+
+`withMemory` is a no-op when `options.memoryProvider` is absent — decorate once at module load, decide per-call whether memory applies. See `examples/honcho-memory.ts` for a complete Honcho binding.
+
+## Threading state across phases
+
+`Thread` is the conversational primitive that flows between phases. `withThread` makes adapters auto-consume it — no glue code required:
+
+```ts
+import { withThread, createThread, claudeCodeAgent } from 'thread-phase/agents';
+
+const thread = createThread();
+
+const adapter = withThread(claudeCodeAgent, thread, {
+  applyResume: (cfg, token) => ({
+    ...cfg,
+    resumeSessionId: token.kind === 'opaque' ? token.data : undefined,
+  }),
+});
+
+// First phase — creates a session, fills thread.events, captures the session id.
+await adapter.adapter({ cwd, prompt: 'analyze this codebase' }).result;
+
+// Second phase — same thread; adapter reads thread.resumeTokens['claude-code']
+// and adds --resume <id> automatically. Events accumulate in thread.events.
+await adapter.adapter({ cwd, prompt: 'now refactor the file you mentioned' }).result;
+```
+
+`withThread` is appropriate for any adapter; the per-adapter `applyResume` callback knows which config field holds the resume token (`resumeSessionId` for ACP/Claude Code, `previousResponseId` for Codex, etc.). Anthropic has no resumption — omit `applyResume`; events still mirror into the thread.
+
+## Mid-stream follow-up with steerable runs
+
+ACP-based adapters (`hermesAgent`, `openClawAgent`, the chassis `acpAgent`) return `SteerableAgentRun` at runtime. Use `isSteerable` to narrow safely:
+
+```ts
+import { isSteerable } from 'thread-phase/agents';
+import { hermesAgent } from 'thread-phase-agents';
+
+const run = hermesAgent.adapter({ cwd, prompt: 'do the first thing' });
+
+// Queue additional prompts on the same ACP session.
+if (isSteerable(run)) {
+  await run.followUp('also do the second thing');
+  await run.followUp('then summarize');
+}
+
+// The run sends each as a separate session/prompt; events stream in order
+// with a turn_end between each. result resolves with the LAST turn's
+// finishReason.
+const result = await run.result;
+```
+
+`steer()` is on the protocol surface but ACP-based adapters reject — ACP's `session/prompt` is discrete, no mid-generation injection. `followUp` is the supported pattern.
 
 ## Reference card — public API
 
@@ -568,6 +636,10 @@ import {
   AgentCapabilityError,
   StructuredOutputParseError,
   serializeError,
+  // Adapter decorators (v1.3.x+):
+  withMemory,
+  withThread,
+  isSteerable,
   type AgentRun,
   type AgentRunOptions,
   type AgentRunResult,
@@ -576,6 +648,7 @@ import {
   type AgentCapabilities,
   type AgentAdapter,
   type AgentAdapterMeta,
+  type SteerableAgentRun,
   type Thread,
   type ResumeToken,
   type SerializableError,
@@ -583,6 +656,8 @@ import {
   type MemoryScope,
   type StructuredOutputConfig,
   type InferenceAgentConfig,
+  type WithMemoryOptions,
+  type WithThreadOptions,
 } from 'thread-phase/agents';
 
 // Adapter conformance suite for test files (separate subpath)
