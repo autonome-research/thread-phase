@@ -6,7 +6,7 @@ A TypeScript framework that composes deterministic phases over **heterogeneous a
 npm install thread-phase
 ```
 
-> **Generating thread-phase code with an LLM agent?** See [`AGENTS.md`](./AGENTS.md) — a self-contained reference covering the mental model, a copy-paste template, and explicit anti-patterns.
+> **Generating thread-phase code with an LLM agent?** See [`AGENTS.md`](./AGENTS.md) — a self-contained reference covering the mental model, a copy-paste template, and explicit anti-patterns. Claude Code users can also install [`SKILL.md`](./SKILL.md) into `~/.claude/skills/thread-phase/` so the guidance auto-loads.
 
 ## Use cases
 

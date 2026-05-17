@@ -4,6 +4,13 @@
 >
 > **How to use:** Load this file as context when a user asks you to write a thread-phase automation, agent pipeline, or cron task. Refer back as needed. The reference card at the bottom gives you import lines you can copy.
 >
+> **Claude Code users:** this repo also ships [`SKILL.md`](./SKILL.md), a Claude-Code-flavored mirror of this content with the frontmatter Claude Code's skill system auto-loads from. Drop it into your skills dir so it triggers without manual context-loading:
+> ```bash
+> mkdir -p ~/.claude/skills/thread-phase
+> cp SKILL.md ~/.claude/skills/thread-phase/SKILL.md
+> ```
+> The two files cover the same ground; `AGENTS.md` is the canonical source — `SKILL.md` is the same content with a different framing for Claude Code's trigger system.
+>
 > **If you're a human reading this:** the [README](./README.md) and [docs/patterns.md](./docs/patterns.md) are probably more useful — this doc is dense and assumes you can pattern-match on code.
 
 ---
