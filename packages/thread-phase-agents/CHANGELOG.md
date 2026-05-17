@@ -4,11 +4,26 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
-### Added
+### Added — adapters
+
+- **`codexCliAgent`** — subprocess wrapper around `codex exec --json`. Uses codex's own auth (ChatGPT subscription OAuth or API key, whichever's configured via `codex login`); no `OPENAI_API_KEY` required. Sister adapter to `codexAgent` (which uses the OpenAI SDK Responses API directly). Translates codex's higher-level event vocabulary (`thread.started`, `turn.started`, `item.started`/`item.completed` with type-discriminated items, `turn.completed`) into canonical events. Tool use surfaces as `tool_call` / `tool_result` for `command_execution` items; agent_message items become `text`; reasoning items become `thinking`. Real-binary smoke against codex v0.130.0: passes end-to-end with usage capture and thread-id resumeToken.
+- **`piAgent`** — in-process via `@mariozechner/pi-coding-agent`. Calls `createAgentSession`, subscribes to its event stream, translates pi's rich `AgentSessionEvent` union into canonical events. The first adapter in this package where `SteerableAgentRun.steer()` and `.followUp()` **work natively at runtime** — pi accepts mid-stream steering and queued follow-ups, the adapter just forwards. Declares `resumption: 'session-file'` (pi's SessionManager persists conversations to disk at `~/.pi/agent/sessions/`). Real-binary smoke against pi v0.73.1 + local vLLM: passes with thinking events, text deltas, usage capture, and turn_end emission. `@mariozechner/pi-coding-agent` is a runtime dependency.
+
+### Added — injectors
+
+- `injectMemory.codexCli` / `injectMemory.pi` — prepend memory to the prompt (same pattern as claudeCode).
+- `injectResume.codexCli` — opaque token → `resumeThreadId`.
+- `injectResume.pi` — `session-file` token → `resumeSessionFile`; opaque passes through (caller can set continueSession instead).
+
+### Added — smoke scripts
+
+`scripts/smoke-{claude-code,hermes,codex-cli,pi}.ts` — real-binary smoke tests. Each spawns the actual agent, sends a tiny prompt, prints every canonical event, and reports a pass/fail summary. Run with `npx tsx scripts/smoke-<adapter>.ts [prompt]`.
+
+### Added — earlier in this unreleased cycle
 
 - **`injectMemory`** / **`injectResume`** — pre-built `inject` callbacks for `withMemory` / `withThread` covering every adapter in the package (inference, anthropic, codex, claudeCode, acp, hermes, openClaw). Each knows where its adapter expects memory or a resume token to live. Empty memory passes through unchanged; non-opaque tokens on opaque-only adapters pass through. Removes the boilerplate of writing custom inject callbacks at every call site.
 - **Thread bridge** (`threadToTranscript`, `threadToAcpPrompt`, `threadToAnthropicMessages`, `threadToClaudeCodePrompt`, `threadToCodexInput`) — converts a `Thread` from one adapter into the input shape expected by the next. Lossy by design — cross-adapter handoff renders the canonical event log as a source-tagged text transcript. For full fidelity, use same-adapter resumption via `injectResume` instead.
-- 26 new tests, 121 sibling tests total.
+- 26 new tests, 121 sibling tests total. (Codex-cli and pi unit tests deferred — the adapters are real-binary-tested via smoke scripts.)
 
 ### Changed
 

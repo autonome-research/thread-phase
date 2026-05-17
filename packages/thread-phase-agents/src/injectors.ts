@@ -35,8 +35,10 @@ import type { AcpAgentConfig } from './acp/index.js';
 import type { AnthropicAgentConfig } from './anthropic/index.js';
 import type { ClaudeCodeAgentConfig } from './claude-code/index.js';
 import type { CodexAgentConfig } from './codex/index.js';
+import type { CodexCliAgentConfig } from './codex-cli/index.js';
 import type { HermesAgentConfig } from './hermes/index.js';
 import type { OpenClawAgentConfig } from './openclaw/index.js';
+import type { PiAgentConfig } from './pi/index.js';
 
 // ---------------------------------------------------------------------------
 // Memory injectors
@@ -141,6 +143,32 @@ export const injectMemory = {
       prompt: `Context from prior interactions:\n${memory}\n\nCurrent request: ${cfg.prompt}`,
     };
   },
+
+  /**
+   * Prepend memory to codex CLI's positional prompt. Same pattern as
+   * claudeCode: no system-prompt flag, memory becomes part of the user
+   * prompt.
+   */
+  codexCli(cfg: CodexCliAgentConfig, memory: string): CodexCliAgentConfig {
+    if (!memory) return cfg;
+    return {
+      ...cfg,
+      prompt: `Context from prior interactions:\n${memory}\n\nCurrent request: ${cfg.prompt}`,
+    };
+  },
+
+  /**
+   * Prepend memory to pi's prompt. Pi's `prompt(text)` takes a string;
+   * pi handles its own system prompt internally via prompt templates
+   * and resource loader.
+   */
+  pi(cfg: PiAgentConfig, memory: string): PiAgentConfig {
+    if (!memory) return cfg;
+    return {
+      ...cfg,
+      prompt: `Context from prior interactions:\n${memory}\n\nCurrent request: ${cfg.prompt}`,
+    };
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -187,5 +215,24 @@ export const injectResume = {
   openClaw(cfg: OpenClawAgentConfig, token: ResumeToken): OpenClawAgentConfig {
     if (token.kind !== 'opaque') return cfg;
     return { ...cfg, resumeSessionId: token.data };
+  },
+
+  /** Codex CLI uses thread-id-based resumption. */
+  codexCli(cfg: CodexCliAgentConfig, token: ResumeToken): CodexCliAgentConfig {
+    if (token.kind !== 'opaque') return cfg;
+    return { ...cfg, resumeThreadId: token.data };
+  },
+
+  /**
+   * Pi resumption uses on-disk session files. Accepts either
+   * `session-file` (preferred — the actual session path) or `opaque`
+   * (treated as a session id for SessionManager lookup; falls through
+   * unchanged so the caller can set continueSession themselves).
+   */
+  pi(cfg: PiAgentConfig, token: ResumeToken): PiAgentConfig {
+    if (token.kind === 'session-file') {
+      return { ...cfg, resumeSessionFile: token.path };
+    }
+    return cfg;
   },
 };

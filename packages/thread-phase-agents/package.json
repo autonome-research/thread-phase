@@ -35,6 +35,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",
+    "@mariozechner/pi-coding-agent": "^0.73.1",
     "openai": "^6.38.0"
   }
 }
