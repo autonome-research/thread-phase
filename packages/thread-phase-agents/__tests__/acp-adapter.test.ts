@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 import { runAdapterConformance } from 'thread-phase/agents/test-utils';
-import type { AgentEvent } from 'thread-phase/agents';
+import { isSteerable, type AgentEvent } from 'thread-phase/agents';
 
 import { acpAgent, createAcpAdapter, type AcpAgentConfig } from '../src/acp/index.js';
 
@@ -109,6 +109,72 @@ describe('acpAgent — integration against stub agent', () => {
     for (const event of events) {
       expect(event.source).toBe('hermes-test');
     }
+  }, 10_000);
+});
+
+describe('acpAgent — SteerableAgentRun: followUp + steer', () => {
+  it('isSteerable narrows on every acp run', async () => {
+    const run = acpAgent.adapter(buildConfig('hello'));
+    expect(isSteerable(run)).toBe(true);
+    await run.result;
+  }, 10_000);
+
+  it('queued followUp before run starts triggers a second session/prompt', async () => {
+    const run = acpAgent.adapter(buildConfig('hello'));
+    // Queue BEFORE awaiting result so the loop sees it.
+    if (isSteerable(run)) {
+      await run.followUp('second turn');
+    }
+    const [events, result] = await Promise.all([collect(run), run.result]);
+
+    // Two prompt cycles -> two turn_end events.
+    const turnEnds = events.filter((e) => e.type === 'turn_end');
+    expect(turnEnds).toHaveLength(2);
+
+    // The chassis emits agent_message_chunks per prompt; with two prompts
+    // the text doubles. Stub returns "Hello world." per turn.
+    expect(result.text).toBe('Hello world.Hello world.');
+    expect(result.finishReason).toBe('stop');
+  }, 10_000);
+
+  it('multiple queued followUps process in order', async () => {
+    const run = acpAgent.adapter(buildConfig('hello'));
+    if (isSteerable(run)) {
+      await run.followUp('two');
+      await run.followUp('three');
+    }
+    const events = await collect(run);
+    const result = await run.result;
+    const turnEnds = events.filter((e) => e.type === 'turn_end');
+    // Initial + 2 follow-ups = 3 turns.
+    expect(turnEnds).toHaveLength(3);
+    expect(result.text).toBe('Hello world.Hello world.Hello world.');
+  }, 10_000);
+
+  it('followUp called after agent_end rejects with a clear error', async () => {
+    const run = acpAgent.adapter(buildConfig('hello'));
+    await run.result; // wait for agent_end
+    expect(isSteerable(run)).toBe(true);
+    if (isSteerable(run)) {
+      await expect(run.followUp('too late')).rejects.toThrow(/after agent_end/);
+    }
+  }, 10_000);
+
+  it('steer rejects with a clear capability error', async () => {
+    const run = acpAgent.adapter(buildConfig('hello'));
+    expect(isSteerable(run)).toBe(true);
+    if (isSteerable(run)) {
+      await expect(run.steer('mid-stream')).rejects.toThrow(/mid-stream steering/);
+    }
+    await run.result;
+  }, 10_000);
+
+  it('single-prompt run still emits exactly one turn_end (canonical shape)', async () => {
+    const run = acpAgent.adapter(buildConfig('hello'));
+    const events = await collect(run);
+    await run.result;
+    const turnEnds = events.filter((e) => e.type === 'turn_end');
+    expect(turnEnds).toHaveLength(1);
   }, 10_000);
 });
 

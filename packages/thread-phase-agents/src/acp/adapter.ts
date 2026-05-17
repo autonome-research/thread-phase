@@ -157,6 +157,12 @@ function makeAcpRun(source: string, config: AcpAgentConfig, options: AgentRunOpt
 
   const turns = new TurnAccumulator(pushEvent, source, traceId);
 
+  // Follow-up queue: messages to send as additional session/prompt requests
+  // after the current prompt completes. Synchronously drained between turns
+  // (the loop checks for new messages each iteration; no callback timing).
+  const followUpQueue: string[] = [];
+  let hasEnded = false;
+
   // Lazy start.
   let started = false;
   let runPromise: Promise<AgentRunResult> | null = null;
@@ -208,6 +214,7 @@ function makeAcpRun(source: string, config: AcpAgentConfig, options: AgentRunOpt
       });
       pushEvent({ type: 'agent_end', source, traceId, reason, resumeToken });
       closeStream();
+      hasEnded = true;
       await cleanup();
       return {
         text: collectedText.join(''),
@@ -371,36 +378,61 @@ function makeAcpRun(source: string, config: AcpAgentConfig, options: AgentRunOpt
         compositeSignal.addEventListener('abort', sendCancel, { once: true });
       }
 
-      // 6. Send prompt.
-      const promptBlocks: ContentBlock[] = Array.isArray(config.prompt)
-        ? config.prompt
-        : [{ type: 'text', text: config.prompt }];
-      const promptReq: PromptRequest = {
-        sessionId: activeSessionId,
-        prompt: promptBlocks,
-      };
+      // 6. Prompt loop. The first iteration uses config.prompt; subsequent
+      // iterations drain followUpQueue (populated by SteerableAgentRun.followUp).
+      // Loop exits when the queue is empty after a response, or on abort/error.
+      let firstIteration = true;
+      let lastFinishReason: AgentRunResult['finishReason'] = 'unknown';
 
-      let promptRes: PromptResponse;
-      try {
-        promptRes = await transport.request<PromptResponse>(
-          ACP_METHODS.prompt,
-          promptReq,
-        );
-      } catch (err) {
-        const aborted = compositeSignal.aborted || cancelSent;
-        return await fail(err, aborted ? 'aborted' : 'error');
+      while (true) {
+        let currentPrompt: string | ContentBlock[] | undefined;
+        if (firstIteration) {
+          currentPrompt = config.prompt;
+          firstIteration = false;
+        } else {
+          currentPrompt = followUpQueue.shift();
+        }
+        if (currentPrompt === undefined) break;
+
+        const promptBlocks: ContentBlock[] = Array.isArray(currentPrompt)
+          ? currentPrompt
+          : [{ type: 'text', text: currentPrompt }];
+        const promptReq: PromptRequest = {
+          sessionId: activeSessionId,
+          prompt: promptBlocks,
+        };
+
+        let promptRes: PromptResponse;
+        try {
+          promptRes = await transport.request<PromptResponse>(
+            ACP_METHODS.prompt,
+            promptReq,
+          );
+        } catch (err) {
+          const aborted = compositeSignal.aborted || cancelSent;
+          return await fail(err, aborted ? 'aborted' : 'error');
+        }
+
+        // Emit canonical turn_end for this prompt cycle. Natural ordering:
+        // text + tool_call events already arrived during the response, so
+        // endTurn() emits a turn_end with the accumulated counts immediately.
+        turns.endTurn();
+
+        lastFinishReason = mapStopReason(promptRes.stopReason, compositeSignal.aborted);
+        if (lastFinishReason === 'aborted') break;
       }
 
-      // 7. Synthesize result.
+      // 7. Synthesize result. resumeToken at this point points at the
+      // (potentially updated) session id.
       turns.close();
-      const finishReason = mapStopReason(promptRes.stopReason, compositeSignal.aborted);
-      pushEvent({ type: 'agent_end', source, traceId, reason: finishReason, resumeToken });
+      pushEvent({ type: 'agent_end', source, traceId, reason: lastFinishReason, resumeToken });
       closeStream();
+      hasEnded = true;
       await cleanup();
 
       return {
         text: collectedText.join(''),
-        finishReason,
+        finishReason: lastFinishReason,
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
         executedToolCalls: [],
         resumeToken,
@@ -481,7 +513,33 @@ function makeAcpRun(source: string, config: AcpAgentConfig, options: AgentRunOpt
       controller.abort(reason);
       if (!started) startIfNeeded();
     },
-  };
+    /**
+     * Queue an additional prompt to send on the same ACP session after
+     * the current prompt response completes. Calls before the run starts
+     * are honored — the loop drains the queue before exiting. After
+     * agent_end the call rejects.
+     */
+    followUp(message: string): Promise<void> {
+      if (hasEnded) {
+        return Promise.reject(new Error('cannot followUp after agent_end'));
+      }
+      followUpQueue.push(message);
+      return Promise.resolve();
+    },
+    /**
+     * Mid-stream steering. ACP's `session/prompt` is a discrete request —
+     * the protocol doesn't expose mid-generation injection. Callers that
+     * need to add a message after the current response should use
+     * `followUp()` instead.
+     */
+    steer(_message: string): Promise<void> {
+      return Promise.reject(
+        new Error(
+          `${source} does not support mid-stream steering; use followUp() to send a message after the current prompt response completes`,
+        ),
+      );
+    },
+  } as AgentRun; // SteerableAgentRun at runtime; narrowed via isSteerable() at the call site.
 }
 
 // ---------------------------------------------------------------------------
