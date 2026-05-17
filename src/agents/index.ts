@@ -11,6 +11,7 @@
 // Protocol types.
 export {
   defineAgentAdapter,
+  isSteerable,
   type AgentAdapter,
   type AgentAdapterMeta,
   type AgentCapabilities,
