@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- **`injectMemory`** / **`injectResume`** — pre-built `inject` callbacks for `withMemory` / `withThread` covering every adapter in the package (inference, anthropic, codex, claudeCode, acp, hermes, openClaw). Each knows where its adapter expects memory or a resume token to live. Empty memory passes through unchanged; non-opaque tokens on opaque-only adapters pass through. Removes the boilerplate of writing custom inject callbacks at every call site.
+- **Thread bridge** (`threadToTranscript`, `threadToAcpPrompt`, `threadToAnthropicMessages`, `threadToClaudeCodePrompt`, `threadToCodexInput`) — converts a `Thread` from one adapter into the input shape expected by the next. Lossy by design — cross-adapter handoff renders the canonical event log as a source-tagged text transcript. For full fidelity, use same-adapter resumption via `injectResume` instead.
+- 26 new tests, 121 sibling tests total.
+
 ### Changed
 
 - **ACP chassis is now steerable.** Each ACP session can take multiple `session/prompt` requests; the chassis now drains a follow-up queue between turns so callers can stack prompts on the same session without re-spawning the agent. Callers narrow with `isSteerable(run)` (from `thread-phase/agents`) and call `run.followUp('also do X')` — the chassis sends it as another `session/prompt` after the current response completes. `run.events` streams events from every turn in order; `run.result` resolves with the LAST turn's `finishReason`. `steer()` is wired but rejects with a clear capability error — ACP's `session/prompt` is discrete, no mid-generation injection.
