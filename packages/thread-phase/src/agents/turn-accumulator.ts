@@ -30,7 +30,8 @@ import type { AgentEvent } from './protocol.js';
 /** @internal */
 export class TurnAccumulator {
   private turnText = '';
-  private pending: { text: string; toolCallCount: number; usage?: UsageInfo } | null = null;
+  private currentTurnToolCalls = 0;
+  private pending: { text: string; openingToolCallCount: number; usage?: UsageInfo } | null = null;
 
   constructor(
     private readonly emit: (event: AgentEvent) => void,
@@ -57,11 +58,12 @@ export class TurnAccumulator {
   }
 
   /**
-   * Emit a tool call. Increments the pending turn's `toolCallCount` if a
-   * `markTurnEnd()` has been seen since the last flush.
+   * Emit a tool call. Counts toward the current turn regardless of which
+   * turn-end style the adapter uses — deferred (`markTurnEnd`) or
+   * immediate (`endTurn`).
    */
   toolCall(id: string, name: string, input: unknown): void {
-    if (this.pending) this.pending.toolCallCount += 1;
+    this.currentTurnToolCalls += 1;
     this.emit({ type: 'tool_call', source: this.source, traceId: this.traceId, id, name, input });
   }
 
@@ -88,16 +90,46 @@ export class TurnAccumulator {
   }
 
   /**
-   * Mark the end of a turn. Captures the accumulated assistant text and
-   * arms a pending `turn_end`. The event is NOT emitted yet — tool calls
-   * that arrive between now and the next text delta (or `close()`)
-   * accumulate into the pending entry's `toolCallCount`.
+   * Mark the end of a turn — deferred-emission variant. Use when the
+   * underlying runtime emits its end-of-turn marker BEFORE the tool calls
+   * that belong to that turn (the in-tree OpenAI runner is one such case).
+   * The `turn_end` event is NOT emitted yet; it stays pending until either
+   * the next text delta (next turn starts) or `close()` (run ends). Tool
+   * calls that arrive between now and the flush count toward this turn.
+   *
+   * For runtimes with natural turn ordering (tool calls inside the turn,
+   * then turn boundary), use `endTurn()` instead.
    *
    * Optional `usage` is attached to the eventual `turn_end` event.
    */
   markTurnEnd(usage?: UsageInfo): void {
-    this.pending = { text: this.turnText, toolCallCount: 0, usage };
+    this.pending = { text: this.turnText, openingToolCallCount: this.currentTurnToolCalls, usage };
     this.turnText = '';
+  }
+
+  /**
+   * Emit a `turn_end` event NOW with the current turn's text and tool-call
+   * count, then reset the counters. Use when the underlying runtime
+   * already had all of this turn's tool calls before the boundary signal
+   * (the ACP `session/prompt` response is one such case — agent_message_chunks
+   * and tool_calls precede the stopReason).
+   *
+   * If a `markTurnEnd()` deferred turn is still pending, it's flushed first.
+   *
+   * Optional `usage` is attached to the emitted `turn_end` event.
+   */
+  endTurn(usage?: UsageInfo): void {
+    if (this.pending) this.flush();
+    this.emit({
+      type: 'turn_end',
+      source: this.source,
+      traceId: this.traceId,
+      assistantText: this.turnText,
+      usage,
+      toolCallCount: this.currentTurnToolCalls,
+    });
+    this.turnText = '';
+    this.currentTurnToolCalls = 0;
   }
 
   /**
@@ -110,14 +142,16 @@ export class TurnAccumulator {
 
   private flush(): void {
     if (!this.pending) return;
+    const turnToolCalls = this.currentTurnToolCalls - this.pending.openingToolCallCount;
     this.emit({
       type: 'turn_end',
       source: this.source,
       traceId: this.traceId,
       assistantText: this.pending.text,
       usage: this.pending.usage,
-      toolCallCount: this.pending.toolCallCount,
+      toolCallCount: turnToolCalls,
     });
     this.pending = null;
+    this.currentTurnToolCalls = 0;
   }
 }
