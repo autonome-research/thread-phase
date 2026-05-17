@@ -4,6 +4,13 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- **ACP chassis is now steerable.** Each ACP session can take multiple `session/prompt` requests; the chassis now drains a follow-up queue between turns so callers can stack prompts on the same session without re-spawning the agent. Callers narrow with `isSteerable(run)` (from `thread-phase/agents`) and call `run.followUp('also do X')` — the chassis sends it as another `session/prompt` after the current response completes. `run.events` streams events from every turn in order; `run.result` resolves with the LAST turn's `finishReason`. `steer()` is wired but rejects with a clear capability error — ACP's `session/prompt` is discrete, no mid-generation injection.
+- Each prompt cycle now emits a canonical `turn_end` event (was previously omitted). Single-turn runs see one `turn_end` + `agent_end`; multi-turn runs see one `turn_end` per prompt cycle. `turnAccumulator.endTurn()` (added in upstream `thread-phase`) handles the accumulation.
+- `hermesAgent` and `openClawAgent` inherit `followUp` semantics through the chassis automatically — no per-wrapper code change.
+- 95 tests pass (was 89; +6 for `followUp` / `steer` / `isSteerable` and multi-turn `turn_end` emission).
+
 ### Added
 
 Initial adapter set on top of [`thread-phase`](https://github.com/Code4me2/thread-phase) v1.3.0's `AgentAdapter` protocol:
