@@ -4,6 +4,20 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+Closes three holes from v1.3.0:
+
+### Added
+
+- **`withMemory(meta, { scope, inject, query? })`** decorator (`thread-phase/agents`) — wraps any `AgentAdapterMeta` so each invocation auto-recalls memory via `AgentRunOptions.memoryProvider`, splices the recalled string into the inner adapter config (caller-supplied `inject` callback because each adapter shapes its prompt field differently), captures the event stream, and calls `provider.remember(captured)` before `result` resolves. Memory backend failures surface as `native { kind: 'memory:recall_failed' | 'memory:remember_failed' }` events; the run never fails because of memory. No-op when `memoryProvider` is absent in options — decorate once, decide per-call whether memory applies.
+- **`withThread(meta, thread, { applyResume? })`** decorator (`thread-phase/agents`) — wraps any adapter so events mirror into `thread.events`, resume tokens from `agent_start`/`agent_end` get written back to `thread.resumeTokens[meta.id]`, and (when `applyResume` is provided) the thread's existing per-adapter resume token gets spliced into the next run's config. Works without `applyResume` for adapters with `resumption: 'none'` — still mirrors events.
+- **`isSteerable(run)`** type guard for safe narrowing of `AgentRun` → `SteerableAgentRun` at the call site. Adapters whose underlying runtime supports `followUp()` (ACP-based: hermes, openclaw) now return the steerable subtype at runtime; consumers narrow via `if (isSteerable(run)) await run.followUp(...)`.
+- **`TurnAccumulator.endTurn(usage?)`** for adapters whose underlying runtime has natural turn ordering (tool calls THEN turn boundary, like ACP's `session/prompt` response). Emits a `turn_end` event NOW with the current turn's text + tool-call count, then resets. Complements `markTurnEnd()` (which defers for the OpenAI runner's boundary-before-tool-calls quirk).
+
+### Notes
+
+- All additive. Existing exports, behavior, and tests unchanged. 229 tests pass (was 211; +18 for the two new decorators).
+- Companion change in `thread-phase-agents`: the ACP chassis adopts `followUp()` via the new `endTurn()` helper. See that package's CHANGELOG.
+
 ## [1.3.0] — 2026-05-16
 
 The headline change: thread-phase now composes deterministic phases over **heterogeneous agents**. `runAgentWithTools` remains the canonical primitive for raw OpenAI-compatible inference; the new `AgentAdapter` protocol is the surface for delegating to ready agents (Claude Code, Hermes, Codex, OpenClaw, Anthropic SDK). Sibling adapter implementations live in the new [`thread-phase-agents`](https://github.com/Code4me2/thread-phase-agents) package; the protocol itself ships here.
