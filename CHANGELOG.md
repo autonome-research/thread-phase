@@ -4,6 +4,10 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-05-16
+
+Single additive helper for wiring adapter events into the JobStore log.
+
 ### Added
 
 - **`pipeAgentEventsToJobStore(bus, store, jobId, options?)`** — ships the canonical bridge that wires an `AgentEventBus` to a `JobStore`. Adapter events are wrapped as `PipelineEvent` of type `'data'` with key `agent:<source>:<type>` so consumers reading the log can filter by source. Options: `dropTypes` (skip high-volume types like `'text'`) and `key` (string or function override). Returns an unsubscribe callback. Store append failures are swallowed so a bad disk doesn't poison the event stream. 6 new tests, 235 total.
@@ -157,7 +161,8 @@ Initial scaffold. Phase framework, agent runner, token-budget machinery, tool re
 - 49 tests across 7 files
 - Smoke test suite caught two real bugs (empty content from `tools: null` serialization; empty content from no-tools nudge)
 
-[Unreleased]: https://github.com/Code4me2/thread-phase/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/Code4me2/thread-phase/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/Code4me2/thread-phase/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/Code4me2/thread-phase/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/Code4me2/thread-phase/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/Code4me2/thread-phase/compare/v1.2.0...v1.2.1
