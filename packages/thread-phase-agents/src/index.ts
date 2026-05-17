@@ -22,3 +22,16 @@ export { openClawAgent, type OpenClawAgentConfig } from './openclaw/index.js';
 export { anthropicAgent, type AnthropicAgentConfig } from './anthropic/index.js';
 export { codexAgent, type CodexAgentConfig } from './codex/index.js';
 export { claudeCodeAgent, type ClaudeCodeAgentConfig } from './claude-code/index.js';
+
+// Pre-built inject callbacks for withMemory / withThread.
+export { injectMemory, injectResume } from './injectors.js';
+
+// Thread → adapter-input rendering helpers for cross-adapter handoff.
+export {
+  threadToTranscript,
+  threadToAcpPrompt,
+  threadToAnthropicMessages,
+  threadToClaudeCodePrompt,
+  threadToCodexInput,
+  threadToMessages,
+} from './thread-bridge.js';
