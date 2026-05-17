@@ -4,6 +4,10 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+### Added
+
+- **`pipeAgentEventsToJobStore(bus, store, jobId, options?)`** — ships the canonical bridge that wires an `AgentEventBus` to a `JobStore`. Adapter events are wrapped as `PipelineEvent` of type `'data'` with key `agent:<source>:<type>` so consumers reading the log can filter by source. Options: `dropTypes` (skip high-volume types like `'text'`) and `key` (string or function override). Returns an unsubscribe callback. Store append failures are swallowed so a bad disk doesn't poison the event stream. 6 new tests, 235 total.
+
 ## [1.4.0] — 2026-05-16
 
 Closes three holes from v1.3.0:
