@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "thread-phase": {
+    "extensions": ["./index.ts"]
+  }
+}

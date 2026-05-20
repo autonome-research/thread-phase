@@ -73,7 +73,7 @@ export interface RunTriggerHandle {
 export function runTrigger<TInput, TCtx extends BasePipelineContext>(
   trigger: Trigger<TInput>,
   pipelineFactory: (input: TInput, event: TriggerEvent<TInput>) => {
-    phases: Phase<TCtx>[];
+    phases: ReadonlyArray<Phase<TCtx>>;
     ctx: TCtx;
   },
   options: RunTriggerOptions<TInput, TCtx> = {},

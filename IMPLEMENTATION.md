@@ -103,29 +103,29 @@ Work happens in a scratch directory; the existing repos stay untouched until the
 
 New package: `packages/thread-phase-cli/` → `@autonome-research/thread-phase-cli`.
 
-- [ ] `ThreadPhaseAPI` registration surface (exported from core):
+- [x] `ThreadPhaseAPI` registration surface (exported from `@autonome-research/thread-phase-cli`):
   ```ts
   interface ThreadPhaseAPI {
-    registerTrigger(name: string, trigger: Trigger): void;
-    registerPattern(name: string, factory: PatternFactory): void;
-    registerAdapter(name: string, adapter: AgentAdapter): void;
-    registerPipeline(name: string, pipeline: PipelineSpec): void;
+    registerTrigger<TInput>(name: string, trigger: Trigger<TInput>): void;
+    registerAdapter<TConfig, TResult>(name: string, adapter: AgentAdapterMeta<TConfig, TResult>): void;
+    registerPipeline<TCtx, TInput>(name: string, spec: PipelineSpec<TCtx, TInput>): void;
   }
   ```
-- [ ] Loader scans `${cwd}/.thread-phase/{triggers,patterns,adapters,pipelines}/`:
-  - [ ] Tier 1: loose `*.ts`/`*.js`
-  - [ ] Tier 2: folder with `index.ts`/`index.js`
-  - [ ] Tier 3: folder with `package.json` carrying `"thread-phase": { "extensions": [...] }`
-  - [ ] Per-extension errors don't fail the whole load (log + continue)
-- [ ] `bin/thread-phase` with subcommands:
-  - [ ] `run <name>` — load → invoke pipeline → exit
-  - [ ] `serve` — load → instantiate all triggers → dispatch as they fire (bare, no liveness endpoint)
-  - [ ] `list` — print registered extensions, grouped by kind
-- [ ] Loader uses `tsx` or `jiti` for runtime TypeScript (decide during impl; jiti is lighter, tsx matches existing examples)
-- [ ] Tests: fixture project under `packages/thread-phase-cli/test/fixtures/` with a sample `.thread-phase/` tree
-- [ ] Corpus: populate `examples/pipelines/{minimal,bounded-fanout,heterogeneous-chain,cron-digest}.ts`
-- [ ] Full `EXTENDING.md`: "to add an X, do Y" map covering every extension surface
-- [ ] Tag `v2.3.0`
+  Patterns dropped as a registered surface — they're plain functions the user imports, no registration needed. Three surfaces (triggers, adapters, pipelines) only.
+- [x] Loader scans `${cwd}/.thread-phase/{triggers,adapters,pipelines}/`:
+  - [x] Tier 1: loose `*.ts`/`*.js`
+  - [x] Tier 2: folder with `index.ts`/`index.js`
+  - [x] Tier 3: folder with `package.json` carrying `"thread-phase": { "extensions": [...] }`
+  - [x] Per-extension errors don't fail the whole load (log + continue); also exposed via `loadExtensions(...).errors`
+- [x] `bin/thread-phase` with subcommands:
+  - [x] `run <name>` — load → invoke pipeline → exit
+  - [x] `serve` — load → instantiate all triggered pipelines → dispatch as they fire (bare, no liveness endpoint); SIGINT/SIGTERM handling
+  - [x] `list` — print registered triggers, adapters, pipelines grouped by kind
+- [x] Loader uses `tsx`'s ESM `register()` hook (installed lazily on first `.ts` extension) — produces clean dynamic imports and avoids transitive resolution issues
+- [x] Tests: fixture projects under `packages/thread-phase-cli/__tests__/fixtures/{basic,folders,manifest,broken}/`; 15 tests covering all tiers + failure isolation + CLI subcommands
+- [x] Corpus: `examples/.thread-phase/{triggers,adapters,pipelines}/` with `morning-timer`, `claude-with-flags`, `minimal`, `morning-digest`, `heterogeneous-chain` — verified end-to-end via the bin
+- [x] Full `EXTENDING.md` rewritten — TL;DR, contract, three tiers, per-surface templates, CLI commands, kernel boundary, programmatic embedding
+- [x] Tag `v2.3.0`
 
 ---
 

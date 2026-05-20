@@ -1,7 +1,7 @@
 {
-  "name": "@autonome-research/thread-phase-agents",
+  "name": "@autonome-research/thread-phase-cli",
   "version": "2.3.0",
-  "description": "Agent adapters for thread-phase — wraps hermes, openclaw, anthropic, codex, claude-code, pi behind a uniform AgentAdapter protocol.",
+  "description": "CLI and auto-loader for thread-phase — discovers extensions under .thread-phase/ and runs registered pipelines.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -9,13 +9,16 @@
   "exports": {
     ".": "./dist/index.js"
   },
+  "bin": {
+    "thread-phase": "./dist/bin.js"
+  },
   "files": [
     "dist",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').chmodSync('./dist/bin.js', 0o755)\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
@@ -24,14 +27,11 @@
     "@autonome-research/thread-phase": "^2.3.0"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.96.0",
-    "@mariozechner/pi-coding-agent": "^0.73.1",
-    "openai": "^6.38.0"
+    "tsx": "^4.19.0"
   },
   "devDependencies": {
     "@autonome-research/thread-phase": "*",
     "@types/node": "^22.0.0",
-    "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   },
@@ -41,6 +41,6 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Code4me2/thread-phase.git",
-    "directory": "packages/thread-phase-agents"
+    "directory": "packages/thread-phase-cli"
   }
 }

@@ -2,62 +2,209 @@
 
 thread-phase is designed to be modified — by you, or by coding agents working in your project — without forking the core. This document is the map of extension surfaces, the conventions for each, and where to find canonical examples.
 
-> **Status:** the auto-loader and `.thread-phase/<kind>/` discovery conventions described below land in `2.3.0` (CLI + auto-loader). Until then, extensions are imported directly from your application code. The shape of each extension (the contract you fulfil) is stable and works either way.
+## TL;DR
+
+```
+your-project/
+  .thread-phase/
+    triggers/<name>.ts       register a Trigger        api.registerTrigger
+    adapters/<name>.ts       register an AgentAdapter  api.registerAdapter
+    pipelines/<name>.ts      register a Pipeline       api.registerPipeline
+```
+
+Each file exports a default function `(api: ThreadPhaseAPI) => void` that registers things. Then `npx thread-phase {run <name>|serve|list}` does the rest.
 
 ## The extension surfaces
 
-| Surface | What you write | Where it goes (2.3.0+) | What it does |
+| Surface | What you register | Discovery dir | Why |
 |---|---|---|---|
-| **Triggers** | An object implementing `Trigger<TInput>` | `.thread-phase/triggers/<name>.ts` | A signal source (timer, webhook adapter, queue consumer, file watcher) that yields events to dispatch pipelines. |
-| **Patterns** | A function returning `Phase<TCtx>` or `(phase) => Phase<TCtx>` | `.thread-phase/patterns/<name>.ts` | Reusable control-flow shapes (`whileCondition`, `match`, `withRetry`, custom fanouts, ...). |
-| **Adapters** | An object implementing `AgentAdapter` | `.thread-phase/adapters/<name>.ts` | A wrapping of an external agent (a CLI, an SDK, an HTTP API, a custom subprocess) behind the uniform AgentAdapter protocol. |
-| **Pipelines** | A `PipelineSpec` ( `{phases, ctx, trigger?}` ) | `.thread-phase/pipelines/<name>.ts` | A named pipeline that `thread-phase run <name>` or `serve` can invoke. |
+| **Triggers** | A `Trigger<TInput>` instance | `.thread-phase/triggers/` | Entry points: timers, webhook adapters, queue consumers, file watchers. |
+| **Adapters** | An `AgentAdapterMeta` | `.thread-phase/adapters/` | Custom-flavored AgentAdapters (e.g. claude-code with project-specific flags). |
+| **Pipelines** | A `PipelineSpec` | `.thread-phase/pipelines/` | Named pipelines runnable via `thread-phase run <name>` or auto-triggered in `serve`. |
+
+**Patterns are not auto-loaded.** They're reusable factory functions — write them anywhere in your codebase and import them into your pipeline files. The CLI doesn't gate access to them.
 
 ## The contract
 
-Every extension is a TypeScript file whose default export is a registration function:
+Every extension is a TypeScript (or JavaScript) file whose default export is a function:
 
 ```ts
-// .thread-phase/triggers/cron-15m.ts
-import { TimerTrigger, type ThreadPhaseAPI } from '@autonome-research/thread-phase';
+import type { ThreadPhaseAPI } from '@autonome-research/thread-phase-cli';
+
+export default (api: ThreadPhaseAPI) => {
+  // call api.registerTrigger / registerAdapter / registerPipeline
+};
+```
+
+`ThreadPhaseAPI` has three methods:
+
+```ts
+interface ThreadPhaseAPI {
+  registerTrigger<TInput>(name: string, trigger: Trigger<TInput>): void;
+  registerAdapter<TConfig, TResult>(name: string, adapter: AgentAdapterMeta<TConfig, TResult>): void;
+  registerPipeline<TCtx, TInput>(name: string, spec: PipelineSpec<TCtx, TInput>): void;
+}
+```
+
+Name collisions throw with the path of the prior registration. Use the file path as the de facto namespace.
+
+## Three discovery tiers
+
+The loader scans each `.thread-phase/<kind>/` directory and supports three forms, in order of ceremony:
+
+### Tier 1 — loose `.ts` or `.js` file
+
+The simplest form. Most extensions live here.
+
+```
+.thread-phase/triggers/cron-15m.ts
+```
+
+```ts
+import { TimerTrigger } from '@autonome-research/thread-phase/triggers';
+import type { ThreadPhaseAPI } from '@autonome-research/thread-phase-cli';
 
 export default (api: ThreadPhaseAPI) => {
   api.registerTrigger('cron-15m', new TimerTrigger({ intervalMs: 15 * 60_000 }));
 };
 ```
 
-Three discovery tiers (in order of complexity):
+### Tier 2 — folder with `index.ts`
 
-1. **Loose file** — `.thread-phase/triggers/cron-15m.ts` with a default export.
-2. **Folder with `index.ts`** — `.thread-phase/triggers/my-webhook/index.ts` for multi-file extensions.
-3. **Folder with `package.json` carrying a `thread-phase` field** — for extensions that need their own dependencies:
-   ```json
-   {
-     "name": "my-webhook",
-     "thread-phase": { "extensions": ["./index.ts"] },
-     "dependencies": { "fastify": "^4.0.0" }
-   }
-   ```
-
-Per-extension errors don't fail the whole load. The loader logs the failing extension's path and continues.
-
-## Where to find examples
-
-The `examples/` tree at the repo root is the canonical corpus. When adding a new extension, find the closest match and copy the shape.
+When the extension needs sibling files (helpers, fixtures, types) but no extra npm dependencies.
 
 ```
-examples/
-  triggers/             ← timer, http-adapt, queue-adapt, file-watch
-  patterns/             ← while-condition, match, with-retry, custom fanouts
-  adapters/             ← custom-anthropic-flags, claude-code-with-mcp
-  pipelines/            ← minimal, bounded-fanout, heterogeneous-chain, cron-digest
+.thread-phase/triggers/my-webhook/
+  index.ts
+  parsers.ts
+  schemas.ts
 ```
+
+`index.ts` has the default-export contract; siblings can be imported with relative paths.
+
+### Tier 3 — folder with `package.json` manifest
+
+When the extension needs its own npm dependencies (e.g. `fastify`, `redis`, `chokidar`). The manifest carries a `thread-phase.extensions` array pointing at one or more entry files:
+
+```
+.thread-phase/triggers/redis-stream/
+  package.json
+  index.ts
+```
+
+```json
+{
+  "private": true,
+  "dependencies": { "ioredis": "^5.4.0" },
+  "thread-phase": { "extensions": ["./index.ts"] }
+}
+```
+
+Install with `npm install` from inside the extension folder, or set up a workspace.
+
+## Per-extension failure isolation
+
+If an extension throws during load (missing import, bad default export, runtime error inside the register function), the loader logs the path + error and **continues with the remaining extensions**. The CLI's other extensions still load, and `list` / `run` / `serve` still work for the ones that succeeded.
+
+## How each surface registers
+
+### Trigger
+
+```ts
+import { TimerTrigger } from '@autonome-research/thread-phase/triggers';
+import type { ThreadPhaseAPI } from '@autonome-research/thread-phase-cli';
+
+export default (api: ThreadPhaseAPI) => {
+  api.registerTrigger(
+    'morning-timer',
+    new TimerTrigger({
+      intervalMs: 6 * 60 * 60 * 1000,
+      fireImmediately: true,
+      name: 'every-6h',
+    }),
+  );
+};
+```
+
+For non-timer triggers, implement the `Trigger<TInput>` interface yourself. See `packages/thread-phase/examples/triggers/{http-adapt,queue-adapt}.ts` for HTTP and queue patterns.
+
+### Adapter
+
+```ts
+import { defineAgentAdapter } from '@autonome-research/thread-phase/agents';
+import { claudeCodeAgent } from '@autonome-research/thread-phase-agents';
+import type { ThreadPhaseAPI } from '@autonome-research/thread-phase-cli';
+
+export default (api: ThreadPhaseAPI) => {
+  const adapter = defineAgentAdapter({
+    id: 'claude-with-flags',
+    capabilities: claudeCodeAgent.capabilities,
+    adapter: (config, options) =>
+      claudeCodeAgent.adapter(
+        { ...config, extraArgs: ['--permission-mode', 'plan'] } as Parameters<typeof claudeCodeAgent.adapter>[0],
+        options,
+      ),
+  });
+  api.registerAdapter('claude-with-flags', adapter);
+};
+```
+
+The `id` is stamped on every emitted `AgentEvent.source` so heterogeneous events stay attributable.
+
+### Pipeline
+
+`PipelineSpec`:
+
+```ts
+interface PipelineSpec<TCtx, TInput = unknown> {
+  phases: Phase<TCtx>[] | ((input, event) => Phase<TCtx>[]);
+  ctx: TCtx | ((input, event) => TCtx);
+  trigger?: string;          // bind to a registered trigger
+  defaultInput?: TInput;     // used by `thread-phase run`
+  description?: string;
+}
+```
+
+One-shot (no trigger binding):
+
+```ts
+api.registerPipeline<MyCtx, void>('summarize-today', {
+  phases: [loadInbox, summarize, send],
+  ctx: { cache: new PipelineCache(), items: [] },
+  description: 'one-off: summarize the inbox',
+});
+```
+
+Triggered (runs on every fire of the named trigger):
+
+```ts
+api.registerPipeline<DigestCtx, void>('morning-digest', {
+  phases: [loadQueue, digestEach],
+  ctx: () => ({ cache: new PipelineCache(), items: [], digestedIds: [] }),
+  trigger: 'morning-timer',
+  description: 'fires every 6h',
+});
+```
+
+Factory form for `ctx` is required when each invocation needs fresh state — otherwise mutations leak between runs.
+
+## CLI commands
+
+```sh
+thread-phase list                    # show what's registered
+thread-phase run <pipeline-name>     # invoke a pipeline once and exit
+thread-phase serve                   # start all triggered pipelines (SIGINT/SIGTERM to stop)
+```
+
+`serve` is the cron-host case — one long-running process per project, every triggered pipeline active, backpressure from `runTrigger`'s blocking semaphore.
+
+`run` is the cron-line case — replaces `npx tsx pipelines/foo.ts` with `npx thread-phase run foo` once the pipeline is registered.
 
 ## The kernel boundary
 
-These pieces of the core are *not* extension surfaces. They're stable substrate — change them only by sending a PR.
+These pieces of the core are **not** extension surfaces. Change them only by sending a PR.
 
-- `Phase<TCtx>`, `runPipeline`, `BasePipelineContext`
+- `Phase<TCtx>`, `runPipeline`, `BasePipelineContext`, `PipelineEvent`
 - `AgentAdapter`, `AgentRun`, the canonical event vocabulary
 - `Thread`, `MemoryProvider` (interfaces only — implementations live in user code or sibling packages)
 - `JobStore`, `JobRunner`, `EventBus`
@@ -65,19 +212,26 @@ These pieces of the core are *not* extension surfaces. They're stable substrate 
 
 If your extension needs a new kernel primitive, open an issue first. The framework deliberately has a narrow stable surface.
 
-## Pre-monorepo extension recipes (interim)
+## Where to find examples
 
-Until the CLI ships in `2.3.0`, you can already build with every extension surface — you just wire them up explicitly in your application code:
+- **`examples/.thread-phase/`** — the canonical corpus for the auto-loader. Read these files first; copy and adapt.
+- **`packages/thread-phase/examples/`** — library-only examples (no CLI required).
+- **`packages/thread-phase/examples/patterns/`** — `whileCondition`, `match`, `withRetry`.
+- **`packages/thread-phase/examples/triggers/`** — HTTP and queue adapters as recipes (not in core).
+
+## Programmatic embedding
+
+The loader and registry can be used without the CLI bin:
 
 ```ts
-import { runPipeline, JobRunner, SqliteJobStore } from '@autonome-research/thread-phase';
-import { boundedFanoutOf, withMemory, withThread } from '@autonome-research/thread-phase';
-import { claudeCodeAgent } from '@autonome-research/thread-phase-agents';
+import { Registry, loadExtensions } from '@autonome-research/thread-phase-cli';
 
-// Your pipeline, today:
-const runner = new JobRunner(new SqliteJobStore('./jobs.db'));
-const jobId = runner.create('my-pipeline', input);
-await runner.run(jobId, [phaseA, phaseB], ctx);
+const registry = new Registry();
+await loadExtensions(registry, { cwd: process.cwd() });
+
+const spec = registry.getPipeline('morning-digest');
+const trigger = registry.getTrigger(spec?.trigger ?? '');
+// build runTrigger or runPipeline however you want
 ```
 
-The auto-loader replaces the boilerplate of "import each extension, wire it manually" with "drop files in a folder, the CLI finds them". The underlying primitives don't change.
+Useful when embedding thread-phase inside a larger runtime (a job queue worker, a Temporal activity, a custom server).

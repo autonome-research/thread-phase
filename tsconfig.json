@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/thread-phase" },
-    { "path": "packages/thread-phase-agents" }
+    { "path": "packages/thread-phase-agents" },
+    { "path": "packages/thread-phase-cli" }
   ]
 }

@@ -4,6 +4,18 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-05-20
+
+Locked-version release alongside the new `@autonome-research/thread-phase-cli` package. Core changes are minor.
+
+### Changed
+
+- `runTrigger`'s `pipelineFactory` return type widened from `Phase<TCtx>[]` to `ReadonlyArray<Phase<TCtx>>` so factories can return frozen / typed-readonly arrays without casting. Source-compatible for existing call sites.
+
+### Notes
+
+- The CLI + auto-loader live in `@autonome-research/thread-phase-cli@2.3.0`. Core still has no CLI of its own; programmatic use is unchanged.
+
 ## [2.2.0] — 2026-05-20
 
 Trigger interface — the entry-point abstraction for pipelines.
