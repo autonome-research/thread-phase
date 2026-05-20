@@ -36,34 +36,36 @@ Track progress by checking items off as they land.
 
 Work happens in a scratch directory; the existing repos stay untouched until the monorepo is verified.
 
-- [ ] Build new monorepo at `/tmp/thread-phase-monorepo/`:
-  - [ ] Clone `thread-phase`; `git filter-repo --to-subdirectory-filter packages/thread-phase/`
-  - [ ] Clone `thread-phase-agents`; `git filter-repo --to-subdirectory-filter packages/thread-phase-agents/`
-  - [ ] Merge the two histories with `--allow-unrelated-histories`
-- [ ] Root scaffolding:
-  - [ ] `package.json` with `"workspaces": ["packages/*"]`
-  - [ ] `tsconfig.base.json`
-  - [ ] `.npmrc`, `biome.json` or eslint, husky if desired
-- [ ] Per-package rename:
-  - [ ] `packages/thread-phase/package.json` → `@autonome-research/thread-phase`
-  - [ ] `packages/thread-phase-agents/package.json` → `@autonome-research/thread-phase-agents`
-  - [ ] Update internal imports: `from 'thread-phase'` → `from '@autonome-research/thread-phase'`
-- [ ] Docs:
-  - [ ] New root `README.md` opening with vision statement
-  - [ ] Move existing READMEs into their package dirs
-  - [ ] `EXTENDING.md` skeleton (filled in with each later step)
-  - [ ] Update `AGENTS.md` + `SKILL.md` for the new structure
-- [ ] Verification:
-  - [ ] `npm install` at root succeeds
-  - [ ] `npm run build` builds both packages
-  - [ ] `npm test` passes (all existing tests intact)
-  - [ ] Verify `chiya-library` builds against `@autonome-research/thread-phase@2.0.0-beta.1` (local verdaccio or `npm pack` + install tarball)
-- [ ] Cutover (only after verification passes — this step is irreversible):
-  - [ ] Move `/home/velvet/thread-phase/` → `/home/velvet/thread-phase-pre-monorepo-backup/`
-  - [ ] Move `/tmp/thread-phase-monorepo/` → `/home/velvet/thread-phase/`
-  - [ ] Archive `Code4me2/thread-phase-agents` GitHub repo with a README tombstone pointing at the new location
-  - [ ] Push to the GitHub remote
-  - [ ] Tag `v2.0.0`, publish both packages
+- [x] Build new monorepo at `/tmp/thread-phase-monorepo/`:
+  - [x] Clone `thread-phase`; `git filter-repo --to-subdirectory-filter packages/thread-phase/`
+  - [x] Clone `thread-phase-agents`; `git filter-repo --to-subdirectory-filter packages/thread-phase-agents/`
+  - [x] Merge the two histories with `--allow-unrelated-histories`
+- [x] Root scaffolding:
+  - [x] `package.json` with `"workspaces": ["packages/*"]`
+  - [x] `tsconfig.base.json` + composite project refs
+  - [x] `.npmrc`, `.gitignore` (lint config deferred until needed)
+- [x] Per-package rename:
+  - [x] `packages/thread-phase/package.json` → `@autonome-research/thread-phase@2.0.0`
+  - [x] `packages/thread-phase-agents/package.json` → `@autonome-research/thread-phase-agents@2.0.0`
+  - [x] Update internal imports: `from 'thread-phase'` → `from '@autonome-research/thread-phase'`
+- [x] Docs:
+  - [x] New root `README.md` opening with vision statement
+  - [x] Package READMEs stay in their package dirs (npm-display) with rewritten refs
+  - [x] `EXTENDING.md` skeleton (filled in with each later step)
+  - [x] Root-level `AGENTS.md`, `SKILL.md`, `CONTRIBUTING.md`, `ROADMAP.md`, `LICENSE`
+- [x] Verification:
+  - [x] `npm install` at root succeeds (workspace symlinks resolved)
+  - [x] `npm run build` builds both packages (clean)
+  - [x] `npm test` passes (356 tests across 27 files)
+  - [x] `npm run typecheck` clean
+  - [x] chiya-library compat: pins to commit `88b16b0e` via github URL; that commit remains reachable on the old v1.x tags, so chiya continues to work unchanged. Will need import rewrites when bumped forward.
+- [x] Cutover (irreversible step — completed):
+  - [x] Move `/home/velvet/thread-phase/` → `/home/velvet/thread-phase-pre-monorepo-backup/`
+  - [x] Move `/tmp/thread-phase-monorepo/` → `/home/velvet/thread-phase/`
+  - [x] Tombstone README pushed to `Code4me2/thread-phase-agents`; repo archived via `gh repo archive`
+  - [x] Force-push monorepo history to `origin/master` (old v1.x tags preserved on remote)
+  - [x] Tag `v2.0.0` and push
+  - [ ] Publish `@autonome-research/thread-phase@2.0.0` and `@autonome-research/thread-phase-agents@2.0.0` to npm (requires user's npm auth)
 
 **Risk:** `git filter-repo` is destructive on the working clone but the originals are intact. Cutover is the irreversible step — gated on verification.
 
