@@ -1,0 +1,55 @@
+{
+  "name": "thread-phase",
+  "version": "1.5.0",
+  "description": "TypeScript framework for the iterated tool-use loop against OpenAI-compatible inference (vLLM, Ollama, OpenAI, llama.cpp), composed into multi-phase pipelines with persistent event logs and concurrency-capped fanout.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./patterns": "./dist/patterns/index.js",
+    "./context": "./dist/context/index.js",
+    "./session": "./dist/session/index.js",
+    "./tools": "./dist/tools/index.js",
+    "./agents": "./dist/agents/index.js",
+    "./agents/test-utils": "./dist/agents/test-utils/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "smoke": "tsx examples/smoke.ts",
+    "prepare": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "ajv": "^8.17.0",
+    "better-sqlite3": "^11.5.0",
+    "openai": "^4.77.0"
+  },
+  "devDependencies": {
+    "@honcho-ai/sdk": "^2.1.1",
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "peerDependencies": {
+    "vitest": "^2.1.0"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
