@@ -1,6 +1,6 @@
 # thread-phase 2.x — Implementation Plan
 
-> Status: **v2.5.0 shipped** — sub-pipeline composition (#8). Declarative pipeline format (#6) deferred (developer audience already writes TS; list --verbose already gives introspection). v3.0.0 (async JobStore #7) remains.
+> Status: **v3.0.0 shipped** — packaging consolidation (CLI bundles core+agents), async JobStore (#7), pattern cruft cleanup (12 → 8), convenience helpers (`oneShot`, `schedule`, `hook`), `subPipelineOf` inference helper. Migration guide at MIGRATING.md.
 
 
 

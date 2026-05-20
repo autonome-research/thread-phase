@@ -3,8 +3,8 @@
  *
  * The framework treats pipelines as an ordered array, which covers linear
  * flow, conditional skip (`intentGate`), and self-iteration
- * (`synthesizeWithFollowup`). The one DAG shape it doesn't natively express
- * is "run two independent branches at the same time, then continue when
+ * (`whileCondition`). The one DAG shape it doesn't natively express is
+ * "run two independent branches at the same time, then continue when
  * both finish." That's what this pattern is for.
  *
  * Semantics:

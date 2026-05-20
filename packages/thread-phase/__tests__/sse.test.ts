@@ -63,7 +63,7 @@ describe('streamToSSE — wire format', () => {
         yield { type: 'content', content: 'hello' };
       },
     };
-    const jobId = runner.create('sse-test', null);
+    const jobId = await runner.create('sse-test', null);
     const res = new FakeRes();
     const ssePromise = streamToSSE({
       runner,
@@ -92,7 +92,7 @@ describe('streamToSSE — wire format', () => {
         yield { type: 'content', content: 'x' };
       },
     };
-    const jobId = runner.create('replay', null);
+    const jobId = await runner.create('replay', null);
     await runner.run(jobId, [phase], { cache: new PipelineCache() });
     // Job is done. Now connect.
     const res = new FakeRes();
@@ -112,10 +112,10 @@ describe('streamToSSE — wire format', () => {
         yield { type: 'content', content: 'y' };
       },
     };
-    const jobId = runner.create('partial-replay', null);
+    const jobId = await runner.create('partial-replay', null);
     await runner.run(jobId, [phase], { cache: new PipelineCache() });
 
-    const events = store.getEvents(jobId);
+    const events = await store.getEvents(jobId);
     const phaseEventId = events.find((e) => e.eventType === 'phase')!.id;
 
     const res = new FakeRes();

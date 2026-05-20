@@ -136,7 +136,7 @@ describe('JobRunner.cancel propagates into runAgentWithTools', () => {
         },
       };
 
-      const jobId = runner.create('cancel-into-agent', null);
+      const jobId = await runner.create('cancel-into-agent', null);
       const ctx: Ctx = { cache: new PipelineCache() };
       const runPromise = runner.run(jobId, [phase], ctx);
       // Cancel after the stream has started but well before the 100-tick mock would finish.
@@ -148,7 +148,7 @@ describe('JobRunner.cancel propagates into runAgentWithTools', () => {
 
       // The agent saw the signal and returned with finishReason=error.
       expect(ctx.agentResult).toBe('error');
-      const job = store.getJob(jobId)!;
+      const job = (await store.getJob(jobId))!;
       expect(job.status).toBe('FAILED');
     } finally {
       warnSpy?.mockRestore();
@@ -238,7 +238,7 @@ describe('streamToSSE — client disconnect cleanup', () => {
       },
     };
 
-    const jobId = runner.create('disconnect-test', null);
+    const jobId = await runner.create('disconnect-test', null);
     const res = new DisconnectingRes();
 
     // Fire job + SSE concurrently; disconnect midway.
@@ -285,7 +285,7 @@ describe('streamToSSE — client disconnect cleanup', () => {
       },
     };
 
-    const jobId = runner.create('heartbeat', null);
+    const jobId = await runner.create('heartbeat', null);
     const res = new FakeRes();
     const runPromise = runner.run(jobId, [phase], { cache: new PipelineCache() });
     const ssePromise = streamToSSE({ runner, store, jobId, res, heartbeatMs: 30 });

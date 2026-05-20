@@ -95,6 +95,31 @@ export function subPipeline<
 }
 
 /**
+ * Type-inferred convenience over `subPipeline` for the direct-object case.
+ * `TInnerCtx` is inferred from `source.ctx`, so callers only spell the outer
+ * ctx generic (and often not even that):
+ *
+ *   subPipelineOf('inner', innerSpec, { mapOutput: ... })
+ *
+ * vs. the more verbose `subPipeline<MyOuter, MyInner>(...)`. For the lazy
+ * registry-lookup case, use `subPipeline` directly — the resolver form needs
+ * explicit generics anyway.
+ */
+export function subPipelineOf<
+  TInnerCtx extends BasePipelineContext,
+  TOuterCtx extends BasePipelineContext = BasePipelineContext,
+>(
+  name: string,
+  source: { phases: ReadonlyArray<Phase<TInnerCtx>>; ctx: TInnerCtx },
+  mapping?: Omit<SubPipelineOptions<TOuterCtx, TInnerCtx>, 'pipeline'>,
+): Phase<TOuterCtx> {
+  return subPipeline<TOuterCtx, TInnerCtx>(name, {
+    pipeline: source,
+    ...mapping,
+  });
+}
+
+/**
  * Imperative form: invoke an inner pipeline from inside a phase body.
  * Returns the inner ctx (post-run) and the pipeline summary. Phase
  * exceptions in the inner pipeline propagate as rejections.

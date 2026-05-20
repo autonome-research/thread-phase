@@ -10,10 +10,15 @@ function newStore(): SqliteJobStore {
   return new SqliteJobStore(':memory:');
 }
 
+// The bridge subscribes synchronously but appendEvent is now async — events
+// are persisted on the next microtask. Tests flush by awaiting a microtask
+// before reading back.
+const flush = (): Promise<void> => new Promise((r) => setImmediate(r));
+
 describe('pipeAgentEventsToJobStore', () => {
-  it('appends every bus event to the job store under default keys', () => {
+  it('appends every bus event to the job store under default keys', async () => {
     const store = newStore();
-    const jobId = store.createJob('test', null);
+    const jobId = await store.createJob('test', null);
     const bus = createEventBus();
     const unsubscribe = pipeAgentEventsToJobStore(bus, store, jobId);
 
@@ -24,7 +29,8 @@ describe('pipeAgentEventsToJobStore', () => {
     ];
     for (const event of events) bus.emit(event);
 
-    const records = store.getEvents(jobId);
+    await flush();
+    const records = await store.getEvents(jobId);
     expect(records).toHaveLength(3);
     expect(records[0]?.eventType).toBe('data');
     const datas = records.map((r) => r.data);
@@ -36,9 +42,9 @@ describe('pipeAgentEventsToJobStore', () => {
     store.close();
   });
 
-  it('honors dropTypes to skip high-volume event types', () => {
+  it('honors dropTypes to skip high-volume event types', async () => {
     const store = newStore();
-    const jobId = store.createJob('test', null);
+    const jobId = await store.createJob('test', null);
     const bus = createEventBus();
     pipeAgentEventsToJobStore(bus, store, jobId, { dropTypes: ['text'] });
 
@@ -47,7 +53,8 @@ describe('pipeAgentEventsToJobStore', () => {
     bus.emit({ type: 'text', source: 'mock', delta: 'b' });
     bus.emit({ type: 'agent_end', source: 'mock', reason: 'stop' });
 
-    const records = store.getEvents(jobId);
+    await flush();
+    const records = await store.getEvents(jobId);
     expect(records).toHaveLength(2);
     const keys = records.map((r) => (r.data.type === 'data' ? r.data.key : ''));
     expect(keys).toEqual(['agent:mock:agent_start', 'agent:mock:agent_end']);
@@ -55,24 +62,25 @@ describe('pipeAgentEventsToJobStore', () => {
     store.close();
   });
 
-  it('respects a string key override', () => {
+  it('respects a string key override', async () => {
     const store = newStore();
-    const jobId = store.createJob('test', null);
+    const jobId = await store.createJob('test', null);
     const bus = createEventBus();
     pipeAgentEventsToJobStore(bus, store, jobId, { key: 'adapter_event' });
 
     bus.emit({ type: 'agent_start', source: 'mock' });
     bus.emit({ type: 'text', source: 'mock', delta: 'hi' });
 
-    const records = store.getEvents(jobId);
+    await flush();
+    const records = await store.getEvents(jobId);
     expect(records.every((r) => r.data.type === 'data' && r.data.key === 'adapter_event')).toBe(true);
 
     store.close();
   });
 
-  it('respects a function key override', () => {
+  it('respects a function key override', async () => {
     const store = newStore();
-    const jobId = store.createJob('test', null);
+    const jobId = await store.createJob('test', null);
     const bus = createEventBus();
     pipeAgentEventsToJobStore(bus, store, jobId, {
       key: (event) => `${event.source}_event_${event.type}`,
@@ -81,16 +89,17 @@ describe('pipeAgentEventsToJobStore', () => {
     bus.emit({ type: 'agent_start', source: 'mock' });
     bus.emit({ type: 'text', source: 'mock', delta: 'hi' });
 
-    const records = store.getEvents(jobId);
+    await flush();
+    const records = await store.getEvents(jobId);
     const keys = records.map((r) => (r.data.type === 'data' ? r.data.key : ''));
     expect(keys).toEqual(['mock_event_agent_start', 'mock_event_text']);
 
     store.close();
   });
 
-  it('unsubscribe stops further appends', () => {
+  it('unsubscribe stops further appends', async () => {
     const store = newStore();
-    const jobId = store.createJob('test', null);
+    const jobId = await store.createJob('test', null);
     const bus = createEventBus();
     const unsubscribe = pipeAgentEventsToJobStore(bus, store, jobId);
 
@@ -98,22 +107,25 @@ describe('pipeAgentEventsToJobStore', () => {
     unsubscribe();
     bus.emit({ type: 'text', source: 'mock', delta: 'should not persist' });
 
-    const records = store.getEvents(jobId);
+    await flush();
+    const records = await store.getEvents(jobId);
     expect(records).toHaveLength(1);
 
     store.close();
   });
 
-  it('store append failures do not throw out of the bus emit', () => {
+  it('store append failures do not throw out of the bus emit', async () => {
     const store = newStore();
-    const jobId = store.createJob('test', null);
+    const jobId = await store.createJob('test', null);
     const bus = createEventBus();
     pipeAgentEventsToJobStore(bus, store, jobId);
 
     // Close the store so subsequent appendEvent calls throw.
     store.close();
 
-    // Emit should not throw — the bridge swallows store failures.
+    // Emit should not throw — the bridge swallows store failures (sync or async).
     expect(() => bus.emit({ type: 'agent_start', source: 'mock' })).not.toThrow();
+    // Drain any pending microtask so an unhandled rejection would surface.
+    await flush();
   });
 });

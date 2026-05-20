@@ -205,17 +205,19 @@ import { /* one of these */ } from 'thread-phase/patterns';
 
 | You have... | Use |
 |---|---|
-| N items, want to run a raw-model agent on each, capped concurrency | `boundedFanout` |
+| N items, want to run a raw-model agent on each, capped concurrency | `boundedFanout` (use `onItemDone` for streaming progress) |
 | N items, want to run an `AgentAdapter` on each (claude-code, hermes, etc.) | `boundedFanoutOf` |
-| Either of the above, with progress events as items finish | `streamingBoundedFanout` / iterate the shared event bus |
-| ≤2 items where concurrency-capping is overhead | `parallelFanout` (or just `Promise.all`) |
+| ≤2 items where concurrency-capping is overhead | just `Promise.all` |
 | Two distinct phases that should run concurrently as one composite | `parallelPhases` |
 | Cheap classifier that decides whether the rest of the pipeline runs | `intentGate` |
-| Score feasibility before spending big-model tokens | `preflightConfidence` |
-| Synthesizer that may want to re-run upstream phases | `synthesizeWithFollowup` |
-| Want to verify a sample of typed claims | `spotCheck` |
+| Loop a body of phases until a predicate holds | `whileCondition` |
+| Route to one of N phase lists by a key | `match` |
+| Retry a flaky phase with exponential backoff | `withRetry` |
+| Compose one pipeline as a step inside another | `subPipeline` (or `subPipelineOf` for inferred types) |
 
 If none fit, write a `Phase` directly. Patterns are convenience, not requirement.
+
+**Removed in v3.0.0:** `parallelFanout`, `streamingBoundedFanout`, `preflightConfidence`, `synthesizeWithFollowup`, `spotCheck` — see [`docs/recipes.md`](packages/thread-phase/docs/recipes.md) for paste-in equivalents.
 
 ### `boundedFanoutOf` — the adapter-driven sibling of `boundedFanout`
 
@@ -611,15 +613,15 @@ import {
 
 // Patterns (separate subpath)
 import {
-  parallelFanout,
   boundedFanout,
   boundedFanoutOf,
-  streamingBoundedFanout,
   parallelPhases,
   intentGate,
-  preflightConfidence,
-  synthesizeWithFollowup,
-  spotCheck,
+  whileCondition,
+  match,
+  withRetry,
+  subPipeline,
+  subPipelineOf,
 } from 'thread-phase/patterns';
 
 // AgentAdapter protocol + helpers (separate subpath)

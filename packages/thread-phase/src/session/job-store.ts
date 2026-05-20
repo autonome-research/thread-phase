@@ -3,38 +3,35 @@
  * their event logs.
  *
  * SqliteJobStore is the bundled default (single-file, zero-config). Other
- * backends (in-memory for tests, custom file-based for embedded use) just
+ * backends (Postgres, Redis, custom file-based for embedded use) just
  * need to implement this interface.
  *
- * # v1 stability commitment: sync interface
+ * # v3 interface: async by default
  *
- * Methods are synchronous on purpose. Three reasons:
+ * Every method returns a Promise. This is the breaking change in v3.0.0:
+ * pre-v3 the interface was sync (sqlite hot path; fire-and-forget event
+ * writes) and that blocked any backend whose underlying I/O is async
+ * (Postgres, Redis, network-attached stores). Going async at the
+ * interface level unblocks those backends without forcing them to fake
+ * a sync boundary via in-process queues.
  *
- *   1. Hot path: the agent runner persists events at every tool-call
- *      boundary. With sqlite + WAL, a sync write is sub-millisecond and
- *      doesn't add a microtask. Awaiting per-event would slow tight
- *      fanouts (50-100 items × multiple events each) for no real benefit.
+ * Performance note for SqliteJobStore: better-sqlite3 stays sync
+ * internally; the bundled implementation just wraps its prepared-
+ * statement calls in `async` methods. The added cost is one microtask
+ * per call — sub-microsecond, swamped by the actual I/O on every other
+ * backend, and negligible on sqlite given the prior sub-millisecond
+ * write cost.
  *
- *   2. Single-process is the v1 sweet spot. The bundled SqliteJobStore
- *      assumes one writer per database file (WAL handles same-DB
- *      co-tenancy with separate connections, but there's no distributed
- *      coordination). Going async to enable Postgres without an
- *      established demand would be paying a real cost for hypothetical
- *      flexibility.
+ * Migration from v2: every `store.xxx(...)` call site needs `await`.
+ * `JobRunner` and `streamToSSE` handle this internally; user code that
+ * touched the store directly (custom dashboards, replay scripts) needs
+ * to add `await` and become `async` at the call site.
  *
- *   3. Future async backends are an additive change, not a breaking one.
- *      When a real consumer needs Postgres-backed jobs (e.g. multi-process
- *      workers sharing state), the right move is to add a `JobStoreAsync`
- *      interface as a *second* type and let `JobRunner` accept either via
- *      method overload. Existing sync users keep their hot path; async
- *      users opt in. That migration is mechanical, not breaking.
- *
- * If you're implementing a custom backend and your underlying I/O is async
- * (e.g. a network call), wrap it with a small in-process queue + flush
- * loop so the JobStore methods themselves remain sync. The agent runner's
- * fire-and-forget pattern tolerates eventual consistency for events as
- * long as the final state (job status, completion result) is durable
- * before `setCompleted` returns.
+ * `close()` is the one exception — it stays sync because closing isn't
+ * a perf-sensitive code path and several embedded backends (sqlite,
+ * in-memory) have no async work to do on close. Implementations whose
+ * close is genuinely async can still return a Promise; the type allows
+ * either (`void | Promise<void>` is the relaxation).
  */
 
 import type { PipelineEvent } from '../phase.js';
@@ -71,7 +68,7 @@ export interface ListJobsOptions {
 
 export interface JobStore {
   /** Insert a PENDING job row, return its id. */
-  createJob(name: string, input: unknown): string;
+  createJob(name: string, input: unknown): Promise<string>;
   /**
    * Atomically claim a single-runner slot for `name`. If no job with this
    * name is currently RUNNING, insert a new job row directly in RUNNING
@@ -86,18 +83,24 @@ export interface JobStore {
    * a no-op state transition and (with the COALESCE in setRunning) leaves
    * the original startedAt intact.
    */
-  acquireExclusive(name: string, input: unknown): string | null;
-  setRunning(jobId: string): void;
-  setCompleted(jobId: string, result: unknown): void;
-  setFailed(jobId: string, error: string): void;
+  acquireExclusive(name: string, input: unknown): Promise<string | null>;
+  setRunning(jobId: string): Promise<void>;
+  setCompleted(jobId: string, result: unknown): Promise<void>;
+  setFailed(jobId: string, error: string): Promise<void>;
 
-  getJob(jobId: string): JobRecord | null;
-  listJobs(options?: ListJobsOptions): JobRecord[];
+  getJob(jobId: string): Promise<JobRecord | null>;
+  listJobs(options?: ListJobsOptions): Promise<JobRecord[]>;
 
   /** Append one event to the log; returns its monotonic id (resume cursor). */
-  appendEvent(jobId: string, event: PipelineEvent): number;
+  appendEvent(jobId: string, event: PipelineEvent): Promise<number>;
   /** Read events. `afterId` is the resume cursor — use 0 for "from the start". */
-  getEvents(jobId: string, afterId?: number): EventRecord[];
+  getEvents(jobId: string, afterId?: number): Promise<EventRecord[]>;
 
-  close(): void;
+  /**
+   * Release any underlying resources (connections, file handles). May be
+   * sync or async — implementations whose close has no async work
+   * (sqlite, in-memory) may return void; networked backends should return
+   * a Promise that resolves when the connection is fully torn down.
+   */
+  close(): void | Promise<void>;
 }

@@ -170,18 +170,13 @@ In `@autonome-research/thread-phase/patterns`:
 |---|---|
 | `boundedFanout` | N items, free-function runner per item, capped concurrency, results in input order |
 | `boundedFanoutOf` | Same, but the runner is an `AgentAdapter` + buildConfig — automatic event-bus propagation |
-| `streamingBoundedFanout` | `boundedFanout`-style scheduling, yields per-item events as items finish |
-| `parallelFanout` | Uncapped per-item parallel runs |
 | `parallelPhases` | Several phases run concurrently as one composite |
 | `intentGate` | Cheap classifier decides whether the rest of the pipeline runs |
-| `preflightConfidence` | Score feasibility before spending big-model tokens |
-| `synthesizeWithFollowup` | Synthesizer reviews its own output; may request another round |
-| `spotCheck` | Verify a sample of typed claims |
 | `whileCondition` | Loop a body of phases while an async predicate holds, with a max-iteration cap |
 | `match` | Keyed dispatch — route to one of N phase lists by selector key |
 | `withRetry` | Higher-order wrapper retrying a phase with exponential backoff on failure |
 
-See [`docs/patterns.md`](./docs/patterns.md) for selection guidance ("I want to do X" → "use Y").
+See [`docs/patterns.md`](./docs/patterns.md) for selection guidance ("I want to do X" → "use Y"). v3.0.0 trimmed five patterns (`parallelFanout`, `streamingBoundedFanout`, `preflightConfidence`, `synthesizeWithFollowup`, `spotCheck`) into composition recipes — see [`docs/recipes.md`](./docs/recipes.md) for paste-in equivalents.
 
 ## Configuration
 

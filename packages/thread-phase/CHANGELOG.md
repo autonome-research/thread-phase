@@ -4,6 +4,52 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+### Breaking — `JobStore` is async by default
+
+Every method on the `JobStore` interface now returns a `Promise`:
+
+```ts
+// v2 (sync) ⇒ v3 (async)
+createJob(name, input)        : string           → Promise<string>
+acquireExclusive(name, input) : string | null    → Promise<string | null>
+setRunning(jobId)             : void             → Promise<void>
+setCompleted(jobId, result)   : void             → Promise<void>
+setFailed(jobId, error)       : void             → Promise<void>
+appendEvent(jobId, event)     : number           → Promise<number>
+getJob(jobId)                 : JobRecord | null → Promise<JobRecord | null>
+listJobs(options?)            : JobRecord[]      → Promise<JobRecord[]>
+getEvents(jobId, afterId?)    : EventRecord[]    → Promise<EventRecord[]>
+close()                       : void             → void | Promise<void>
+```
+
+`close()` accepts either sync or async return — closing isn't a perf-sensitive path and embedded backends (sqlite, in-memory) can stay sync.
+
+Why: the prior sync interface blocked any backend whose underlying I/O is async (Postgres, Redis, network-attached stores). Custom implementations had to fake a sync boundary via in-process queues, which gave eventual consistency for events that callers couldn't easily reason about. Going async at the interface level unblocks those backends.
+
+Performance: the bundled `SqliteJobStore` wraps its sync `better-sqlite3` calls in `async` methods. better-sqlite3 stays sync internally; the only overhead is one microtask per call — sub-microsecond, swamped by the actual I/O on any other backend, and negligible against sqlite's prior sub-millisecond write cost.
+
+### Migration
+
+User code that touched a `JobStore` directly needs `await` on every call:
+
+```ts
+// Before
+const id = store.createJob('p', input);
+const job = store.getJob(id);
+const events = store.getEvents(id);
+
+// After
+const id = await store.createJob('p', input);
+const job = await store.getJob(id);
+const events = await store.getEvents(id);
+```
+
+`JobRunner` and `streamToSSE` handle this internally — pipeline code that goes through them needs no changes. `JobRunner.create(name, input)` now returns `Promise<string>` (previously `string`); any direct call site needs `await`.
+
+Custom `JobStore` implementations must change their method signatures from sync to `async` (returning a `Promise`). The simplest port: prefix each method with `async`, leave the body as-is. The interface accepts that — `async` methods auto-wrap return values in a Promise, so no body changes are needed for sync-backed stores.
+
+`pipeAgentEventsToJobStore` (the agent-event-bus → JobStore bridge) keeps its existing fire-and-forget semantics: bus emit is sync, the bridge schedules the async append as a microtask and swallows rejections. Tests that read back from the store after emitting events now need a microtask flush before the read.
+
 ## [2.5.0] — 2026-05-20
 
 Sub-pipeline composition. The substrate now has a clean primitive for composing pipelines without copying phase arrays.

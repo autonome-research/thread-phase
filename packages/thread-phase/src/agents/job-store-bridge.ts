@@ -64,12 +64,20 @@ export function pipeAgentEventsToJobStore(
       key: keyFn(event),
       value: event,
     };
+    // Fire-and-forget: the bus signature is sync (`(event) => void`) but
+    // appendEvent is async in v3. We swallow rejections so a store
+    // failure doesn't poison the bus or surface as an unhandled
+    // rejection. Callers wanting failure visibility should subscribe
+    // a separate logging handler.
     try {
-      store.appendEvent(jobId, pipelineEvent);
+      const result = store.appendEvent(jobId, pipelineEvent);
+      if (result && typeof (result as Promise<number>).then === 'function') {
+        (result as Promise<number>).catch(() => {
+          /* swallow — see comment above */
+        });
+      }
     } catch {
-      // JobStore append failures shouldn't poison the bus.
-      // Callers wanting failure visibility should subscribe a
-      // separate logging handler.
+      // Sync throws (shouldn't happen with async API but defensive).
     }
   });
 }

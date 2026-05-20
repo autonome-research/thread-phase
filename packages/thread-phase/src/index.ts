@@ -86,3 +86,23 @@ export {
   type ToolHandler,
   type ToolRegistryOptions,
 } from './tools/index.js';
+
+// Helpers — one-call wrappers for the common Trigger + Pipeline shapes.
+// Each returns an `ExtensionRegisterFn` `(api) => void` consumable by the
+// CLI auto-loader.
+export {
+  oneShot,
+  schedule,
+  hook,
+  CronTrigger,
+  HttpTrigger,
+  type OneShotOptions,
+  type ScheduleSpec,
+  type ScheduleOptions,
+  type HookSpec,
+  type HookOptions,
+  type ExtensionRegisterFn,
+  type HelperHandler,
+  type PipelineSpec,
+  type ThreadPhaseAPI,
+} from './helpers/index.js';

@@ -43,7 +43,7 @@ export class JobRunner extends EventEmitter {
   /**
    * Create a job row, return its id. Use `start()` to actually run it.
    */
-  create(name: string, input: unknown): string {
+  create(name: string, input: unknown): Promise<string> {
     return this.store.createJob(name, input);
   }
 
@@ -92,15 +92,15 @@ export class JobRunner extends EventEmitter {
     const controller = new AbortController();
     this.inflight.set(jobId, controller);
 
-    this.store.setRunning(jobId);
+    await this.store.setRunning(jobId);
 
     let eventCount = 0;
     let stopReason: string | undefined;
 
-    const persistError = (message: string): void => {
-      this.store.setFailed(jobId, message);
+    const persistError = async (message: string): Promise<void> => {
+      await this.store.setFailed(jobId, message);
       const errEvent: PipelineEvent = { type: 'error', message };
-      const eventId = this.store.appendEvent(jobId, errEvent);
+      const eventId = await this.store.appendEvent(jobId, errEvent);
       this.emit(`job:${jobId}`, {
         id: eventId,
         jobId,
@@ -112,7 +112,7 @@ export class JobRunner extends EventEmitter {
 
     try {
       for await (const event of runPipeline<TCtx, TEvent>(phases, ctx)) {
-        const eventId = this.store.appendEvent(jobId, event as PipelineEvent);
+        const eventId = await this.store.appendEvent(jobId, event as PipelineEvent);
         this.emit(`job:${jobId}`, {
           id: eventId,
           jobId,
@@ -129,13 +129,13 @@ export class JobRunner extends EventEmitter {
         if (controller.signal.aborted) {
           const reason =
             (controller.signal.reason as string | undefined) ?? 'cancelled';
-          persistError(`cancelled: ${reason}`);
+          await persistError(`cancelled: ${reason}`);
           const err = new Error(`cancelled: ${reason}`);
           err.name = 'AbortError';
           throw err;
         }
       }
-      this.store.setCompleted(jobId, finalResult ? finalResult() : null);
+      await this.store.setCompleted(jobId, finalResult ? finalResult() : null);
       return stopReason !== undefined
         ? { status: 'stopped', reason: stopReason, eventCount }
         : { status: 'completed', eventCount };
@@ -144,7 +144,7 @@ export class JobRunner extends EventEmitter {
       if (err instanceof Error && err.name === 'AbortError') throw err;
       // Phase exception: persist + rethrow.
       const message = err instanceof Error ? err.message : String(err);
-      persistError(message);
+      await persistError(message);
       throw err;
     } finally {
       this.inflight.delete(jobId);

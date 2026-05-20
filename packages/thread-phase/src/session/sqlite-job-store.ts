@@ -2,8 +2,15 @@
  * sqlite-backed JobStore implementation — the bundled default.
  *
  * Two tables (job, event) on a single sqlite file. WAL journal for write
- * concurrency, foreign keys enforced. Synchronous (better-sqlite3) — fast
- * and simple for this access pattern.
+ * concurrency, foreign keys enforced.
+ *
+ * The interface (`JobStore`) is async-by-default in v3.0.0; this
+ * implementation wraps its sync better-sqlite3 calls in `async` methods.
+ * better-sqlite3 stays sync internally — the only overhead is one
+ * microtask per call, which is negligible against sqlite's already
+ * sub-millisecond write cost. We pay this cost to keep one unified
+ * interface across all backends (Postgres, Redis, network stores)
+ * instead of two parallel sync + async hierarchies.
  */
 
 import Database, { type Database as DB } from 'better-sqlite3';
@@ -129,7 +136,7 @@ export class SqliteJobStore implements JobStore {
   // Job lifecycle
   // -------------------------------------------------------------------------
 
-  createJob(name: string, input: unknown): string {
+  async createJob(name: string, input: unknown): Promise<string> {
     const id = randomUUID();
     this.db
       .prepare(`INSERT INTO job (id, name, input) VALUES (?, ?, ?)`)
@@ -137,7 +144,7 @@ export class SqliteJobStore implements JobStore {
     return id;
   }
 
-  acquireExclusive(name: string, input: unknown): string | null {
+  async acquireExclusive(name: string, input: unknown): Promise<string | null> {
     // better-sqlite3's `db.transaction(fn)` wraps the callback in BEGIN…COMMIT
     // (defaults to deferred, but the runtime upgrades to a write lock the
     // moment we INSERT, which serializes concurrent acquireExclusive calls
@@ -161,7 +168,7 @@ export class SqliteJobStore implements JobStore {
     return tx(name, input);
   }
 
-  setRunning(jobId: string): void {
+  async setRunning(jobId: string): Promise<void> {
     // COALESCE on started_at: idempotent w.r.t. acquireExclusive, which
     // already sets status='RUNNING' and started_at at claim time.
     this.db
@@ -173,7 +180,7 @@ export class SqliteJobStore implements JobStore {
       .run(jobId);
   }
 
-  setCompleted(jobId: string, result: unknown): void {
+  async setCompleted(jobId: string, result: unknown): Promise<void> {
     this.db
       .prepare(
         `UPDATE job SET status = 'COMPLETED', result = ?, completed_at = datetime('now') WHERE id = ?`,
@@ -181,7 +188,7 @@ export class SqliteJobStore implements JobStore {
       .run(JSON.stringify(result ?? null), jobId);
   }
 
-  setFailed(jobId: string, error: string): void {
+  async setFailed(jobId: string, error: string): Promise<void> {
     this.db
       .prepare(
         `UPDATE job SET status = 'FAILED', error = ?, completed_at = datetime('now') WHERE id = ?`,
@@ -193,7 +200,7 @@ export class SqliteJobStore implements JobStore {
   // Job reads
   // -------------------------------------------------------------------------
 
-  getJob(jobId: string): JobRecord | null {
+  async getJob(jobId: string): Promise<JobRecord | null> {
     const row = this.db
       .prepare(
         `SELECT j.*, (SELECT COUNT(*) FROM event WHERE job_id = j.id) AS event_count
@@ -203,7 +210,7 @@ export class SqliteJobStore implements JobStore {
     return row ? this.toJobRecord(row) : null;
   }
 
-  listJobs(options: ListJobsOptions = {}): JobRecord[] {
+  async listJobs(options: ListJobsOptions = {}): Promise<JobRecord[]> {
     const limit = options.limit ?? 50;
     // Build one parameterized query — `name IS NULL OR j.name = name` lets a
     // null parameter act as a no-filter wildcard, removing the duplicated
@@ -239,14 +246,14 @@ export class SqliteJobStore implements JobStore {
   // Events — append-only log, resumable via afterId
   // -------------------------------------------------------------------------
 
-  appendEvent(jobId: string, event: PipelineEvent): number {
+  async appendEvent(jobId: string, event: PipelineEvent): Promise<number> {
     const result = this.db
       .prepare(`INSERT INTO event (job_id, event_type, data) VALUES (?, ?, ?)`)
       .run(jobId, event.type, JSON.stringify(event));
     return Number(result.lastInsertRowid);
   }
 
-  getEvents(jobId: string, afterId: number = 0): EventRecord[] {
+  async getEvents(jobId: string, afterId: number = 0): Promise<EventRecord[]> {
     const rows = this.db
       .prepare(
         `SELECT id, job_id, event_type, data, created_at

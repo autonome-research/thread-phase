@@ -131,7 +131,7 @@ export function runTrigger<TInput, TCtx extends BasePipelineContext>(
     const work = (async (): Promise<void> => {
       try {
         if (options.jobRunner) {
-          jobId = options.jobRunner.create(pipelineName, {
+          jobId = await options.jobRunner.create(pipelineName, {
             triggerName: trigger.name,
             triggerEventId: event.id,
             occurredAt: event.occurredAt,

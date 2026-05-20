@@ -128,7 +128,7 @@ describe('runTrigger', () => {
 
     expect(captured).toEqual(['first', 'second']);
 
-    const jobs = store.listJobs({ limit: 10 });
+    const jobs = await store.listJobs({ limit: 10 });
     expect(jobs).toHaveLength(2);
     expect(jobs.every((j) => j.name === 'test-pipeline')).toBe(true);
     expect(jobs.every((j) => j.status === 'COMPLETED')).toBe(true);

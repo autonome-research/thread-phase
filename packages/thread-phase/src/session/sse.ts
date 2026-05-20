@@ -86,14 +86,14 @@ export async function streamToSSE(options: StreamToSSEOptions): Promise<void> {
 
   // Step 1: replay anything the client has missed.
   let lastId = afterId;
-  const replay = store.getEvents(jobId, afterId);
+  const replay = await store.getEvents(jobId, afterId);
   for (const evt of replay) {
     writeFrame(evt.id, evt.eventType, evt.data);
     lastId = Math.max(lastId, evt.id);
   }
 
   // If the job is already finished and replay covered everything, close.
-  const job = store.getJob(jobId);
+  const job = await store.getJob(jobId);
   if (job && (job.status === 'COMPLETED' || job.status === 'FAILED')) {
     close();
     return;
