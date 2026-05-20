@@ -4,6 +4,22 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-05-20
+
+Sub-pipeline composition. The substrate now has a clean primitive for composing pipelines without copying phase arrays.
+
+### Added
+
+- **`subPipeline(name, options)`** (`@autonome-research/thread-phase/patterns`) — higher-order pattern returning a `Phase<TOuterCtx>` that runs an inner pipeline as a step. The inner gets a fresh `PipelineCache` (isolated scope); the outer's `signal` propagates down (cancellation flows); the inner's events flatten into the outer's stream via `yield*`. Optional `mapInput: (outer) => inner` and `mapOutput: (outer, inner) => void` for explicit ctx shaping. The `pipeline` option accepts either a direct `{ phases, ctx }` object or a lazy resolver (so the CLI can do registry-by-name lookup without core depending on the Registry).
+- **`runSubPipeline(source, options?)`** — imperative form for use inside a phase body. Returns `{ ctx, summary }`. Same isolation semantics.
+- **Types**: `SubPipelineOptions`, `SubPipelineSource`.
+
+### Notes
+
+- Inner pipeline failures (phase throws) propagate to the outer's iteration, which `runPipeline` re-throws — same as any other phase exception.
+- Cycle detection is the caller's responsibility (e.g. a counter in ctx). Unbounded recursion is undefined behavior.
+- 9 new tests; 299 in the core package.
+
 ## [2.4.0] — 2026-05-20
 
 Cleanup pass addressing the post-2.3 review (problems 1, 4, 9 from the review). Breaking on the error and cancellation contracts; clean separation of concerns is the new state.

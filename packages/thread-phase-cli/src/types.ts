@@ -77,6 +77,19 @@ export interface ThreadPhaseAPI {
     name: string,
     spec: PipelineSpec<TCtx, TInput>,
   ): void;
+
+  /**
+   * Look up a registered pipeline by name. Use inside `subPipeline`'s
+   * lazy resolver so registration order between extensions doesn't matter:
+   * the lookup runs at dispatch time, not load time.
+   */
+  getPipeline(name: string): PipelineSpec<BasePipelineContext, unknown> | undefined;
+  /** Look up a registered adapter by name. */
+  getAdapter(
+    name: string,
+  ): AgentAdapterMeta<unknown, AgentRunResult> | undefined;
+  /** Look up a registered trigger by name. */
+  getTrigger(name: string): Trigger<unknown> | undefined;
 }
 
 /** Extension default export: `(api) => void`. */

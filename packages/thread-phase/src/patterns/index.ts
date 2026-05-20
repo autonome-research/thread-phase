@@ -59,3 +59,10 @@ export {
   withRetry,
   type WithRetryOptions,
 } from './with-retry.js';
+
+export {
+  subPipeline,
+  runSubPipeline,
+  type SubPipelineOptions,
+  type SubPipelineSource,
+} from './sub-pipeline.js';

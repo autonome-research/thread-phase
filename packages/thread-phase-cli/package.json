@@ -1,6 +1,6 @@
 {
   "name": "@autonome-research/thread-phase-cli",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "CLI and auto-loader for thread-phase — discovers extensions under .thread-phase/ and runs registered pipelines.",
   "license": "MIT",
   "type": "module",
@@ -24,7 +24,7 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@autonome-research/thread-phase": "^2.4.0"
+    "@autonome-research/thread-phase": "^2.5.0"
   },
   "dependencies": {
     "tsx": "^4.19.0"

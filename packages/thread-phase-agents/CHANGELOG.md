@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-05-20
+
+Locked-version release alongside `@autonome-research/thread-phase@2.5.0` (sub-pipeline composition). No adapter changes.
+
 ## [2.4.0] — 2026-05-20
 
 Locked-version release in step with `@autonome-research/thread-phase@2.4.0` (error model + cancellation overhaul). No adapter changes.

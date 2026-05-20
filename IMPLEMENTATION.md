@@ -1,6 +1,6 @@
 # thread-phase 2.x — Implementation Plan
 
-> Status: **v2.4.0 shipped** (post-2.3 review pass). v2.5.0 (features: declarative pipeline format #6 + sub-pipeline composition #8) and v3.0.0 (async JobStore #7) remain. See entries below.
+> Status: **v2.5.0 shipped** — sub-pipeline composition (#8). Declarative pipeline format (#6) deferred (developer audience already writes TS; list --verbose already gives introspection). v3.0.0 (async JobStore #7) remains.
 
 
 

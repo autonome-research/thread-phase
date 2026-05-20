@@ -18,6 +18,7 @@ thread-phase's `patterns/*` are *named shapes*, not abstractions you have to sat
 | Loop a body of phases while some condition holds | [`whileCondition`](#whilecondition) | The loop body re-runs upstream work with a structured directive — use `synthesizeWithFollowup` |
 | Route to one of N phase lists based on a key | [`match`](#match) | The dispatch is a single async classifier with a halt option — use `intentGate` |
 | Retry a flaky phase with exponential backoff | [`withRetry`](#withretry) | The work isn't idempotent — fix that first, or pass `resetState` |
+| Run one pipeline as a step inside another | [`subPipeline`](#subpipeline) | Two pipelines share *one* ctx with no isolation — just concatenate phases |
 
 ---
 
@@ -224,6 +225,49 @@ const reliableSearch = withRetry(searchPhase, {
 ```
 
 [Source](../src/patterns/with-retry.ts) · ~95 LOC
+
+---
+
+## `subPipeline`
+
+**Shape:** invoke a registered (or inline) pipeline as a phase inside another pipeline. The inner runs with a fresh `PipelineCache`, the outer's `signal` propagates down, and events from the inner flatten into the outer's stream via `yield*`.
+
+**When to use:** the same work happens inside multiple pipelines. Examples: a "send digest email" pipeline used by both `morning-digest` and `weekly-newsletter`; a "validate-and-enrich" pipeline reused inside per-tenant flows; an "ingest one source" pipeline composed into an "ingest all sources" outer.
+
+**When not to use:** the two pipelines are tightly coupled and share the same ctx with no isolation. Just concatenate phases — `[...phasesA, ...phasesB]` — and skip the indirection.
+
+**Variants:**
+- `subPipeline(name, options)` — higher-order pattern returning a `Phase<TOuterCtx>`. Compose like any other phase.
+- `runSubPipeline(spec, options)` — free function for imperative use inside a phase body. Returns `{ ctx, summary }`.
+
+**Mapping:** `mapInput(outer) => inner` and `mapOutput(outer, inner) => void` are both optional. Without `mapInput`, the inner pipeline uses the ctx from its source. The outer's `signal` is wired into `inner.signal` automatically.
+
+```ts
+import { subPipeline } from '@autonome-research/thread-phase/patterns';
+
+const digest = subPipeline<OuterCtx, InnerCtx>('send-digest', {
+  pipeline: { phases: [composeEmail, sendViaSMTP], ctx: { cache: new PipelineCache() } as InnerCtx },
+  mapInput: (outer) => ({ cache: new PipelineCache(), recipients: outer.subscribers }),
+  mapOutput: (outer, inner) => { outer.sentIds = inner.sentMessageIds; },
+});
+
+// Then compose:
+//   runPipeline([loadSubscribers, digest, recordRun], outerCtx)
+```
+
+For registry-based composition (the CLI use case), pass a lazy resolver:
+
+```ts
+import { subPipeline } from '@autonome-research/thread-phase/patterns';
+
+// Inside a registered pipeline that wants to invoke another registered pipeline by name:
+const useShared = subPipeline<OuterCtx, InnerCtx>('shared-validate', {
+  pipeline: () => registry.getPipeline('validate-and-enrich'),
+  mapInput: (outer) => ({ cache: new PipelineCache(), payload: outer.raw }),
+});
+```
+
+[Source](../src/patterns/sub-pipeline.ts) · ~115 LOC
 
 ---
 

@@ -4,6 +4,19 @@ All notable changes to this package are documented here.
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-05-20
+
+Sub-pipeline composition surfaces through the registry.
+
+### Added
+
+- **`ThreadPhaseAPI.getPipeline(name)` / `getAdapter(name)` / `getTrigger(name)`** — lookup methods on the registration API so extensions can reference each other by name (typically inside `subPipeline`'s lazy resolver). Late-bound: registration order between extensions doesn't matter; lookup happens at dispatch time, not load time. `Registry` already implements them — this is purely an interface widening.
+
+### Notes
+
+- Working example at `examples/.thread-phase/pipelines/composed.ts` — invokes `minimal` as a sub-pipeline via lazy registry lookup.
+- No CLI command changes.
+
 ## [2.4.0] — 2026-05-20
 
 CLI ergonomics + shared-code convention. Reads the post-2.3 review and lands the items that mapped to this package (#2, #3, #5, #10, #11).

@@ -263,6 +263,38 @@ If your extension needs a new kernel primitive, open an issue first. The framewo
 - **`packages/thread-phase/examples/patterns/`** — `whileCondition`, `match`, `withRetry`.
 - **`packages/thread-phase/examples/triggers/`** — HTTP and queue adapters as recipes (not in core).
 
+## Composing pipelines (sub-pipelines)
+
+When multiple registered pipelines share a chunk of work, factor it into its own pipeline and reference it from the outer with `subPipeline`. The CLI exposes `api.getPipeline(name)` for lazy registry lookup so extensions can reference each other regardless of registration order:
+
+```ts
+import { PipelineCache } from '@autonome-research/thread-phase';
+import { subPipeline } from '@autonome-research/thread-phase/patterns';
+import type { ThreadPhaseAPI } from '@autonome-research/thread-phase-cli';
+
+export default (api: ThreadPhaseAPI) => {
+  api.registerPipeline<OuterCtx, void>('composed', {
+    phases: [
+      preStep,
+      subPipeline('use-inner', {
+        // Lazy: looked up at dispatch time, not registration time.
+        pipeline: () => api.getPipeline('inner'),
+        mapInput: (outer) => ({ cache: new PipelineCache(), seed: outer.value }),
+        mapOutput: (outer, inner) => { outer.result = inner.tally; },
+      }),
+      postStep,
+    ],
+    ctx: () => ({ cache: new PipelineCache() }),
+  });
+};
+```
+
+The inner pipeline gets a fresh `PipelineCache` (cache scopes are isolated) but shares the outer's `signal` — so a cancellation flows from the trigger handle through outer → inner. Events from the inner flatten into the outer's stream via `yield*`, so the JobStore log and SSE consumers see one continuous record.
+
+`api.getPipeline` / `getAdapter` / `getTrigger` are also useful when an adapter or trigger extension needs to reference another registered piece (e.g. a custom adapter that wraps the user's claude-code adapter by name).
+
+Working example: `examples/.thread-phase/pipelines/composed.ts` invokes `examples/.thread-phase/pipelines/minimal.ts` via registry lookup.
+
 ## Programmatic embedding
 
 The loader and registry can be used without the CLI bin:
