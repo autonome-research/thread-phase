@@ -1,14 +1,14 @@
-# thread-phase-agents
+# @autonome-research/thread-phase-agents
 
-Adapter implementations for the `AgentAdapter` protocol from [`thread-phase`](https://github.com/Code4me2/thread-phase). Wraps heterogeneous AI agents — CLI-based coding agents, in-process SDK agents — behind a single uniform shape so thread-phase pipelines can compose them.
+Adapter implementations for the `AgentAdapter` protocol from [`@autonome-research/thread-phase`](../thread-phase). Wraps heterogeneous AI agents — CLI-based coding agents, in-process SDK agents — behind a single uniform shape so thread-phase pipelines can compose them.
 
 ## Install
 
 ```bash
-npm install thread-phase-agents thread-phase
+npm install @autonome-research/thread-phase-agents @autonome-research/thread-phase
 ```
 
-`thread-phase` is a peer dependency. Each adapter has its own dependency on whichever SDK or CLI it wraps:
+`@autonome-research/thread-phase` is a peer dependency. Each adapter has its own dependency on whichever SDK or CLI it wraps:
 
 | Adapter | Requires |
 |---|---|
@@ -39,7 +39,7 @@ Seven adapter implementations plus a shared ACP chassis:
 The basic shape is the same for every adapter — call `meta.adapter(config)` to get an `AgentRun`, then iterate events and/or await the result:
 
 ```ts
-import { hermesAgent } from 'thread-phase-agents';
+import { hermesAgent } from '@autonome-research/thread-phase-agents';
 
 const run = hermesAgent.adapter({
   cwd: process.cwd(),
@@ -58,16 +58,16 @@ console.log('text:', result.text);
 console.log('resumeToken:', result.resumeToken);
 ```
 
-`run.result` never rejects — errors are encoded as `finishReason: 'error'` with an `error` event in the stream beforehand. `run.events` is a single-consumer iterable; use the `AgentEventBus` from `thread-phase/agents` if you need fan-out to multiple subscribers.
+`run.result` never rejects — errors are encoded as `finishReason: 'error'` with an `error` event in the stream beforehand. `run.events` is a single-consumer iterable; use the `AgentEventBus` from `@autonome-research/thread-phase/agents` if you need fan-out to multiple subscribers.
 
 ### Inside a thread-phase phase
 
 Adapters compose with thread-phase's pipeline primitives. The canonical pattern:
 
 ```ts
-import { JobRunner, SqliteJobStore, type Phase } from 'thread-phase';
-import { createEventBus, pipeAgentEventsToJobStore } from 'thread-phase/agents';
-import { claudeCodeAgent } from 'thread-phase-agents';
+import { JobRunner, SqliteJobStore, type Phase } from '@autonome-research/thread-phase';
+import { createEventBus, pipeAgentEventsToJobStore } from '@autonome-research/thread-phase/agents';
+import { claudeCodeAgent } from '@autonome-research/thread-phase-agents';
 
 interface Ctx {
   taskDescription?: string;
@@ -101,8 +101,8 @@ const reviewPhase: Phase<Ctx> = {
 Decorate any adapter with `withMemory` to plumb a `MemoryProvider` automatically, or `withThread` to flow conversation state across phases. Use the pre-built injectors from this package so you don't have to write per-adapter splicing logic:
 
 ```ts
-import { withMemory, withThread, createThread } from 'thread-phase/agents';
-import { claudeCodeAgent, injectMemory, injectResume } from 'thread-phase-agents';
+import { withMemory, withThread, createThread } from '@autonome-research/thread-phase/agents';
+import { claudeCodeAgent, injectMemory, injectResume } from '@autonome-research/thread-phase-agents';
 
 const thread = createThread();
 
@@ -128,8 +128,8 @@ await augmented.adapter({ cwd, prompt: 'now refactor the file you mentioned' }, 
 Adapters whose underlying runtime supports follow-up prompts on a live session return a `SteerableAgentRun` at runtime. Narrow with `isSteerable` from `thread-phase/agents`:
 
 ```ts
-import { isSteerable } from 'thread-phase/agents';
-import { piAgent } from 'thread-phase-agents';
+import { isSteerable } from '@autonome-research/thread-phase/agents';
+import { piAgent } from '@autonome-research/thread-phase-agents';
 
 const run = piAgent.adapter({ cwd, prompt: 'start something complex' });
 
@@ -154,12 +154,12 @@ const result = await run.result;
 When two phases use different adapters, the canonical event log in a shared `Thread` becomes the bridge. Same-adapter chains resume natively via the resume token (lossless); cross-adapter chains fall back to a text rendering of the thread:
 
 ```ts
-import { createThread } from 'thread-phase/agents';
+import { createThread } from '@autonome-research/thread-phase/agents';
 import {
   claudeCodeAgent,
   anthropicAgent,
   threadToAnthropicMessages,
-} from 'thread-phase-agents';
+} from '@autonome-research/thread-phase-agents';
 
 const thread = createThread();
 
@@ -192,11 +192,11 @@ npx tsx scripts/smoke-pi.ts
 
 Useful for sanity-checking that the adapter survives contact with whichever version of the binary you have installed. They print every canonical event as it streams and report pass/fail at the end.
 
-## Relationship to thread-phase
+## Relationship to @autonome-research/thread-phase
 
-[`thread-phase`](https://github.com/Code4me2/thread-phase) owns the `AgentAdapter` protocol, the `Thread` primitive, the canonical `AgentEvent` vocabulary, the `inferenceAgent` (which wraps `runAgentWithTools` against any OpenAI-compatible endpoint), and the conformance suite that every adapter must pass.
+[`@autonome-research/thread-phase`](../thread-phase) owns the `AgentAdapter` protocol, the `Thread` primitive, the canonical `AgentEvent` vocabulary, the `inferenceAgent` (which wraps `runAgentWithTools` against any OpenAI-compatible endpoint), and the conformance suite that every adapter must pass.
 
-This package ships the *other* adapters — the ones that delegate to pre-built coding / research / life agents rather than driving a raw inference loop. Each adapter passes the conformance suite imported from `thread-phase/agents/test-utils`.
+This package ships the *other* adapters — the ones that delegate to pre-built coding / research / life agents rather than driving a raw inference loop. Each adapter passes the conformance suite imported from `@autonome-research/thread-phase/agents/test-utils`.
 
 ## Status
 

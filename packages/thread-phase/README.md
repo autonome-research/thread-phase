@@ -3,7 +3,7 @@
 A TypeScript framework that composes deterministic phases over **heterogeneous agents** — the iterated tool-use loop against OpenAI-compatible inference for raw model calls, the `AgentAdapter` protocol for delegating to ready agents (Claude Code, Hermes, Codex, OpenClaw, Anthropic SDK). Multi-phase pipelines with a typed shared context, persistent event logs, and concurrency-capped fanout.
 
 ```bash
-npm install thread-phase
+npm install @autonome-research/thread-phase
 ```
 
 > **Generating thread-phase code with an LLM agent?** See [`AGENTS.md`](./AGENTS.md) — a self-contained reference covering the mental model, a copy-paste template, and explicit anti-patterns. Claude Code users can also install [`SKILL.md`](./SKILL.md) into `~/.claude/skills/thread-phase/` so the guidance auto-loads.
@@ -32,7 +32,7 @@ import {
   runAgentWithTools,
   ToolRegistry,
   createInferenceClient,
-} from 'thread-phase';
+} from '@autonome-research/thread-phase';
 
 const tools = new ToolRegistry().register(
   {
@@ -124,7 +124,7 @@ The interface is sync by design (sqlite hot path; fire-and-forget event writes).
 
 ### `AgentAdapter` — the extension surface
 
-`AgentAdapter` is the protocol every ready-agent integration speaks. The in-tree `inferenceAgent` wraps `runAgentWithTools`; sibling implementations in [`thread-phase-agents`](https://github.com/Code4me2/thread-phase-agents) wrap `hermes`, `openclaw`, `claude`, the OpenAI Responses API (Codex), and the Anthropic SDK directly.
+`AgentAdapter` is the protocol every ready-agent integration speaks. The in-tree `inferenceAgent` wraps `runAgentWithTools`; sibling implementations in [`@autonome-research/thread-phase-agents`](../thread-phase-agents) wrap `hermes`, `openclaw`, `claude`, the OpenAI Responses API (Codex), and the Anthropic SDK directly.
 
 Every adapter returns the same shape:
 
@@ -144,7 +144,7 @@ Memory across runs is outsourced: `MemoryProvider` is just a TypeScript interfac
 
 ## Patterns
 
-In `thread-phase/patterns`:
+In `@autonome-research/thread-phase/patterns`:
 
 | Pattern | Shape |
 |---|---|

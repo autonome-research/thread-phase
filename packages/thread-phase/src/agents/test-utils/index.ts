@@ -1,7 +1,7 @@
 /**
  * Test utilities for the AgentAdapter protocol.
  *
- * Importers (in-tree tests and the sibling `thread-phase-agents` package)
+ * Importers (in-tree tests and the sibling `@autonome-research/thread-phase-agents` package)
  * pull `createMockAgent` for scripted adapter behavior and
  * `runAdapterConformance` for protocol-contract assertions.
  *

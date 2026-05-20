@@ -6,8 +6,8 @@ import { describe, it, expect } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-import { runAdapterConformance } from 'thread-phase/agents/test-utils';
-import type { AgentEvent } from 'thread-phase/agents';
+import { runAdapterConformance } from '@autonome-research/thread-phase/agents/test-utils';
+import type { AgentEvent } from '@autonome-research/thread-phase/agents';
 
 import { claudeCodeAgent, type ClaudeCodeAgentConfig } from '../src/claude-code/index.js';
 

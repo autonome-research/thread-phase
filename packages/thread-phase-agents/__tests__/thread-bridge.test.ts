@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { appendEvent, createThread } from 'thread-phase/agents';
+import { appendEvent, createThread } from '@autonome-research/thread-phase/agents';
 import {
   threadToAcpPrompt,
   threadToAnthropicMessages,

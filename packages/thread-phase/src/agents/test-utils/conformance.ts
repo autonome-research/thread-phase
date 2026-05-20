@@ -1,7 +1,7 @@
 /**
  * Parameterized vitest suite that asserts an `AgentAdapter` honors the
  * protocol's lifecycle invariants. Both in-tree tests and the sibling
- * `thread-phase-agents` package import this and call it from a `describe`
+ * `@autonome-research/thread-phase-agents` package import this and call it from a `describe`
  * or top-level test file.
  *
  * Invariants asserted (see `protocol.ts` for the canonical statements):

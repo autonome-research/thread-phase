@@ -227,7 +227,7 @@ export interface AgentRun<TResult extends AgentRunResult = AgentRunResult> {
 
 /**
  * Subtype for adapters that support mid-stream steering or post-turn
- * follow-up. Sibling packages (the `thread-phase-agents` extension surface)
+ * follow-up. Sibling packages (the `@autonome-research/thread-phase-agents` extension surface)
  * return this from adapters whose underlying runtime accepts these calls —
  * e.g. ACP sessions, which can take multiple `session/prompt` requests
  * before the session is closed.

@@ -29,7 +29,7 @@
 import type {
   InferenceAgentConfig,
   ResumeToken,
-} from 'thread-phase/agents';
+} from '@autonome-research/thread-phase/agents';
 
 import type { AcpAgentConfig } from './acp/index.js';
 import type { AnthropicAgentConfig } from './anthropic/index.js';

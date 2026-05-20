@@ -32,12 +32,12 @@ import {
   type Message,
   type Phase,
   type ToolExecutor,
-} from 'thread-phase';
+} from '@autonome-research/thread-phase';
 import type {
   AgentEvent,
   MemoryProvider,
   MemoryScope,
-} from 'thread-phase/agents';
+} from '@autonome-research/thread-phase/agents';
 
 // ---------------------------------------------------------------------------
 // Honcho binding
@@ -227,7 +227,7 @@ async function main(): Promise<void> {
   // Inline runPipeline rather than JobRunner so the example is short.
   // For production, wrap with JobRunner + SqliteJobStore as in the
   // canonical template in AGENTS.md.
-  const { runPipeline } = await import('thread-phase');
+  const { runPipeline } = await import('@autonome-research/thread-phase');
   for await (const event of runPipeline(buildPipeline(memory), ctx)) {
     if (event.type === 'phase') console.log(`[${event.phase}] ${event.detail ?? ''}`);
   }

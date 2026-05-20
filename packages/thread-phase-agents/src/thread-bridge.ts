@@ -17,7 +17,7 @@
 import {
   threadToMessages,
   type Thread,
-} from 'thread-phase/agents';
+} from '@autonome-research/thread-phase/agents';
 
 import type { ContentBlock } from './acp/index.js';
 

@@ -8,8 +8,8 @@ import { describe, it, expect } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
 
-import { runAdapterConformance } from 'thread-phase/agents/test-utils';
-import type { AgentEvent } from 'thread-phase/agents';
+import { runAdapterConformance } from '@autonome-research/thread-phase/agents/test-utils';
+import type { AgentEvent } from '@autonome-research/thread-phase/agents';
 
 import { anthropicAgent, type AnthropicAgentConfig } from '../src/anthropic/index.js';
 

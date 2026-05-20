@@ -49,8 +49,8 @@ import {
   type SerializableError,
   type SteerableAgentRun,
   type StructuredOutputConfig,
-} from 'thread-phase/agents';
-import type { ToolCall } from 'thread-phase';
+} from '@autonome-research/thread-phase/agents';
+import type { ToolCall } from '@autonome-research/thread-phase';
 
 // We use the SDK's public re-exports, kept as `unknown` here to avoid
 // pulling pi's transitive type-only generics across the type boundary.

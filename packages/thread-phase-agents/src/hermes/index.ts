@@ -16,7 +16,7 @@
  * @internal
  */
 
-import { defineAgentAdapter, type AgentAdapterMeta } from 'thread-phase/agents';
+import { defineAgentAdapter, type AgentAdapterMeta } from '@autonome-research/thread-phase/agents';
 import {
   createAcpAdapter,
   type AcpAgentConfig,

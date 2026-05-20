@@ -11,7 +11,7 @@
  */
 
 import { piAgent } from '../src/pi/index.js';
-import { isSteerable } from 'thread-phase/agents';
+import { isSteerable } from '@autonome-research/thread-phase/agents';
 
 async function main(): Promise<void> {
   const cwd = process.cwd();

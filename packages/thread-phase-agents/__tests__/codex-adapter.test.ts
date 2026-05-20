@@ -8,8 +8,8 @@ import { describe, it, expect } from 'vitest';
 import type OpenAI from 'openai';
 import type { ResponseStreamEvent } from 'openai/resources/responses/responses.js';
 
-import { runAdapterConformance } from 'thread-phase/agents/test-utils';
-import type { AgentEvent } from 'thread-phase/agents';
+import { runAdapterConformance } from '@autonome-research/thread-phase/agents/test-utils';
+import type { AgentEvent } from '@autonome-research/thread-phase/agents';
 
 import { codexAgent, type CodexAgentConfig } from '../src/codex/index.js';
 

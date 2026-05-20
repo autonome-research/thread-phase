@@ -45,8 +45,8 @@ import {
   type AgentRunResult,
   type SerializableError,
   type StructuredOutputConfig,
-} from 'thread-phase/agents';
-import type { ToolCall } from 'thread-phase';
+} from '@autonome-research/thread-phase/agents';
+import type { ToolCall } from '@autonome-research/thread-phase';
 
 const ADAPTER_ID = 'anthropic';
 

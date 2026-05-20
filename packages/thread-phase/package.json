@@ -1,7 +1,7 @@
 {
-  "name": "thread-phase",
-  "version": "1.5.0",
-  "description": "TypeScript framework for the iterated tool-use loop against OpenAI-compatible inference (vLLM, Ollama, OpenAI, llama.cpp), composed into multi-phase pipelines with persistent event logs and concurrency-capped fanout.",
+  "name": "@autonome-research/thread-phase",
+  "version": "2.0.0",
+  "description": "TypeScript substrate for building automation workflows that coordinate AI agents. Phase ordering, typed shared state, persistence, fanout, event flow.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -25,8 +25,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "smoke": "tsx examples/smoke.ts",
-    "prepare": "tsc -p tsconfig.json"
+    "smoke": "tsx examples/smoke.ts"
   },
   "dependencies": {
     "ajv": "^8.17.0",
@@ -51,5 +50,10 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Code4me2/thread-phase.git",
+    "directory": "packages/thread-phase"
   }
 }

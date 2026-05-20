@@ -40,7 +40,7 @@ import {
   type AgentRunOptions,
   type AgentRunResult,
   type ResumeToken,
-} from 'thread-phase/agents';
+} from '@autonome-research/thread-phase/agents';
 
 import {
   ACP_METHODS,

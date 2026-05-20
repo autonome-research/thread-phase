@@ -2,7 +2,7 @@
  * Public entry point for the AgentAdapter protocol.
  *
  * The protocol surface is currently `@internal` — covered by no semver
- * guarantee until the first stable release of `thread-phase-agents`. Until
+ * guarantee until the first stable release of `@autonome-research/thread-phase-agents`. Until
  * then, every export here may change in a minor version.
  *
  * Subpath: `thread-phase/agents`.

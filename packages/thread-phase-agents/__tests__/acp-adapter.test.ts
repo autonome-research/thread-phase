@@ -10,8 +10,8 @@ import { describe, it, expect } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-import { runAdapterConformance } from 'thread-phase/agents/test-utils';
-import { isSteerable, type AgentEvent } from 'thread-phase/agents';
+import { runAdapterConformance } from '@autonome-research/thread-phase/agents/test-utils';
+import { isSteerable, type AgentEvent } from '@autonome-research/thread-phase/agents';
 
 import { acpAgent, createAcpAdapter, type AcpAgentConfig } from '../src/acp/index.js';
 

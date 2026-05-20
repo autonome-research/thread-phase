@@ -12,7 +12,7 @@ import { dirname, resolve } from 'node:path';
 
 import { hermesAgent, type HermesAgentConfig } from '../src/hermes/index.js';
 import { openClawAgent, type OpenClawAgentConfig } from '../src/openclaw/index.js';
-import type { AgentEvent } from 'thread-phase/agents';
+import type { AgentEvent } from '@autonome-research/thread-phase/agents';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STUB = resolve(__dirname, 'fixtures/acp-stub-agent.mjs');

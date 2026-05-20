@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { injectMemory, injectResume } from '../src/injectors.js';
-import type { InferenceAgentConfig, ResumeToken } from 'thread-phase/agents';
+import type { InferenceAgentConfig, ResumeToken } from '@autonome-research/thread-phase/agents';
 import type { AcpAgentConfig } from '../src/acp/index.js';
 import type { AnthropicAgentConfig } from '../src/anthropic/index.js';
 import type { CodexAgentConfig } from '../src/codex/index.js';
