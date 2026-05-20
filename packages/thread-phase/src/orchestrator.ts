@@ -17,15 +17,52 @@
 
 import type { BasePipelineContext, Phase, PipelineEvent } from './phase.js';
 
+/**
+ * The terminal state of a pipeline run.
+ *
+ * - `completed` — all phases ran to completion.
+ * - `stopped` — a phase set `ctx.stop`; pipeline halted cleanly with that reason.
+ *
+ * Phase exceptions do not produce a summary; they propagate to the caller.
+ * Use `runPipelineToSummary` to wrap the generator and convert throws into
+ * promise rejections (with the original error preserved).
+ */
+export interface PipelineSummary {
+  readonly status: 'completed' | 'stopped';
+  /** Present iff `status === 'stopped'`. The `ctx.stop.reason` value. */
+  readonly reason?: string;
+  /** Total events yielded, including the terminal `done` event. */
+  readonly eventCount: number;
+}
+
+export interface RunPipelineOptions {
+  /**
+   * AbortSignal observed between phases. If the signal aborts at any point,
+   * `runPipeline` throws an `AbortError` (`name === 'AbortError'`) before
+   * the next phase runs. Phases that want mid-phase cancellation should
+   * observe the signal themselves and unwind cleanly.
+   */
+  signal?: AbortSignal;
+}
+
 export async function* runPipeline<
   TCtx extends BasePipelineContext,
   TEvent = PipelineEvent,
 >(
   phases: ReadonlyArray<Phase<TCtx, TEvent>>,
   ctx: TCtx,
+  options?: RunPipelineOptions,
 ): AsyncGenerator<TEvent, void> {
+  const signal = options?.signal;
   try {
     for (const phase of phases) {
+      if (signal?.aborted) {
+        const reason =
+          (signal.reason as string | undefined) ?? 'aborted';
+        const err = new Error(`runPipeline aborted: ${reason}`);
+        err.name = 'AbortError';
+        throw err;
+      }
       yield* phase.run(ctx);
       if (ctx.stop) {
         yield { type: 'done', reason: ctx.stop.reason } as unknown as TEvent;
@@ -33,10 +70,38 @@ export async function* runPipeline<
       }
     }
     yield { type: 'done' } as unknown as TEvent;
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    yield { type: 'error', message } as unknown as TEvent;
   } finally {
     ctx.cache.clear();
   }
+}
+
+/**
+ * Consume `runPipeline` to completion and return a typed summary.
+ *
+ * On success, resolves with `{ status, reason?, eventCount }`. Phase
+ * exceptions reject the promise with the original error (the cache is
+ * still cleared via the generator's `finally`).
+ *
+ * Use this when you want a single `await` for the whole pipeline rather
+ * than iterating events yourself.
+ */
+export async function runPipelineToSummary<
+  TCtx extends BasePipelineContext,
+  TEvent extends PipelineEvent = PipelineEvent,
+>(
+  phases: ReadonlyArray<Phase<TCtx, TEvent>>,
+  ctx: TCtx,
+  options?: RunPipelineOptions,
+): Promise<PipelineSummary> {
+  let eventCount = 0;
+  let stopReason: string | undefined;
+  for await (const event of runPipeline<TCtx, TEvent>(phases, ctx, options)) {
+    eventCount++;
+    if ((event as PipelineEvent).type === 'done') {
+      stopReason = (event as { reason?: string }).reason;
+    }
+  }
+  return stopReason !== undefined
+    ? { status: 'stopped', reason: stopReason, eventCount }
+    : { status: 'completed', eventCount };
 }

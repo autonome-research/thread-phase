@@ -10,11 +10,30 @@ npm install -g @autonome-research/thread-phase-cli @autonome-research/thread-pha
 
 ```sh
 thread-phase list                    # show registered extensions
+thread-phase list --verbose          # …plus structural details per entry
 thread-phase run <pipeline-name>     # invoke a pipeline once and exit
+thread-phase run <name> --input ...  # override defaultInput (JSON literal, @file, or -)
 thread-phase serve                   # start all triggered pipelines (SIGINT/SIGTERM to stop)
+thread-phase serve --health-port N   # …with a /health endpoint on port N
 ```
 
 `run` replaces `npx tsx pipelines/foo.ts` once the pipeline is registered. `serve` is the systemd-unit / docker-container case — one long-running process per project hosting every triggered pipeline.
+
+### `run --input`
+
+Three forms for supplying input that overrides the pipeline's `defaultInput`:
+
+```sh
+thread-phase run digest --input '{"date":"2026-05-20"}'  # inline JSON
+thread-phase run digest --input @./payload.json          # read JSON from file
+echo '{"date":"2026-05-20"}' | thread-phase run digest --input -  # read from stdin
+```
+
+Invalid JSON or unreadable files exit 1 with a clear stderr message.
+
+### `serve --health-port`
+
+Opt-in health endpoint backed by `node:http`. While the serve loop is running it returns `200 {"status":"ok"}`. Once a shutdown signal arrives but pipelines are still draining it returns `503 {"status":"shutting_down"}`. The server stops listening when serve fully exits. Useful for k8s liveness/readiness probes or load-balancer drain checks.
 
 ## Extension layout
 

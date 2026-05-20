@@ -17,7 +17,11 @@
 
 // Phase framework
 export { PipelineCache } from './cache.js';
-export { runPipeline } from './orchestrator.js';
+export {
+  runPipeline,
+  runPipelineToSummary,
+  type PipelineSummary,
+} from './orchestrator.js';
 export {
   requireCtx,
   type Phase,

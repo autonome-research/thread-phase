@@ -153,27 +153,51 @@ export function discoverExtensionPaths(kindDir: string): string[] {
   return paths;
 }
 
-async function loadOne(path: string, registry: Registry): Promise<void> {
-  if (path.endsWith('.ts')) ensureTsxHook();
+/**
+ * Normalize the namespace object returned by a dynamic `import()`.
+ *
+ * Native ESM dynamic imports produce `{ default: <user-default> }`. When tsx
+ * transpiles to CJS (because the nearest package.json has no `"type":
+ * "module"`), Node wraps the CJS `module.exports` under `default`, so the
+ * user's `export default fn` ends up at `mod.default.default`. This helper
+ * unwraps that inner default so callers always see a single canonical
+ * `{ default?: T }` shape.
+ *
+ * Split from `loadModule` so the normalization can be unit-tested without
+ * depending on Node's module-resolver semantics (which the test runner can
+ * intercept).
+ */
+export function normalizeModuleShape<T>(mod: {
+  default?: T | { default?: T };
+}): { default?: T } {
+  const top = mod.default;
+  if (top !== null && typeof top === 'object' && 'default' in top) {
+    // CJS-transpiled shape: unwrap the inner default.
+    return { default: (top as { default?: T }).default };
+  }
+  return { default: top as T | undefined };
+}
 
-  const url = pathToFileURL(path).href;
+/**
+ * Import a module by URL and normalize its shape via `normalizeModuleShape`.
+ * Callers always see `{ default?: T }` regardless of whether the source was
+ * loaded as native ESM or CJS-transpiled.
+ */
+export async function loadModule<T>(url: string): Promise<{ default?: T }> {
+  if (url.endsWith('.ts')) ensureTsxHook();
+
   const mod = (await import(url)) as {
-    default?: ExtensionRegisterFn | { default?: ExtensionRegisterFn };
+    default?: T | { default?: T };
   };
 
-  // Handle the ESM/CJS interop case where tsx transpiles to CJS and the
-  // dynamic import wraps `module.exports` under `default`. In that shape,
-  // the user's `export default fn` becomes `mod.default.default`.
-  let registerFn: ExtensionRegisterFn | undefined;
-  if (typeof mod.default === 'function') {
-    registerFn = mod.default;
-  } else if (
-    mod.default !== null &&
-    typeof mod.default === 'object' &&
-    typeof mod.default.default === 'function'
-  ) {
-    registerFn = mod.default.default;
-  }
+  return normalizeModuleShape<T>(mod);
+}
+
+async function loadOne(path: string, registry: Registry): Promise<void> {
+  const url = pathToFileURL(path).href;
+  const mod = await loadModule<ExtensionRegisterFn>(url);
+
+  const registerFn = mod.default;
 
   if (typeof registerFn !== 'function') {
     throw new Error(

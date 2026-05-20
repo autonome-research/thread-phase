@@ -9,10 +9,12 @@ examples/
   .thread-phase/
     triggers/morning-timer.ts          ← register a Trigger by name
     adapters/claude-with-flags.ts      ← register a custom AgentAdapter by name
+    lib/poll-until.ts                  ← shared user-side pattern (not auto-loaded)
     pipelines/
       minimal.ts                       ← one-shot pipeline, literal ctx
       morning-digest.ts                ← triggered pipeline, factory ctx, uses boundedFanout
       heterogeneous-chain.ts           ← claude-code → codex → anthropic via Thread
+      poll-job.ts                      ← imports pollUntil from ../lib/ (shared-code convention)
 ```
 
 Plus per-package examples that exercise core/agents without the CLI:

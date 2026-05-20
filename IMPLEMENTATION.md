@@ -1,5 +1,9 @@
 # thread-phase 2.x — Implementation Plan
 
+> Status: **v2.4.0 shipped** (post-2.3 review pass). v2.5.0 (features: declarative pipeline format #6 + sub-pipeline composition #8) and v3.0.0 (async JobStore #7) remain. See entries below.
+
+
+
 The plan for migrating thread-phase to a monorepo, extending it with extension surfaces (triggers, patterns, adapters, pipelines) and a CLI, and shipping it under the `@autonome-research/` scope.
 
 Track progress by checking items off as they land.

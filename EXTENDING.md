@@ -102,6 +102,50 @@ When the extension needs its own npm dependencies (e.g. `fastify`, `redis`, `cho
 
 Install with `npm install` from inside the extension folder, or set up a workspace.
 
+## Shared code via `.thread-phase/lib/`
+
+The loader only scans the three registered kinds (`triggers/`, `adapters/`, `pipelines/`). For shared user-side code — custom patterns, helpers, types used by more than one extension — the convention is `.thread-phase/lib/`.
+
+Rules:
+
+- Files under `.thread-phase/lib/` are **not auto-loaded**. They have no default-export contract.
+- Other extensions reach into them via relative imports (`../lib/<name>.js`).
+- Use it for: custom patterns (factory functions that return a `Phase`), shared `Ctx` interfaces, prompt strings, small utilities. Anything that would otherwise live in a registered file just because there was nowhere else to put it.
+- A single-pipeline helper can stay inline in that pipeline. Promote to `lib/` once a second caller appears.
+
+Why under `.thread-phase/` and not a top-level `lib/`? It keeps every thread-phase concern under one tree (so agents reading the project can locate the corpus by inspecting one directory) and stays out of the way of any `src/` or `lib/` the host project already uses for its application code.
+
+Example layout:
+
+```
+.thread-phase/
+  lib/
+    poll-until.ts          ← a custom pattern wrapping whileCondition
+  pipelines/
+    poll-job.ts            ← imports { pollUntil } from '../lib/poll-until.js'
+    poll-deployment.ts     ← imports the same helper
+```
+
+`lib/poll-until.ts`:
+
+```ts
+import { whileCondition } from '@autonome-research/thread-phase/patterns';
+import type { BasePipelineContext, Phase } from '@autonome-research/thread-phase';
+
+export function pollUntil<TCtx extends BasePipelineContext>(
+  name: string,
+  options: { probe: Phase<TCtx>; done: (ctx: TCtx) => boolean | Promise<boolean>; maxIterations?: number },
+): Phase<TCtx> {
+  return whileCondition<TCtx>(name, {
+    predicate: async (ctx) => !(await options.done(ctx)),
+    body: [options.probe],
+    maxIterations: options.maxIterations ?? 20,
+  });
+}
+```
+
+A pipeline imports it the same way it would any local module — see `examples/.thread-phase/pipelines/poll-job.ts` for a working caller.
+
 ## Per-extension failure isolation
 
 If an extension throws during load (missing import, bad default export, runtime error inside the register function), the loader logs the path + error and **continues with the remaining extensions**. The CLI's other extensions still load, and `list` / `run` / `serve` still work for the ones that succeeded.
@@ -214,7 +258,7 @@ If your extension needs a new kernel primitive, open an issue first. The framewo
 
 ## Where to find examples
 
-- **`examples/.thread-phase/`** — the canonical corpus for the auto-loader. Read these files first; copy and adapt.
+- **`examples/.thread-phase/`** — the canonical corpus for the auto-loader. Read these files first; copy and adapt. Includes `lib/poll-until.ts` demonstrating the shared-code convention.
 - **`packages/thread-phase/examples/`** — library-only examples (no CLI required).
 - **`packages/thread-phase/examples/patterns/`** — `whileCondition`, `match`, `withRetry`.
 - **`packages/thread-phase/examples/triggers/`** — HTTP and queue adapters as recipes (not in core).

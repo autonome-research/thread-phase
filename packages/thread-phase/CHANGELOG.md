@@ -4,6 +4,34 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-05-20
+
+Cleanup pass addressing the post-2.3 review (problems 1, 4, 9 from the review). Breaking on the error and cancellation contracts; clean separation of concerns is the new state.
+
+### Breaking — error model
+
+- **`runPipeline` no longer catches phase exceptions.** Phase throws propagate to the for-await consumer (or to `runPipelineToSummary`'s promise rejection). The `error` event type on `PipelineEvent` is now only synthesized by `JobRunner` for the persistent event log; live consumers of `runPipeline` directly should `try` around the for-await loop.
+- **`JobRunner.run` returns `Promise<PipelineSummary>` and rejects on failure.** Previously returned `Promise<void>` and silently set job status. Phase exceptions now reject with the original error (after `setFailed` + synthesized error event have been written + emitted); cancellation rejects with an `AbortError`-shaped Error (`name === 'AbortError'`).
+- **`runTrigger` drops the `jobStore` option.** No longer needed — the runner reports failure through its rejection, so `runTrigger` uses simple try/catch around dispatch.
+
+### Added — orchestrator
+
+- **`PipelineSummary`** type — terminal state of a pipeline run, `{ status: 'completed' | 'stopped', reason?, eventCount }`.
+- **`runPipelineToSummary(phases, ctx, options?)`** helper — consumes the generator and resolves with the summary. Phase exceptions reject the promise.
+- **`runPipeline(phases, ctx, options?)`** now accepts `{ signal }`. The signal is checked between phases; aborting throws an `AbortError`. Mid-phase observation is the phase's responsibility (e.g. via `ctx.signal`).
+
+### Added — cancellation + observability (problem 4 + 9)
+
+- **`BasePipelineContext.signal?`** — optional AbortSignal populated by `runTrigger` per dispatch so phases can observe mid-phase cancellation. Phases that wrap `runAgentWithTools` should pass it as `{ signal: ctx.signal }`.
+- **`RunTriggerHandle.cancel(triggerEventId): boolean`** — abort one specific in-flight pipeline. Returns `true` if found, `false` if the id is unknown or the pipeline already completed. Delegates to `jobRunner.cancel(jobId)` in JobRunner mode, otherwise aborts the dispatch's own controller.
+- **`runTrigger` callbacks `onCapacityFull(event)` and `onDispatchStart(event)`** — observability hooks for backpressure (fires when an event arrives at-cap) and dispatch lifecycle. Complements the existing `onStart` / `onComplete` / `onError`.
+
+### Notes
+
+- 290 tests in the core package (was 280). Five additional cycles covered the contract changes and the new APIs.
+- `runPipeline`'s try-block around phase iteration was removed; the `finally` (cache clear) remains.
+- All sibling packages release in lockstep at 2.4.0.
+
 ## [2.3.0] — 2026-05-20
 
 Locked-version release alongside the new `@autonome-research/thread-phase-cli` package. Core changes are minor.

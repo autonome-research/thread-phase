@@ -21,7 +21,7 @@
 
 import { EventEmitter } from 'events';
 import type { BasePipelineContext, Phase, PipelineEvent } from '../phase.js';
-import { runPipeline } from '../orchestrator.js';
+import { runPipeline, type PipelineSummary } from '../orchestrator.js';
 import type { JobStore } from './job-store.js';
 
 export interface LiveEvent {
@@ -75,26 +75,40 @@ export class JobRunner extends EventEmitter {
 
   /**
    * Run a pipeline as job `jobId`. Persists every event, emits on `job:${id}`.
-   * Resolves when the pipeline completes (or fails). Errors are caught and
-   * persisted; they do not throw out of this method.
    *
-   * The caller controls the pipeline composition by passing phases + ctx.
-   *
-   * Generic over `TEvent` so downstream apps that parameterize Phase with a
-   * custom event type get the same type through the run loop. TEvent must
-   * include the framework's `error` shape (it's used to narrow on failure)
-   * — typically downstream defines `type MyEvent = PipelineEvent | { ... }`.
+   * Returns a `PipelineSummary` on success; rejects with the original error
+   * on phase failure (after the runner has marked the job FAILED, written a
+   * synthesized `error` event to the store, and emitted it to subscribers).
+   * Cancellation via `runner.cancel(jobId, reason)` rejects with an
+   * `AbortError`-shaped Error (`name === 'AbortError'`); the same FAILED
+   * persistence path runs first.
    */
   async run<TCtx extends BasePipelineContext, TEvent extends PipelineEvent = PipelineEvent>(
     jobId: string,
     phases: ReadonlyArray<Phase<TCtx, TEvent>>,
     ctx: TCtx,
     finalResult?: () => unknown,
-  ): Promise<void> {
+  ): Promise<PipelineSummary> {
     const controller = new AbortController();
     this.inflight.set(jobId, controller);
 
     this.store.setRunning(jobId);
+
+    let eventCount = 0;
+    let stopReason: string | undefined;
+
+    const persistError = (message: string): void => {
+      this.store.setFailed(jobId, message);
+      const errEvent: PipelineEvent = { type: 'error', message };
+      const eventId = this.store.appendEvent(jobId, errEvent);
+      this.emit(`job:${jobId}`, {
+        id: eventId,
+        jobId,
+        eventType: 'error',
+        data: errEvent,
+        createdAt: new Date().toISOString(),
+      } satisfies LiveEvent);
+    };
 
     try {
       for await (const event of runPipeline<TCtx, TEvent>(phases, ctx)) {
@@ -106,44 +120,32 @@ export class JobRunner extends EventEmitter {
           data: event,
           createdAt: new Date().toISOString(),
         } satisfies LiveEvent);
+        eventCount++;
 
-        if (event.type === 'error') {
-          this.store.setFailed(jobId, event.message);
-          return;
+        if ((event as PipelineEvent).type === 'done') {
+          stopReason = (event as { reason?: string }).reason;
         }
 
         if (controller.signal.aborted) {
           const reason =
             (controller.signal.reason as string | undefined) ?? 'cancelled';
-          this.store.setFailed(jobId, `cancelled: ${reason}`);
-          const cancelEvent: PipelineEvent = {
-            type: 'error',
-            message: `cancelled: ${reason}`,
-          };
-          const cancelEventId = this.store.appendEvent(jobId, cancelEvent);
-          this.emit(`job:${jobId}`, {
-            id: cancelEventId,
-            jobId,
-            eventType: 'error',
-            data: cancelEvent,
-            createdAt: new Date().toISOString(),
-          } satisfies LiveEvent);
-          return;
+          persistError(`cancelled: ${reason}`);
+          const err = new Error(`cancelled: ${reason}`);
+          err.name = 'AbortError';
+          throw err;
         }
       }
       this.store.setCompleted(jobId, finalResult ? finalResult() : null);
+      return stopReason !== undefined
+        ? { status: 'stopped', reason: stopReason, eventCount }
+        : { status: 'completed', eventCount };
     } catch (err: unknown) {
+      // Re-throw cancellation rejections (already persisted above).
+      if (err instanceof Error && err.name === 'AbortError') throw err;
+      // Phase exception: persist + rethrow.
       const message = err instanceof Error ? err.message : String(err);
-      this.store.setFailed(jobId, message);
-      const errEvent: PipelineEvent = { type: 'error', message };
-      const eventId = this.store.appendEvent(jobId, errEvent);
-      this.emit(`job:${jobId}`, {
-        id: eventId,
-        jobId,
-        eventType: 'error',
-        data: errEvent,
-        createdAt: new Date().toISOString(),
-      } satisfies LiveEvent);
+      persistError(message);
+      throw err;
     } finally {
       this.inflight.delete(jobId);
     }

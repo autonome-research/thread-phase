@@ -141,7 +141,10 @@ describe('JobRunner.cancel propagates into runAgentWithTools', () => {
       const runPromise = runner.run(jobId, [phase], ctx);
       // Cancel after the stream has started but well before the 100-tick mock would finish.
       setTimeout(() => runner.cancel(jobId, 'user-stop'), 30);
-      await runPromise;
+      await expect(runPromise).rejects.toMatchObject({
+        name: 'AbortError',
+        message: /cancelled.*user-stop/,
+      });
 
       // The agent saw the signal and returned with finishReason=error.
       expect(ctx.agentResult).toBe('error');

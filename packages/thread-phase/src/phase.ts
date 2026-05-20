@@ -34,6 +34,13 @@ export interface BasePipelineContext {
   readonly cache: PipelineCache;
   /** Set by any phase to halt the rest of the pipeline. */
   stop?: { reason: string };
+  /**
+   * Optional AbortSignal observable by phases for mid-phase cancellation.
+   * Populated by `runTrigger` per dispatch; `runPipeline` checks it
+   * between phases as well. Phases doing long async work should pass
+   * this into `runAgentWithTools({ signal })` or observe it directly.
+   */
+  signal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------

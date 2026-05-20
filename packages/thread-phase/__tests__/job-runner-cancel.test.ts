@@ -35,6 +35,42 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+describe('JobRunner.run summary', () => {
+  it('returns a completed PipelineSummary on success', async () => {
+    const phase: Phase<Ctx> = {
+      name: 'work',
+      async *run() {
+        yield { type: 'phase', phase: 'work' };
+      },
+    };
+    const jobId = runner.create('test', null);
+    const summary = await runner.run(jobId, [phase], { cache: new PipelineCache() });
+    expect(summary).toEqual({ status: 'completed', eventCount: 2 });
+  });
+
+  it('rejects with the phase error, marks job FAILED, writes a synthesized error event', async () => {
+    const phase: Phase<Ctx> = {
+      name: 'boom',
+      async *run() {
+        yield { type: 'phase', phase: 'boom' };
+        throw new Error('explicit boom');
+      },
+    };
+    const jobId = runner.create('failing', null);
+    await expect(
+      runner.run(jobId, [phase], { cache: new PipelineCache() }),
+    ).rejects.toThrow(/explicit boom/);
+
+    const job = store.getJob(jobId)!;
+    expect(job.status).toBe('FAILED');
+    expect(job.error).toBe('explicit boom');
+
+    const events = store.getEvents(jobId);
+    const lastEvent = events.at(-1)!;
+    expect(lastEvent.eventType).toBe('error');
+  });
+});
+
 describe('JobRunner.cancel', () => {
   it('signalFor returns undefined for unknown jobs', () => {
     expect(runner.signalFor('nope')).toBeUndefined();
@@ -73,7 +109,10 @@ describe('JobRunner.cancel', () => {
     const runPromise = runner.run(jobId, [phase], { cache: new PipelineCache() });
     // Cancel after a few ticks.
     setTimeout(() => runner.cancel(jobId, 'user-stop'), 30);
-    await runPromise;
+    await expect(runPromise).rejects.toMatchObject({
+      name: 'AbortError',
+      message: /cancelled.*user-stop/,
+    });
     const job = store.getJob(jobId)!;
     expect(job.status).toBe('FAILED');
     expect(job.error).toMatch(/cancelled.*user-stop/);
@@ -102,7 +141,9 @@ describe('JobRunner.cancel', () => {
     const jobId = runner.create('wired', null);
     const p = runner.run(jobId, [phase], { cache: new PipelineCache() });
     setTimeout(() => runner.cancel(jobId, 'wired-cancel'), 20);
-    await p;
+    // Phase throws 'aborted' synchronously off the signal listener; that
+    // surfaces as a phase failure (not the runner's AbortError path).
+    await expect(p).rejects.toThrow(/aborted/);
     expect(capturedSignal).toBeDefined();
     expect(capturedSignal!.aborted).toBe(true);
     const job = store.getJob(jobId)!;

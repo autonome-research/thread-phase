@@ -4,6 +4,29 @@ All notable changes to this package are documented here.
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-05-20
+
+CLI ergonomics + shared-code convention. Reads the post-2.3 review and lands the items that mapped to this package (#2, #3, #5, #10, #11).
+
+### Added
+
+- **`list --verbose`** — `thread-phase list -v` prints each registry entry's structural details indented underneath it, so an agent can decide whether to invoke a pipeline without reading source. Triggers report their class name; adapters report id, source, and capabilities; pipelines report source, description, trigger binding, whether `phases`/`ctx` are literal or factory, and `defaultInput` (JSON-stringified).
+- **`run <name> --input <value>`** — override `defaultInput` on a one-shot run. Three forms: `--input '{"json":"literal"}'` (inline JSON), `--input @path/to/file.json` (file), `--input -` (stdin). Invalid JSON or unreadable files exit 1 with a `invalid --input: …` stderr message.
+- **`serve --health-port <n>`** — opt-in tiny `node:http` health endpoint. Returns `200 {"status":"ok"}` while the serve loop is running, `503 {"status":"shutting_down"}` after stop() begins but before all pipelines drain, and stops listening cleanly when serve exits.
+- **`RunCliOptions.stdin`** and **`RunCliOptions.abortSignal`** — new optional fields exposed for embedders/tests. `stdin` backs `--input -`; `abortSignal` initiates the same shutdown path as SIGINT/SIGTERM.
+
+### Changed
+
+- **Loader internals refactored** (#5). The ESM/CJS-interop unwrap moved out of `loadOne` into a pure `normalizeModuleShape<T>(mod)` plus a thin `loadModule<T>(url)` wrapper. Both are exported. `loadOne` now reads cleanly: `await loadModule(url)`, then check for a function default. The pure normalizer is unit-tested directly (vitest's resolver always delivers ESM shape, so this is the only honest unit boundary).
+
+### Documentation
+
+- **Shared-code convention** (#10). Documented `.thread-phase/lib/` as the conventional home for user-side code shared between extensions (custom patterns, helpers, shared types). Files under `lib/` are **not** auto-loaded — the loader still scans only `triggers/`, `adapters/`, and `pipelines/` — they're imported by registered extensions via relative paths. New section in `EXTENDING.md` and a working example at `examples/.thread-phase/lib/poll-until.ts`, consumed by `examples/.thread-phase/pipelines/poll-job.ts`.
+
+### Tests
+
+- 29 total (was 15). 10 new CLI tests (verbose list, three input forms + error path, three health-port states), 3 new loader tests (normalizer ESM passthrough, CJS unwrap, no-default), 1 fixture cleanup (unused `cjs-default.cjs` removed).
+
 ## [2.3.0] — 2026-05-20
 
 Initial release of the CLI and auto-loader.

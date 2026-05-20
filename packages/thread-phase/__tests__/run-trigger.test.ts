@@ -114,7 +114,6 @@ describe('runTrigger', () => {
       }),
       {
         jobRunner: runner,
-        jobStore: store,
         pipelineName: 'test-pipeline',
         maxConcurrency: 1,
       },
@@ -317,5 +316,132 @@ describe('runTrigger', () => {
 
     // Both in-flight pipelines completed before done resolved.
     expect(captured.sort()).toEqual(['1', '2']);
+  });
+
+  it('handle.cancel(eventId) aborts that pipeline and returns true', async () => {
+    const trigger = new ManualTrigger<number>();
+    let aborted = false;
+    const captured: string[] = [];
+
+    const longPhase: Phase<Ctx> = {
+      name: 'long',
+      async *run(ctx) {
+        // Observe a phase-supplied AbortSignal via runPipeline's signal forward.
+        // Hold for 500ms or until abort.
+        await new Promise<void>((resolve, reject) => {
+          const t = setTimeout(resolve, 500);
+          const sig = (ctx as Ctx & { signal?: AbortSignal }).signal;
+          sig?.addEventListener('abort', () => {
+            clearTimeout(t);
+            aborted = true;
+            reject(new Error('cancelled'));
+          });
+        });
+        captured.push(String(ctx.input));
+        yield { type: 'phase', phase: 'long' };
+      },
+    };
+
+    // Capture the signal off ctx so the phase can react.
+    const handle = runTrigger(
+      trigger,
+      (input) => {
+        const ctx = makeCtx(input) as Ctx & { signal?: AbortSignal };
+        return { phases: [longPhase], ctx };
+      },
+      { maxConcurrency: 3 },
+    );
+
+    trigger.push(1);
+    await sleep(10);
+    // We need a way to get the signal into ctx. We'll do that via the
+    // dispatch-internal AbortController surfaced through onStart's eventId
+    // mapping. For this test, just cancel by eventId and assert the return.
+    const cancelled = handle.cancel(1);
+    expect(cancelled).toBe(true);
+
+    await sleep(20);
+    await handle.stop();
+    await handle.done;
+
+    // The pipeline didn't complete (captured stays empty).
+    expect(captured).toEqual([]);
+    // The dispatch was aborted (cancellation propagated).
+    expect(aborted).toBe(true);
+  });
+
+  it('handle.cancel(eventId) returns false for unknown / completed events', async () => {
+    const trigger = new ManualTrigger<string>();
+    const captured: string[] = [];
+
+    const handle = runTrigger(
+      trigger,
+      (input) => ({ phases: [tagPhase(captured)], ctx: makeCtx(input) }),
+    );
+
+    trigger.push('one');
+    await sleep(30);
+
+    // Event 1 already finished; cancel returns false.
+    expect(handle.cancel(1)).toBe(false);
+    // Event 99 never existed.
+    expect(handle.cancel(99)).toBe(false);
+
+    await handle.stop();
+    await handle.done;
+  });
+
+  it('onCapacityFull fires when an event arrives while at the concurrency cap', async () => {
+    const trigger = new ManualTrigger<number>();
+    const onCapacityFull = vi.fn();
+    const captured: string[] = [];
+
+    const slowPhase: Phase<Ctx> = {
+      name: 'slow',
+      async *run(ctx) {
+        await sleep(40);
+        captured.push(String(ctx.input));
+        yield { type: 'phase', phase: 'slow' };
+      },
+    };
+
+    const handle = runTrigger(
+      trigger,
+      (input) => ({ phases: [slowPhase], ctx: makeCtx(input) }),
+      { maxConcurrency: 1, onCapacityFull },
+    );
+
+    for (let i = 1; i <= 3; i++) trigger.push(i);
+
+    await sleep(150);
+    await handle.stop();
+    await handle.done;
+
+    // 1 dispatched immediately; 2 and 3 arrived at-cap before the slot freed
+    // — onCapacityFull fires for each of those backpressure events.
+    expect(onCapacityFull).toHaveBeenCalledTimes(2);
+    expect(captured.sort()).toEqual(['1', '2', '3']);
+  });
+
+  it('onDispatchStart fires for each pipeline before onStart', async () => {
+    const trigger = new ManualTrigger<string>();
+    const order: string[] = [];
+    const captured: string[] = [];
+
+    const handle = runTrigger(
+      trigger,
+      (input) => ({ phases: [tagPhase(captured)], ctx: makeCtx(input) }),
+      {
+        onDispatchStart: (event) => order.push(`dispatch:${event.id}`),
+        onStart: (event) => order.push(`start:${event.id}`),
+      },
+    );
+
+    trigger.push('a');
+    await sleep(30);
+    await handle.stop();
+    await handle.done;
+
+    expect(order).toEqual(['dispatch:1', 'start:1']);
   });
 });

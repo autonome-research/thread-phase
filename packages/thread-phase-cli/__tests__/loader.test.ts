@@ -4,10 +4,59 @@
 
 import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { Registry } from '../src/registry.js';
-import { loadExtensions, discoverExtensionPaths } from '../src/loader.js';
+import {
+  loadExtensions,
+  discoverExtensionPaths,
+  loadModule,
+  normalizeModuleShape,
+} from '../src/loader.js';
 
 const fixtures = (name: string) => join(import.meta.dirname, 'fixtures', name);
+const fixtureUrl = (...parts: string[]) =>
+  pathToFileURL(join(import.meta.dirname, 'fixtures', ...parts)).href;
+
+describe('normalizeModuleShape', () => {
+  // Pure unit tests for the ESM/CJS-interop normalizer. Vitest's own module
+  // transform intercepts dynamic `import()` of both .ts and .cjs files and
+  // delivers an ESM-shape namespace, so we can't reliably reproduce tsx's
+  // CJS-wrapped shape through a real `await import(url)` inside the test
+  // runner. Exercising the normalizer directly with hand-constructed
+  // namespaces is the honest unit boundary.
+
+  it('passes through the native-ESM shape unchanged', () => {
+    const fn = (x: number) => x * 2;
+    const norm = normalizeModuleShape<(x: number) => number>({ default: fn });
+    expect(norm.default).toBe(fn);
+  });
+
+  it('unwraps the CJS-transpiled default-of-default shape', () => {
+    const fn = (x: number) => x * 3;
+    // tsx's CJS transpile mode yields exactly this shape on dynamic import.
+    const norm = normalizeModuleShape<(x: number) => number>({
+      default: { default: fn },
+    });
+    expect(norm.default).toBe(fn);
+  });
+});
+
+describe('loadModule', () => {
+  it('returns { default: <function> } for a native-ESM .ts file', async () => {
+    const mod = await loadModule<(x: number) => number>(
+      fixtureUrl('module-shapes', 'esm-default.ts'),
+    );
+    expect(typeof mod.default).toBe('function');
+    expect(mod.default?.(3)).toBe(6);
+  });
+
+  it('returns { default: undefined } for a file with no default export', async () => {
+    const mod = await loadModule<(x: number) => number>(
+      fixtureUrl('module-shapes', 'no-default.ts'),
+    );
+    expect(mod.default).toBeUndefined();
+  });
+});
 
 describe('loadExtensions', () => {
   it('loads tier-1 loose .ts files', async () => {

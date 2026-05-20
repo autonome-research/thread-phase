@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { runPipeline } from '../src/orchestrator.js';
+import { runPipeline, runPipelineToSummary } from '../src/orchestrator.js';
 import { PipelineCache } from '../src/cache.js';
 import type { Phase, BasePipelineContext, PipelineEvent } from '../src/phase.js';
 
@@ -54,14 +54,11 @@ describe('runPipeline', () => {
     expect(events.at(-1)).toEqual({ type: 'done', reason: 'short-circuit' });
   });
 
-  it('catches phase errors and emits an error event (does not throw)', async () => {
+  it('propagates phase throws to the for-await consumer', async () => {
     const ctx: Ctx = { cache: new PipelineCache(), failHere: 'b' };
-    const events = await collect(runPipeline([visit('a'), visit('b'), visit('c')], ctx));
-    const last = events.at(-1);
-    expect(last?.type).toBe('error');
-    if (last?.type === 'error') {
-      expect(last.message).toMatch(/fail in b/);
-    }
+    await expect(
+      collect(runPipeline([visit('a'), visit('b'), visit('c')], ctx)),
+    ).rejects.toThrow(/fail in b/);
     expect(ctx.visited).toEqual(['a', 'b']);
   });
 
@@ -77,5 +74,61 @@ describe('runPipeline', () => {
     const ctx: Ctx = { cache: new PipelineCache() };
     await collect(runPipeline(phases, ctx));
     expect(ctx.visited).toEqual(['only']);
+  });
+
+  it('aborts between phases when the signal fires, throwing AbortError', async () => {
+    const controller = new AbortController();
+    const ctx: Ctx = { cache: new PipelineCache() };
+    const a: Phase<Ctx> = {
+      name: 'a',
+      async *run() {
+        controller.abort('caller cancelled');
+        yield { type: 'phase', phase: 'a' };
+      },
+    };
+    const b: Phase<Ctx> = {
+      name: 'b',
+      async *run() {
+        yield { type: 'phase', phase: 'b' };
+      },
+    };
+    await expect(
+      collect(runPipeline([a, b], ctx, { signal: controller.signal })),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+});
+
+describe('runPipelineToSummary', () => {
+  it('returns a completed summary on normal success', async () => {
+    const ctx: Ctx = { cache: new PipelineCache() };
+    const summary = await runPipelineToSummary([visit('a'), visit('b')], ctx);
+    expect(summary).toEqual({
+      status: 'completed',
+      eventCount: 3, // 2 phase events + 1 done
+    });
+    expect(ctx.visited).toEqual(['a', 'b']);
+  });
+
+  it('rejects with the original error when a phase throws', async () => {
+    const ctx: Ctx = { cache: new PipelineCache(), failHere: 'b' };
+    await expect(
+      runPipelineToSummary([visit('a'), visit('b'), visit('c')], ctx),
+    ).rejects.toThrow(/fail in b/);
+    // Cache should still be cleared via the generator's finally
+    expect(ctx.cache.size).toBe(0);
+  });
+
+  it('returns a stopped summary with reason when a phase sets ctx.stop', async () => {
+    const ctx: Ctx = { cache: new PipelineCache() };
+    const summary = await runPipelineToSummary(
+      [visit('a'), stop('b', 'short-circuit'), visit('c')],
+      ctx,
+    );
+    expect(summary).toEqual({
+      status: 'stopped',
+      reason: 'short-circuit',
+      eventCount: 2, // a's phase event + done(reason)
+    });
+    expect(ctx.visited).toEqual(['a', 'b']);
   });
 });
