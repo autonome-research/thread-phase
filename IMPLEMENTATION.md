@@ -75,13 +75,13 @@ Work happens in a scratch directory; the existing repos stay untouched until the
 
 `packages/thread-phase/src/patterns/`:
 
-- [ ] `while-condition.ts` — `whileCondition(name, { predicate, body, maxIterations })`; predicate is async, runs before each iteration; emits `convergence` event on exit
-- [ ] `match.ts` — `match(name, { selector, cases, default? })`; null selector = skip; emits `phase_branch` with `taken: key | 'default' | 'skip'`
-- [ ] `with-retry.ts` — `withRetry(phase, { maxAttempts, baseDelayMs, isFailure?, onRetry?, resetState? })`; retries on `ctx.stop` OR throw; no ctx snapshot by default
-- [ ] Tests for each (mirror existing patterns' test files)
-- [ ] Examples in `examples/patterns/{while-condition,match,with-retry}.ts`
-- [ ] Update `docs/patterns.md` with selection guidance
-- [ ] Tag `v2.1.0`
+- [x] `while-condition.ts` — `whileCondition(name, { predicate, body, maxIterations })`; predicate is async, runs before each iteration; emits `data` events for `converged` and `max-iterations`
+- [x] `match.ts` — `match(name, { selector, cases, default? })`; null selector = skip; emits `data` event `${name}.taken` with `{ taken: key | 'default' | 'skip' }`
+- [x] `with-retry.ts` — `withRetry(phase, { maxAttempts, baseDelayMs, isFailure?, onRetry?, resetState? })`; retries on `ctx.stop` OR throw; no ctx snapshot by default
+- [x] Tests for each (26 new tests across 3 files; 261 total in core)
+- [x] Examples in `examples/patterns/{while-condition,match,with-retry}.ts` — all run end-to-end
+- [x] Updated `docs/patterns.md` with selection guidance and per-pattern sections
+- [x] Tag `v2.1.0`
 
 ---
 

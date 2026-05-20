@@ -4,6 +4,27 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-05-20
+
+Locked-version release in step with `@autonome-research/thread-phase@2.1.0`. No adapter changes.
+
+## [2.0.0] — 2026-05-20
+
+Structural release. No adapter changes.
+
+### Changed
+
+- Package renamed from `thread-phase-agents` to `@autonome-research/thread-phase-agents`.
+- Now lives in the `thread-phase` monorepo at `packages/thread-phase-agents/`.
+- Peer dep updated to `@autonome-research/thread-phase@^2.0.0`.
+
+### Migrating from 0.1.x
+
+```diff
+- import { claudeCodeAgent } from 'thread-phase-agents';
++ import { claudeCodeAgent } from '@autonome-research/thread-phase-agents';
+```
+
 ## [0.1.0] — 2026-05-16
 
 First release with a complete adapter set. Seven adapters covering CLI-based coding agents (claude-code, codex CLI) and in-process SDK agents (anthropic, codex Responses, pi), plus the ACP chassis and its two wrappers (hermes, openclaw). All four adapters that have binaries on the development machine (claude-code, hermes, codex-cli, pi) verified end-to-end via real-binary smoke scripts under `scripts/`.

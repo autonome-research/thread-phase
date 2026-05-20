@@ -157,6 +157,9 @@ In `@autonome-research/thread-phase/patterns`:
 | `preflightConfidence` | Score feasibility before spending big-model tokens |
 | `synthesizeWithFollowup` | Synthesizer reviews its own output; may request another round |
 | `spotCheck` | Verify a sample of typed claims |
+| `whileCondition` | Loop a body of phases while an async predicate holds, with a max-iteration cap |
+| `match` | Keyed dispatch — route to one of N phase lists by selector key |
+| `withRetry` | Higher-order wrapper retrying a phase with exponential backoff on failure |
 
 See [`docs/patterns.md`](./docs/patterns.md) for selection guidance ("I want to do X" → "use Y").
 

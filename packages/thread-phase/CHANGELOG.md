@@ -4,6 +4,40 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-05-20
+
+Three new patterns. Additive only.
+
+### Added
+
+- **`whileCondition(name, { predicate, body, maxIterations })`** — general convergence loop. Async predicate runs before each iteration (`while`-semantics, not `do/while`). Emits `data` event `${name}.converged` on exit-by-predicate, `${name}.max-iterations` on cap-hit (and sets `ctx.stop`). Halts immediately if the body sets `ctx.stop`.
+- **`match(name, { selector, cases, default? })`** — keyed dispatch over phases. Selector returns a case key, an unknown key (→ `default` or skip), or `null` (→ skip silently). Emits a `data` event with key `${name}.taken` and value `{ taken: key | 'default' | 'skip' }`. Generalizes if/else; for two-case dispatch, return the key from the selector.
+- **`withRetry(phase, { maxAttempts, baseDelayMs, isFailure?, onRetry?, resetState? })`** — higher-order phase wrapper that retries on both thrown exceptions and `ctx.stop` (override with `isFailure`). Exponential backoff. Does not snapshot `ctx` — caller's responsibility to be idempotent or to use `resetState` to undo partial work between attempts. Preserves the inner phase's `name`.
+
+### Notes
+
+- Examples under `examples/patterns/`. Selection guidance in `docs/patterns.md`.
+- 26 new tests, 261 total in the core package.
+
+## [2.0.0] — 2026-05-20
+
+Structural release. No new features.
+
+### Changed
+
+- Repo restructured as an npm-workspaces monorepo.
+- Package renamed from `thread-phase` to `@autonome-research/thread-phase`.
+- Pre-2.0 git history preserved via `git filter-repo`.
+
+### Migrating from 1.x
+
+```diff
+- import { runPipeline } from 'thread-phase';
++ import { runPipeline } from '@autonome-research/thread-phase';
+```
+
+The sibling `thread-phase-agents` package was likewise renamed to `@autonome-research/thread-phase-agents` and folded into this monorepo.
+
 ## [1.5.0] — 2026-05-16
 
 Single additive helper for wiring adapter events into the JobStore log.

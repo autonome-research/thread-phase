@@ -15,6 +15,9 @@ thread-phase's `patterns/*` are *named shapes*, not abstractions you have to sat
 | Score feasibility before spending big-model tokens | [`preflightConfidence`](#preflightconfidence) | You don't have a cheap signal to score on |
 | Have a synthesizer review its own output and request another round | [`synthesizeWithFollowup`](#synthesizewithfollowup) | The follow-up doesn't re-run upstream work — just call again |
 | Verify a sample of typed claims from prior output | [`spotCheck`](#spotcheck) | You need to verify *every* claim, not a sample |
+| Loop a body of phases while some condition holds | [`whileCondition`](#whilecondition) | The loop body re-runs upstream work with a structured directive — use `synthesizeWithFollowup` |
+| Route to one of N phase lists based on a key | [`match`](#match) | The dispatch is a single async classifier with a halt option — use `intentGate` |
+| Retry a flaky phase with exponential backoff | [`withRetry`](#withretry) | The work isn't idempotent — fix that first, or pass `resetState` |
 
 ---
 
@@ -144,6 +147,83 @@ const results = await boundedFanoutOf({
 **When not to use:** when every claim must be verified — sampling defeats the purpose. Run the verifier on the full set instead, ideally via `boundedFanout`.
 
 [Source](../src/patterns/spot-check.ts) · 57 LOC
+
+---
+
+## `whileCondition`
+
+**Shape:** async predicate → if true, run body phases; if false, exit. Capped at `maxIterations`.
+
+**When to use:** the canonical convergence-loop pattern. Common: "keep searching until ctx.sufficient", "iterate refinement until the verifier passes", "drain a queue while it's non-empty." Predicate runs *before* each iteration (like `while`, not `do/while`), so an initially-false predicate produces zero body runs.
+
+**When not to use:** if the loop body is "re-run a specific synthesizer with a typed follow-up directive", `synthesizeWithFollowup` is the more specific shape. If you need an unconditional N-iteration loop, just write a `for` loop in TypeScript.
+
+**Failure semantics:** body sets `ctx.stop` → loop halts immediately. Max iterations reached → loop sets `ctx.stop` with a reason naming the pattern. Predicate throws → propagates as an uncaught error.
+
+```ts
+import { whileCondition } from '@autonome-research/thread-phase/patterns';
+
+const research = whileCondition<ResearchCtx>('research-loop', {
+  predicate: (ctx) => !ctx.sufficient,
+  body: [searchPhase, assessPhase],
+  maxIterations: 5,
+});
+```
+
+[Source](../src/patterns/while-condition.ts) · ~70 LOC
+
+---
+
+## `match`
+
+**Shape:** selector returns a key → run the corresponding case's phases. `null` skips silently. Missing keys fall through to `default` or skip if no default.
+
+**When to use:** any time the next set of phases depends on a discriminated value already in ctx — issue type, document format, retrieval strategy. Strictly more general than if/else; for two-case dispatch, write `selector: (ctx) => ctx.x === 'a' ? 'a' : 'b'`.
+
+**When not to use:** for "cheap classifier + early-halt" — that's exactly what `intentGate` does, with halt-via-`ctx.stop` baked in. `match` is the pure routing primitive without classification or halt semantics.
+
+**Failure semantics:** a case sets `ctx.stop` → composite halts immediately. The pattern itself never throws; assert in your selector if a missing key should be a bug. Emits a `data` event with key `${name}.taken` and value `{ taken: key | 'default' | 'skip' }` so consumers can observe routing without re-running the selector.
+
+```ts
+import { match } from '@autonome-research/thread-phase/patterns';
+
+const triage = match<TriageCtx, 'bug' | 'feature' | 'question'>('triage', {
+  selector: (ctx) => ctx.intent ?? null,
+  cases: {
+    bug: [reproducePhase, assignEngineer],
+    feature: [triagePhase],
+    question: [respondFaqPhase],
+  },
+  default: [escalatePhase],
+});
+```
+
+[Source](../src/patterns/match.ts) · ~70 LOC
+
+---
+
+## `withRetry`
+
+**Shape:** higher-order wrapper that retries a phase on failure with exponential backoff.
+
+**When to use:** wrap flaky individual phases — inference calls against rate-limited endpoints, network-dependent retrievals, anything where transient failure is meaningful. Retries on both thrown exceptions and clean `ctx.stop` signals; override with `isFailure` if some stop reasons should not be retried (e.g. user cancellation).
+
+**When not to use:** when the inner phase isn't idempotent and you don't have a `resetState` hook to undo partial work. A failed attempt may have mutated ctx; the wrapper does not snapshot/restore by default — that's the caller's responsibility. Also skip for non-retryable failures (validation errors, schema mismatches, permanent auth failures) — use `isFailure` or a separate error path.
+
+**Failure semantics:** attempt budget exhausted → re-throws the last thrown error, or leaves `ctx.stop` set if the inner used the stop signal. Each retry clears `ctx.stop` before the next inner run and applies exponential backoff (`baseDelayMs × 2^(attempt-1)`).
+
+```ts
+import { withRetry } from '@autonome-research/thread-phase/patterns';
+
+const reliableSearch = withRetry(searchPhase, {
+  maxAttempts: 5,
+  baseDelayMs: 1000,
+  isFailure: (ctx, err) =>
+    err !== undefined || (ctx.stop?.reason !== 'user-cancelled' && !!ctx.stop),
+});
+```
+
+[Source](../src/patterns/with-retry.ts) · ~95 LOC
 
 ---
 

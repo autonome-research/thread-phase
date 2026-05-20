@@ -44,3 +44,18 @@ export {
   spotCheck,
   type SpotCheckOptions,
 } from './spot-check.js';
+
+export {
+  whileCondition,
+  type WhileConditionOptions,
+} from './while-condition.js';
+
+export {
+  match,
+  type MatchOptions,
+} from './match.js';
+
+export {
+  withRetry,
+  type WithRetryOptions,
+} from './with-retry.js';
