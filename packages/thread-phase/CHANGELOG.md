@@ -4,6 +4,22 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-05-20
+
+Trigger interface — the entry-point abstraction for pipelines.
+
+### Added
+
+- **`Trigger<TInput>`** interface (`@autonome-research/thread-phase/triggers`) — the protocol every signal source implements. `start()` returns an async generator yielding `TriggerEvent<TInput>` with `{ id, occurredAt, input, metadata }`. `stop()` releases resources and ends the generator.
+- **`TimerTrigger({ intervalMs, payload?, fireImmediately?, name? })`** — interval-based concrete impl. `payload` accepts a value, sync factory, or async factory called per fire. `fireImmediately` produces the first event without waiting for the first interval.
+- **`runTrigger(trigger, pipelineFactory, options)`** — the canonical consumer. Reads events, builds `{ phases, ctx }` per event, dispatches pipelines. Optionally persists through `JobRunner` (with `jobStore` for status inspection). `maxConcurrency` is enforced as a blocking semaphore — backpressure flows back to the trigger, no events are dropped. Per-event failures are isolated; one bad pipeline doesn't stop the loop. Returns `{ done, stop }`.
+- Subpath export: `@autonome-research/thread-phase/triggers`.
+
+### Notes
+
+- HTTP/queue/file-watch transports stay in `examples/triggers/` as recipes — wrap your own framework, no transports in core.
+- 19 new tests (TimerTrigger + runTrigger), 280 total in the core package.
+
 ## [2.1.0] — 2026-05-20
 
 Three new patterns. Additive only.

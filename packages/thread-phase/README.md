@@ -142,6 +142,26 @@ Conversation state across phases lives in the `Thread` primitive — canonical e
 
 Memory across runs is outsourced: `MemoryProvider` is just a TypeScript interface (`recall(scope, query?) / remember(scope, events)`). thread-phase ships no implementations; bind Honcho, Letta, Mem0, or a custom backend yourself. See [`examples/honcho-memory.ts`](./examples/honcho-memory.ts).
 
+### `Trigger` — the entry-point abstraction
+
+`Trigger<TInput>` is the protocol every signal source implements: timers, webhooks, queue consumers, file watchers, message brokers. Each trigger yields `TriggerEvent<TInput>` with `{ id, occurredAt, input, metadata }`. `runTrigger(trigger, factory, options)` is the canonical consumer — it reads events, dispatches pipelines (optionally through a `JobRunner`), enforces a concurrency cap with backpressure, and isolates per-event failures.
+
+Core ships `TimerTrigger` only. HTTP/queue/file-watch transports stay in `examples/triggers/` as recipes — wrap your favorite framework into the protocol, don't make thread-phase ship transports.
+
+```ts
+import { TimerTrigger, runTrigger } from '@autonome-research/thread-phase/triggers';
+
+const trigger = new TimerTrigger({ intervalMs: 15 * 60_000, name: 'every-15m' });
+const handle = runTrigger(
+  trigger,
+  () => ({ phases: [myPipeline], ctx: { cache: new PipelineCache() } }),
+  { jobRunner: runner, jobStore: store },
+);
+
+process.on('SIGTERM', () => void handle.stop());
+await handle.done;
+```
+
 ## Patterns
 
 In `@autonome-research/thread-phase/patterns`:

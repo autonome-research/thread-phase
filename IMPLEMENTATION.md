@@ -89,12 +89,13 @@ Work happens in a scratch directory; the existing repos stay untouched until the
 
 `packages/thread-phase/src/triggers/`:
 
-- [ ] `types.ts` — `Trigger<TInput>`, `TriggerEvent<TInput>`
-- [ ] `timer-trigger.ts` — `TimerTrigger({ intervalMs })`
-- [ ] `run-trigger.ts` — `runTrigger(trigger, factory, { jobRunner, maxConcurrency })` free function
-- [ ] Tests
-- [ ] Examples in `examples/triggers/{timer-basic,timer-with-cron,http-adapt,queue-adapt}.ts` — HTTP/queue stay in `examples/`, not core; they demonstrate the adapter pattern (turn external event → `TriggerEvent`)
-- [ ] Tag `v2.2.0`
+- [x] `types.ts` — `Trigger<TInput>`, `TriggerEvent<TInput>`
+- [x] `timer-trigger.ts` — `TimerTrigger({ intervalMs, payload?, fireImmediately?, name? })`
+- [x] `run-trigger.ts` — `runTrigger(trigger, factory, options)` free function; blocking-semaphore backpressure (no event drops); optional `jobRunner` + `jobStore` for persistence + status routing to `onError`
+- [x] Tests (19 new: TimerTrigger 11, runTrigger 8); 280 total in core
+- [x] Examples in `examples/triggers/{timer-basic,timer-with-job-runner,http-adapt,queue-adapt}.ts` — HTTP/queue stay in `examples/`, not core; all four typecheck; three run end-to-end (http-adapt requires a curl)
+- [x] Subpath export `@autonome-research/thread-phase/triggers` wired in `package.json`
+- [x] Tag `v2.2.0`
 
 ---
 
