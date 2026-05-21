@@ -21,13 +21,14 @@ import type {
   TriggerEvent,
 } from '@autonome-research/thread-phase/triggers';
 
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { Registry } from './registry.js';
 import { loadExtensions } from './loader.js';
+import { cmdInit } from './init.js';
 import type { PipelineSpec } from './types.js';
 
 /**
@@ -84,16 +85,54 @@ export async function runCli(options: RunCliOptions): Promise<number> {
     return 0;
   }
 
-  const subcommand = args[0];
-  const rest = args.slice(1);
+  // Pull out top-level --strict before subcommand dispatch.
+  const strict = args.includes('--strict');
+  const argsWithoutStrict = args.filter((a) => a !== '--strict');
+
+  const subcommand = argsWithoutStrict[0];
+  const rest = argsWithoutStrict.slice(1);
+
+  // `init` runs in a dir with no .thread-phase/ — short-circuit before load.
+  if (subcommand === 'init') {
+    return cmdInit(rest, { cwd, stdout, stderr, cliVersion: readVersion() });
+  }
 
   const registry = new Registry();
-  const extDir = join(cwd, '.thread-phase');
-  const extDirExists = existsSync(extDir);
-  await loadExtensions(registry, {
+  // Pass a no-op log: failures surface through the load summary below, so we
+  // don't want the loader's default console.error doubling them up.
+  const loadResult = await loadExtensions(registry, {
     cwd,
-    log: (msg) => stderr.write(`${msg}\n`),
+    log: () => {},
   });
+  // The empty-dir hint fires when NO .thread-phase/ was found anywhere up
+  // the tree — not just in cwd. Walk-up may have located one in an ancestor.
+  const extDirExists = loadResult.extensionRoot !== null;
+
+  // Walk-up announcement: if .thread-phase/ was found ABOVE cwd, tell the user.
+  if (
+    loadResult.extensionRoot !== null &&
+    loadResult.extensionRoot !== cwd
+  ) {
+    stdout.write(`Loading extensions from ${loadResult.extensionRoot}/.thread-phase\n`);
+  }
+
+  // Load summary — skip if zero loaded AND zero failed (the "empty" list hint
+  // covers that case; printing here would be noise).
+  const loadedCount = loadResult.loaded.length;
+  const failedCount = loadResult.errors.length;
+  if (loadedCount > 0 || failedCount > 0) {
+    const suffix =
+      failedCount > 0 ? `; ${failedCount} failed:` : '';
+    stdout.write(`Loaded ${loadedCount} extension${loadedCount === 1 ? '' : 's'}${suffix}\n`);
+    for (const err of loadResult.errors) {
+      stdout.write(`  ✗ ${err.path}: ${err.error.message}\n`);
+    }
+  }
+
+  // --strict: exit non-zero if any extension failed to load.
+  if (strict && failedCount > 0) {
+    return 1;
+  }
 
   switch (subcommand) {
     case 'run':
@@ -117,15 +156,21 @@ function printHelp(out: NodeJS.WritableStream): void {
   out.write(`thread-phase — automation workflow runner
 
 Usage:
+  thread-phase init [name]
   thread-phase run <pipeline-name> [--input <json|@file|->]
   thread-phase serve [--health-port <n>]
   thread-phase list [--verbose|-v]
   thread-phase --version | -v
   thread-phase --help | -h
 
-Discovers extensions from ./.thread-phase/{triggers,adapters,pipelines}/.
+Discovers extensions from .thread-phase/{triggers,adapters,pipelines}/ —
+searched up the directory tree from cwd, like git's .git lookup.
+
+Top-level flags:
+  --strict    Exit non-zero if any extension fails to load.
 
 Commands:
+  init     Scaffold a new project: .thread-phase/, sample hello pipeline, package.json.
   run      Execute a registered pipeline once and exit.
   serve    Start all triggered pipelines and run continuously (SIGINT/SIGTERM to stop).
   list     Print the registry: triggers, adapters, pipelines.

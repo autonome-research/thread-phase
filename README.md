@@ -42,7 +42,7 @@ Locked versions across all three.
 ## Docs
 
 - [`AGENTS.md`](./AGENTS.md) — full guide for LLM agents generating thread-phase code.
-- [`EXTENDING.md`](./EXTENDING.md) — extension contract (triggers, adapters, pipelines).
+- [`EXTENDING.md`](./EXTENDING.md) — extension contract (triggers, adapters, pipelines), three discovery tiers, and the `thread-phase.extensions` manifest format for extensions that need their own npm deps.
 - [`MIGRATING.md`](./MIGRATING.md) — v2 → v3 upgrade notes.
 - [`packages/thread-phase/docs/`](./packages/thread-phase/docs) — patterns, recipes, cancellation.
 

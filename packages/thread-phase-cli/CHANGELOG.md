@@ -4,6 +4,26 @@ All notable changes to this package are documented here.
 
 ## [Unreleased]
 
+## [3.2.0] — 2026-05-21
+
+Adoption-friendly improvements driven by the pi-agent friction report on v3.1.0. All additive; no breaking changes.
+
+### Added
+
+- **`thread-phase init [name]`** — scaffolds a new project: `.thread-phase/{triggers,adapters,pipelines,lib}/`, a sample `pipelines/hello.ts` using `oneShot`, and a `package.json` if absent. With `[name]`: `mkdir name/` then scaffold inside (errors if the dir already exists). Without: scaffold in cwd. Refuses if `.thread-phase/` already exists at the target. Prints a "next steps" block with `npm install` + `thread-phase run hello`. Eliminates the biggest first-use friction.
+- **Walk-up `.thread-phase/` discovery** — the loader now searches `cwd` and every ancestor for `.thread-phase/`, like git's `.git/` lookup. Running `thread-phase list` from `~/proj/src/handlers` will find `~/proj/.thread-phase/`. When the directory is found above `cwd`, the CLI prints `Loading extensions from <abspath>/.thread-phase` so the source of the registry is unambiguous.
+- **Load summary** — after extension loading, the CLI prints `Loaded N extensions` (and, on partial failure, `Loaded N extensions; M failed:` plus indented failure paths). Surfaces load failures that previously could be missed in a busy terminal.
+- **`--strict` flag** — top-level `thread-phase --strict <subcommand>` exits non-zero on any load failure. Use in CI / CD to gate on registry health.
+
+### Changed
+
+- **CLI `bin` manifest path normalized** — `"./dist/bin.js"` → `"dist/bin.js"`. Silences a long-standing npm publish warning ("script name dist/bin.js was invalid and removed") that was cosmetic but appeared on every CLI publish. Behavior unchanged — `npm install -g` still wires `thread-phase` to the same script.
+- **`LoadResult` shape** — added `extensionRoot: string | null` (where `.thread-phase/` was found, or `null` if no ancestor has one). Surfaced through the loader API for programmatic consumers.
+
+### Tests
+
+41 tests total (was 32). 9 new: 5 for `init` (scaffold paths, existing-dir refusal, subdir, already-initialized refusal, existing-package.json preserved), 1 for walk-up discovery, 1 for load summary, 2 for `--strict` (success exit 0, failure exit 1).
+
 ## [3.1.0] — 2026-05-21
 
 Locked-version release in step with `@autonome-research/thread-phase-agents@3.1.0` (re-exported consumer + chain-builder surface) and `@autonome-research/thread-phase@3.1.0` (new pipeline/inject/loops doc sections). No CLI changes.

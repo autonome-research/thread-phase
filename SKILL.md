@@ -85,6 +85,47 @@ export default hook({ path: '/digest' }, async (payload, ctx) => {
 
 The helpers cover the **first three rows** with one function call. The rest of this doc covers the remaining four.
 
+## Where does X live? Import-path map
+
+Single source of truth. If an import fails, look here first.
+
+| You want… | Import from |
+|---|---|
+| **Building pipelines**: `Phase`, `runPipeline`, `runPipelineToSummary`, `PipelineCache`, `requireCtx`, `BasePipelineContext`, `PipelineEvent` | `@autonome-research/thread-phase` |
+| **First-use helpers**: `oneShot`, `schedule`, `hook`, `CronTrigger`, `HttpTrigger` | `@autonome-research/thread-phase` |
+| **Persistence**: `JobRunner`, `SqliteJobStore`, `JobStore`, `JobRecord` | `@autonome-research/thread-phase` |
+| **Raw inference loop**: `runAgentWithTools`, `loadInferenceConfig`, `createInferenceClient`, `ToolRegistry` | `@autonome-research/thread-phase` |
+| **Triggers**: `TimerTrigger`, `Trigger`, `TriggerEvent`, `runTrigger`, `RunTriggerHandle` | `@autonome-research/thread-phase/triggers` |
+| **Patterns**: `whileCondition`, `match`, `withRetry`, `subPipeline`, `subPipelineOf`, `runSubPipeline`, `boundedFanout`, `boundedFanoutOf`, `parallelPhases`, `intentGate` | `@autonome-research/thread-phase/patterns` |
+| **Pre-built agents**: `claudeCodeAgent`, `codexAgent`, `codexCliAgent`, `hermesAgent`, `openClawAgent`, `anthropicAgent`, `piAgent`, `acpAgent` | `@autonome-research/thread-phase-agents` |
+| **Chain-builder utilities**: `createEventBus`, `pipeAgentEventsToJobStore`, `createThread`, `appendEvent`, `withMemory`, `withThread`, `isSteerable` | `@autonome-research/thread-phase-agents` (re-exported) |
+| **Adapter-consumer types**: `AgentEvent`, `AgentRun`, `AgentRunResult`, `AgentEventBus`, `Thread`, `AgentAdapterMeta`, `AgentCapabilities` | `@autonome-research/thread-phase-agents` (re-exported) |
+| **Cross-adapter rendering**: `threadToTranscript`, `threadToMessages`, `threadToAcpPrompt`, `threadToClaudeCodePrompt`, `threadToCodexInput`, `threadToAnthropicMessages` | `@autonome-research/thread-phase-agents` |
+| **Authoring a custom AgentAdapter** (small audience): `defineAgentAdapter`, `TurnAccumulator`, `composeAbort`, `createEventQueue`, `lazyEvents`, `applyStructuredOutputPrompt`, `parseStructuredFromText`, `requireCapability`, `serializeError` | `@autonome-research/thread-phase/agents` |
+| **Pi extensions / CLI extension authoring**: `ThreadPhaseAPI`, `PipelineSpec`, `ExtensionRegisterFn` | `@autonome-research/thread-phase` (re-exported from helpers) |
+
+**Two rules of thumb that cover 95% of cases:**
+
+1. **Building a pipeline / cron / webhook?** → `@autonome-research/thread-phase`
+2. **Using or chaining pre-built agents?** → `@autonome-research/thread-phase-agents` (single import for adapters + event bus + Thread + types)
+
+The `/agents` subpath of core is only needed if you're authoring a **new** AgentAdapter — small audience.
+
+### Common deps for phase code
+
+Phase bodies are plain TypeScript. Install whatever you need per-pipeline:
+
+| Need | Common dep |
+|---|---|
+| Run a shell command | `execa` (handles exit codes + stdout/stderr cleanly) |
+| File I/O | `node:fs` (built-in), `node:fs/promises` for async |
+| HTTP fetch | `fetch` (built-in in Node 22+), `node-fetch` on older Node |
+| Database | `better-sqlite3`, `pg`, `mysql2`, etc. |
+
+A pipeline that uses execa: `npm install execa` + `import { execa } from 'execa';`. No special wiring — phase code can use anything.
+
+**Gotcha:** `execa` v9 throws on non-zero exit codes. `git diff` exits 1 when there are changes, which is "success" semantically but throws. Either catch the error and inspect `err.stdout`, or pass `{ reject: false }` to execa.
+
 ## Building multi-phase pipelines
 
 When the user needs typed state across multiple steps, use the Phase model. Phases mutate `ctx` for outputs, yield events for progress; pipelines compose as plain arrays.

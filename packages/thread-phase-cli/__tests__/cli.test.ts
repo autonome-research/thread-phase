@@ -376,4 +376,172 @@ describe('runCli', () => {
     expect(code).toBe(1);
     expect(stderr.text()).toMatch(/no triggered pipelines/);
   });
+
+  it('init in empty cwd scaffolds .thread-phase/ + sample + package.json', async () => {
+    const { mkdtempSync, existsSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const dir = mkdtempSync(join(tmpdir(), 'tp-init-empty-'));
+
+    const stdout = new StringStream();
+    const stderr = new StringStream();
+    const code = await runCli({
+      cwd: dir,
+      args: ['init'],
+      stdout,
+      stderr,
+    });
+
+    expect(code).toBe(0);
+    expect(existsSync(join(dir, '.thread-phase', 'triggers'))).toBe(true);
+    expect(existsSync(join(dir, '.thread-phase', 'adapters'))).toBe(true);
+    expect(existsSync(join(dir, '.thread-phase', 'pipelines'))).toBe(true);
+    expect(existsSync(join(dir, '.thread-phase', 'lib'))).toBe(true);
+    expect(existsSync(join(dir, '.thread-phase', 'pipelines', 'hello.ts'))).toBe(true);
+    expect(existsSync(join(dir, 'package.json'))).toBe(true);
+
+    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as {
+      type?: string;
+      dependencies?: Record<string, string>;
+    };
+    expect(pkg.type).toBe('module');
+    expect(pkg.dependencies?.['@autonome-research/thread-phase-cli']).toMatch(/^\^?\d+\.\d+\.\d+/);
+
+    expect(stdout.text()).toMatch(/thread-phase initialized at/);
+    expect(stdout.text()).toMatch(/thread-phase run hello/);
+  });
+
+  it('init keeps an existing package.json untouched', async () => {
+    const { mkdtempSync, writeFileSync, readFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const dir = mkdtempSync(join(tmpdir(), 'tp-init-existingpkg-'));
+    const userPkg = JSON.stringify({ name: 'my-app', version: '1.2.3' });
+    writeFileSync(join(dir, 'package.json'), userPkg);
+
+    const stdout = new StringStream();
+    const stderr = new StringStream();
+    const code = await runCli({
+      cwd: dir,
+      args: ['init'],
+      stdout,
+      stderr,
+    });
+
+    expect(code).toBe(0);
+    expect(readFileSync(join(dir, 'package.json'), 'utf8')).toBe(userPkg);
+  });
+
+  it('init <name> creates a subdir and scaffolds inside', async () => {
+    const { mkdtempSync, existsSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const parent = mkdtempSync(join(tmpdir(), 'tp-init-subdir-'));
+
+    const stdout = new StringStream();
+    const stderr = new StringStream();
+    const code = await runCli({
+      cwd: parent,
+      args: ['init', 'my-proj'],
+      stdout,
+      stderr,
+    });
+
+    expect(code).toBe(0);
+    expect(existsSync(join(parent, 'my-proj', '.thread-phase', 'pipelines', 'hello.ts'))).toBe(true);
+    expect(stdout.text()).toMatch(/cd my-proj/);
+  });
+
+  it('init refuses when target directory already exists', async () => {
+    const { mkdtempSync, mkdirSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const parent = mkdtempSync(join(tmpdir(), 'tp-init-exists-'));
+    mkdirSync(join(parent, 'already-there'));
+
+    const stdout = new StringStream();
+    const stderr = new StringStream();
+    const code = await runCli({
+      cwd: parent,
+      args: ['init', 'already-there'],
+      stdout,
+      stderr,
+    });
+
+    expect(code).toBe(1);
+    expect(stderr.text()).toMatch(/already exists/);
+  });
+
+  it('init refuses when .thread-phase/ already exists', async () => {
+    const { mkdtempSync, mkdirSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const dir = mkdtempSync(join(tmpdir(), 'tp-init-already-init-'));
+    mkdirSync(join(dir, '.thread-phase'));
+
+    const stdout = new StringStream();
+    const stderr = new StringStream();
+    const code = await runCli({
+      cwd: dir,
+      args: ['init'],
+      stdout,
+      stderr,
+    });
+
+    expect(code).toBe(1);
+    expect(stderr.text()).toMatch(/already initialized/);
+  });
+
+  it('walks up from a subdir to find .thread-phase/ in an ancestor', async () => {
+    const { mkdirSync } = await import('node:fs');
+    const subdir = join(fixtures('basic'), 'deep', 'nested', 'cwd');
+    mkdirSync(subdir, { recursive: true });
+
+    const stdout = new StringStream();
+    const stderr = new StringStream();
+    const code = await runCli({
+      cwd: subdir,
+      args: ['list'],
+      stdout,
+      stderr,
+    });
+
+    expect(code).toBe(0);
+    const out = stdout.text();
+    expect(out).toMatch(/Loading extensions from .*fixtures\/basic\/\.thread-phase/);
+    expect(out).toMatch(/timer-fast/);  // proves extensions actually loaded
+  });
+
+  it('list prints a "Loaded N extensions" summary', async () => {
+    const stdout = new StringStream();
+    const stderr = new StringStream();
+    const code = await runCli({
+      cwd: fixtures('basic'),
+      args: ['list'],
+      stdout,
+      stderr,
+    });
+    expect(code).toBe(0);
+    expect(stdout.text()).toMatch(/Loaded \d+ extension/);
+  });
+
+  it('--strict exits 0 when no load failures', async () => {
+    const stdout = new StringStream();
+    const stderr = new StringStream();
+    const code = await runCli({
+      cwd: fixtures('basic'),
+      args: ['--strict', 'list'],
+      stdout,
+      stderr,
+    });
+    expect(code).toBe(0);
+  });
+
+  it('--strict exits 1 when any extension fails to load', async () => {
+    const stdout = new StringStream();
+    const stderr = new StringStream();
+    const code = await runCli({
+      cwd: fixtures('broken'),
+      args: ['--strict', 'list'],
+      stdout,
+      stderr,
+    });
+    expect(code).toBe(1);
+    expect(stdout.text()).toMatch(/failed:/);
+  });
 });

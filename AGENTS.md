@@ -113,6 +113,48 @@ The helpers cover the **first three rows** with one function call. The rest of t
 
 ---
 
+## Where does X live? Import-path map
+
+The substrate ships across three packages + a few subpaths. This table is the **single source of truth** for which symbol comes from where. When an import fails, check here first.
+
+| You want… | Import from |
+|---|---|
+| **Building pipelines**: `Phase`, `runPipeline`, `runPipelineToSummary`, `PipelineCache`, `requireCtx`, `BasePipelineContext`, `PipelineEvent` | `@autonome-research/thread-phase` |
+| **First-use helpers**: `oneShot`, `schedule`, `hook`, `CronTrigger`, `HttpTrigger` | `@autonome-research/thread-phase` |
+| **Persistence**: `JobRunner`, `SqliteJobStore`, `JobStore`, `JobRecord` | `@autonome-research/thread-phase` |
+| **Raw inference loop**: `runAgentWithTools`, `loadInferenceConfig`, `createInferenceClient`, `ToolRegistry` | `@autonome-research/thread-phase` |
+| **Triggers**: `TimerTrigger`, `Trigger`, `TriggerEvent`, `runTrigger`, `RunTriggerHandle` | `@autonome-research/thread-phase/triggers` |
+| **Patterns**: `whileCondition`, `match`, `withRetry`, `subPipeline`, `subPipelineOf`, `runSubPipeline`, `boundedFanout`, `boundedFanoutOf`, `parallelPhases`, `intentGate` | `@autonome-research/thread-phase/patterns` |
+| **Pre-built agents**: `claudeCodeAgent`, `codexAgent`, `codexCliAgent`, `hermesAgent`, `openClawAgent`, `anthropicAgent`, `piAgent`, `acpAgent` | `@autonome-research/thread-phase-agents` |
+| **Chain-builder utilities**: `createEventBus`, `pipeAgentEventsToJobStore`, `createThread`, `appendEvent`, `withMemory`, `withThread`, `isSteerable` | `@autonome-research/thread-phase-agents` (re-exported from core) |
+| **Adapter-consumer types**: `AgentEvent`, `AgentRun`, `AgentRunResult`, `AgentEventBus`, `Thread`, `AgentAdapterMeta`, `AgentCapabilities` | `@autonome-research/thread-phase-agents` (re-exported from core) |
+| **Cross-adapter rendering** (when chaining different adapters): `threadToTranscript`, `threadToMessages`, `threadToAcpPrompt`, `threadToClaudeCodePrompt`, `threadToCodexInput`, `threadToAnthropicMessages` | `@autonome-research/thread-phase-agents` |
+| **Authoring a custom AgentAdapter** (small audience): `defineAgentAdapter`, `TurnAccumulator`, `composeAbort`, `createEventQueue`, `lazyEvents`, `applyStructuredOutputPrompt`, `parseStructuredFromText`, `requireCapability`, `serializeError` | `@autonome-research/thread-phase/agents` |
+| **Pi extensions / CLI extension authoring**: `ThreadPhaseAPI`, `PipelineSpec`, `ExtensionRegisterFn` | `@autonome-research/thread-phase` (re-exported from helpers) |
+
+**Two rules of thumb that cover 95% of cases:**
+
+1. **Building a pipeline / cron / webhook?** → `@autonome-research/thread-phase`
+2. **Using or chaining pre-built agents?** → `@autonome-research/thread-phase-agents` (single import for adapter + event bus + Thread + types)
+
+The `/agents` subpath of core is only needed if you're authoring a **new** AgentAdapter from scratch — a small audience.
+
+### Common deps for phase code
+
+Phase bodies are plain TypeScript — they can import anything. Install per-pipeline as needed:
+
+| Need | Common dep | Note |
+|---|---|---|
+| Run a shell command | `execa` | Cleaner than `child_process.spawn`; handles exit codes + stdout/stderr |
+| File I/O | `node:fs` / `node:fs/promises` | Built-in |
+| HTTP fetch | `fetch` (built-in Node 22+) or `node-fetch` | — |
+| Database | `better-sqlite3`, `pg`, `mysql2`, etc. | Same as anywhere else in Node |
+| Cron parsing (when not using `schedule({ cron })`) | `cron-parser` | Optional peer dep of thread-phase; lazy-loaded |
+
+**Gotcha — `execa` on non-zero exit codes:** v9 throws when the underlying process exits non-zero. `git diff` exits 1 when there ARE changes (semantically success), which surprises naive code. Either catch the error and read `err.stdout`, or pass `{ reject: false }` to execa.
+
+---
+
 ## Building multi-phase pipelines
 
 When the user needs typed state shared across multiple steps, reach for the `Phase` model. Each phase reads from a typed `ctx`, mutates it for outputs, and yields events. Pipelines compose as plain arrays — no DAG framework, no plugin system.

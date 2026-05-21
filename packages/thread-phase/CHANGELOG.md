@@ -4,6 +4,17 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [3.2.0] — 2026-05-21
+
+Docs-only release for core. Real changes ship in `@autonome-research/thread-phase-cli@3.2.0` (init command, walk-up discovery, load summary, --strict).
+
+### Documentation
+
+- **AGENTS.md / SKILL.md**: added an "Import-path map" section as single source of truth for which symbol comes from which package/subpath. Plus a "Common deps for phase code" callout listing `execa`, `node:fs`, `fetch`, etc. + the `execa` v9 non-zero-exit gotcha.
+- **README.md**: docs index entry expanded to mention the `thread-phase.extensions` manifest format.
+- **EXTENDING.md**: TL;DR now points at `thread-phase init` as the quickest start and forward-references the manifest format.
+- Pi-local skill at `~/.pi/agent/skills/thread-phase/SKILL.md` synced.
+
 ## [3.1.0] — 2026-05-21
 
 Docs-only release for core; the change of substance is in `@autonome-research/thread-phase-agents@3.1.0` (re-export of the consumer + chain-builder surface so callers using adapters import from one place).

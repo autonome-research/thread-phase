@@ -14,6 +14,8 @@ your-project/
 
 Each file exports a default function `(api: ThreadPhaseAPI) => void` that registers things. Then `npx thread-phase {run <name>|serve|list}` does the rest.
 
+**Quickest start:** `npx thread-phase init my-project` scaffolds the layout above plus a sample `hello.ts`, then `cd my-project && npm install && thread-phase run hello`. See [`Three discovery tiers`](#three-discovery-tiers) below for how the loader finds your files — including the `thread-phase.extensions` manifest format for extensions that need their own npm deps (Tier 3).
+
 ## The extension surfaces
 
 | Surface | What you register | Discovery dir | Why |

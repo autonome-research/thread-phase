@@ -28,7 +28,7 @@
  */
 
 import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { register } from 'tsx/esm/api';
 
@@ -66,9 +66,38 @@ export interface LoadResult {
   loaded: string[];
   /** Errors keyed by path. */
   errors: Array<{ path: string; error: Error }>;
+  /**
+   * Where `.thread-phase/` was found. `null` if no `.thread-phase/` exists
+   * in `cwd` or any ancestor. `cwd` if it lives at the starting directory.
+   * Otherwise the ancestor directory containing it — printed by the CLI
+   * so users running from a subdir know which root they're loading.
+   */
+  extensionRoot: string | null;
 }
 
 const PKG_FIELD = 'thread-phase';
+
+/**
+ * Walk from `start` up the filesystem to the nearest `.thread-phase/`
+ * directory. Returns the **parent of `.thread-phase/`** (i.e. the project
+ * root), or `null` if none was found. Same shape as git's `.git/` lookup.
+ */
+export function findExtensionRoot(start: string): string | null {
+  let dir = resolve(start);
+  while (true) {
+    const candidate = join(dir, '.thread-phase');
+    if (existsSync(candidate)) {
+      try {
+        if (statSync(candidate).isDirectory()) return dir;
+      } catch {
+        // not a directory; keep walking
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null; // hit filesystem root
+    dir = parent;
+  }
+}
 
 export async function loadExtensions(
   registry: Registry,
@@ -76,13 +105,13 @@ export async function loadExtensions(
 ): Promise<LoadResult> {
   const cwd = options.cwd ?? process.cwd();
   const log = options.log ?? ((m: string) => console.error(m));
-  const root = join(cwd, '.thread-phase');
 
-  const result: LoadResult = { loaded: [], errors: [] };
-
-  if (!existsSync(root)) {
-    return result; // no extensions; nothing to load (not an error)
+  const projectRoot = findExtensionRoot(cwd);
+  const result: LoadResult = { loaded: [], errors: [], extensionRoot: projectRoot };
+  if (projectRoot === null) {
+    return result; // no extensions found anywhere up the tree
   }
+  const root = join(projectRoot, '.thread-phase');
 
   for (const kind of EXTENSION_KINDS) {
     const kindDir = join(root, kind);
