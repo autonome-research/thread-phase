@@ -4,6 +4,16 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [3.0.3] — 2026-05-21
+
+Docs only — agent-facing. Pre-3.0.3, agents reading AGENTS.md / SKILL.md were led directly to the full Phase + `registerPipeline` template, ignoring the convenience helpers shipped in v3.0.0. Coding agents (pi, claude-code, codex) consistently wrote 30-50 lines for what `schedule()` now handles in 5.
+
+### Documentation
+
+- **AGENTS.md**: added a "Quickstart — convenience helpers" section right after TL;DR. Leads with `oneShot` / `schedule` / `hook` as the first recommendation for any "simple automation" request, with a decision-rule table mapping common user requests to the right primitive.
+- **SKILL.md**: mirror change. Header refreshed to the v3 install command (single `npm install -g @autonome-research/thread-phase-cli`) and the three-package monorepo structure.
+- Pi-local skill at `~/.pi/agent/skills/thread-phase/SKILL.md` synced.
+
 ## [3.0.2] — 2026-05-20
 
 Locked-version release in step with `@autonome-research/thread-phase-cli@3.0.2` (`--version` flag + empty-list hint). No core changes.

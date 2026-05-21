@@ -34,6 +34,85 @@ You are NOT using thread-phase when:
 
 ---
 
+## Quickstart — convenience helpers (read this first)
+
+**Default to these helpers for any simple automation.** Reach for the full Phase template (further down) only when the user genuinely needs typed phase composition, multiple steps with shared `ctx`, or `runAgentWithTools` inside a phase.
+
+Install once:
+
+```sh
+npm install -g @autonome-research/thread-phase-cli
+# …plus the agent SDKs your adapters use (optional; only when you import them):
+# npm install -g @anthropic-ai/sdk @mariozechner/pi-coding-agent openai
+```
+
+Each helper returns the default export of a `.thread-phase/pipelines/<name>.ts` file. Drop the file in, then `thread-phase run <name>` or `thread-phase serve`.
+
+### One-shot — run on demand
+
+```ts
+// .thread-phase/pipelines/digest.ts
+import { oneShot } from '@autonome-research/thread-phase';
+
+export default oneShot(async () => {
+  const items = await fetchInbox();
+  const summary = await summarize(items);
+  await sendEmail(summary);
+});
+```
+
+Run: `thread-phase run digest`. Use this for ad-hoc scripts and anything a cron line invokes directly.
+
+### Scheduled — cron- or interval-driven
+
+```ts
+// .thread-phase/pipelines/morning-digest.ts
+import { schedule } from '@autonome-research/thread-phase';
+
+export default schedule({ cron: '0 8 * * *' }, async () => {
+  // body runs at 8am every day
+});
+
+// or
+export default schedule({ intervalMs: 6 * 60 * 60 * 1000 }, async () => {
+  // every 6 hours
+});
+```
+
+Run: `thread-phase serve` starts the scheduler and keeps running until SIGINT/SIGTERM. `cron` form lazy-loads `cron-parser`; `intervalMs` form has zero extra deps.
+
+### Webhook — HTTP-triggered
+
+```ts
+// .thread-phase/pipelines/webhook-digest.ts
+import { hook } from '@autonome-research/thread-phase';
+
+export default hook({ path: '/digest' }, async (payload, ctx) => {
+  await processWebhook(payload);
+  return { ok: true };  // becomes the HTTP 200 response body
+});
+```
+
+Run: `thread-phase serve`. All hooks share one HTTP server (port from `THREAD_PHASE_HTTP_PORT`, default 7777). Each hook is one route.
+
+### Decision rule
+
+```
+User asks for                                  → Reach for
+─────────────────────────────────────────────────────────────────
+"Run X on a schedule"                          → schedule({ cron|intervalMs }, …)
+"Build a webhook that does X"                  → hook({ path }, …)
+"Run this script via thread-phase"             → oneShot(…)
+"Pipeline with 2+ phases sharing typed ctx"    → registerPipeline with Phase template
+"Heterogeneous agent chain with Thread state"  → registerPipeline with Phase template
+"Loop until convergence"                       → registerPipeline + whileCondition
+"Fan an adapter over N items"                  → registerPipeline + boundedFanoutOf
+```
+
+The helpers cover the **first three rows** with one function call. The rest of this doc covers the bottom four cases.
+
+---
+
 ## The mental model
 
 Three primitives plus one extension surface. Memorize these — everything else is composition.

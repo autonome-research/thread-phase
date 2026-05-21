@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [3.0.3] — 2026-05-21
+
+Locked-version release in step with `@autonome-research/thread-phase@3.0.3` (agent-facing docs updated to lead with the convenience helpers). No adapter changes.
+
 ## [3.0.2] — 2026-05-20
 
 Locked-version release in step with `@autonome-research/thread-phase-cli@3.0.2`. No adapter changes.

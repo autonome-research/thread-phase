@@ -4,6 +4,10 @@ All notable changes to this package are documented here.
 
 ## [Unreleased]
 
+## [3.0.3] — 2026-05-21
+
+Locked-version release in step with `@autonome-research/thread-phase@3.0.3` (agent-facing docs updated). No CLI changes.
+
 ## [3.0.2] — 2026-05-20
 
 ### Added
