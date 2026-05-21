@@ -76,7 +76,7 @@ Example:
     poll-deployment.ts     ← imports the same helper
 \`\`\`
 
-See EXTENDING.md for the full convention.
+See https://github.com/autonome-research/thread-phase/blob/master/EXTENDING.md for the full convention.
 `;
 
 export async function cmdInit(

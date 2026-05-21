@@ -4,6 +4,10 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [3.2.2] — 2026-05-21
+
+Locked-version release in step with `@autonome-research/thread-phase-cli@3.2.2` (fixes a dangling `EXTENDING.md` ref in the `init` scaffold). No core changes.
+
 ## [3.2.1] — 2026-05-21
 
 Docs-only release for core. CLI improvements (init scaffold tweaks, empty-`.thread-phase/` hint) ship in `@autonome-research/thread-phase-cli@3.2.1`.

@@ -4,6 +4,12 @@ All notable changes to this package are documented here.
 
 ## [Unreleased]
 
+## [3.2.2] — 2026-05-21
+
+### Fixed
+
+- **Dangling `EXTENDING.md` reference in scaffolded `lib/README.md`.** The template said "See EXTENDING.md for the full convention" but scaffolded projects don't ship `EXTENDING.md` — it lives in the framework's repo. Changed to an absolute GitHub URL so the link works from any scaffolded project.
+
 ## [3.2.1] — 2026-05-21
 
 Follow-up to v3.2.0 driven by post-release agent feedback.
