@@ -46,7 +46,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Code4me2/thread-phase.git",
+    "url": "git+https://github.com/autonome-research/thread-phase.git",
     "directory": "packages/thread-phase-agents"
   }
 }

@@ -1,6 +1,6 @@
 # @autonome-research/thread-phase-cli
 
-The CLI and auto-loader for [thread-phase](https://github.com/Code4me2/thread-phase). Discovers extensions under `./.thread-phase/{triggers,adapters,pipelines}/` and runs registered pipelines.
+The CLI and auto-loader for [thread-phase](https://github.com/autonome-research/thread-phase). Discovers extensions under `./.thread-phase/{triggers,adapters,pipelines}/` and runs registered pipelines.
 
 ```sh
 # One install gets the full runtime — core + adapter protocol + bin.

@@ -74,7 +74,7 @@ Composition rule: **mutate `ctx` for results, `yield` for progress events.** Nev
 When to reach for `runAgentWithTools` vs an `AgentAdapter`:
 
 - **`runAgentWithTools`** — a single raw model call inside a phase, you write the system prompt and tools. The canonical primitive; ~5 lines of setup. This is the right call for ~80% of cases.
-- **`AgentAdapter`** — you're delegating to a *ready agent* (claude-code, hermes, codex, …) that has its own system prompt, tool set, and turn behavior, OR you want adapter-shaped composition (one shared event bus across heterogeneous adapters, `boundedFanoutOf` over a list, `Thread`-based handoff). Adapters live in `thread-phase` (`inferenceAgent`) and the sibling package [`thread-phase-agents`](https://github.com/Code4me2/thread-phase-agents).
+- **`AgentAdapter`** — you're delegating to a *ready agent* (claude-code, hermes, codex, …) that has its own system prompt, tool set, and turn behavior, OR you want adapter-shaped composition (one shared event bus across heterogeneous adapters, `boundedFanoutOf` over a list, `Thread`-based handoff). Adapters live in `thread-phase` (`inferenceAgent`) and the sibling package [`thread-phase-agents`](https://github.com/autonome-research/thread-phase-agents).
 
 ---
 

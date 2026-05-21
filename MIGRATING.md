@@ -99,4 +99,4 @@ These are additive. Existing `registerPipeline` + `registerTrigger` code keeps w
 
 ## Questions
 
-Open an issue on `github.com/Code4me2/thread-phase` if a v2 → v3 migration step isn't covered.
+Open an issue on `github.com/autonome-research/thread-phase` if a v2 → v3 migration step isn't covered.
