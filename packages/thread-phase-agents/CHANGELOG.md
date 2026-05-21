@@ -4,6 +4,29 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-05-21
+
+Single-import surface for adapter consumers + chain builders.
+
+### Added
+
+Re-exports of the curated agent set from `@autonome-research/thread-phase/agents` so callers using adapters or chaining them can import from one place:
+
+- **Functions**: `createEventBus`, `pipeAgentEventsToJobStore`, `createThread`, `appendEvent`, `resumeTokenFor`, `setResumeToken`, `withMemory`, `withThread`, `isSteerable`
+- **Types**: `AgentAdapter`, `AgentAdapterMeta`, `AgentCapabilities`, `AgentEvent`, `AgentEventBus`, `AgentFinishReason`, `AgentRun`, `AgentRunOptions`, `AgentRunResult`, `ResumeToken`, `SerializableError`, `SteerableAgentRun`, `Thread`, `MemoryProvider`, `MemoryScope`, `WithMemoryOptions`, `WithThreadOptions`, `PipeAgentEventsOptions`
+
+The canonical home for all of these is still `@autonome-research/thread-phase/agents`. These are pure re-exports — same identity, same docs, no semver change.
+
+**Author-only helpers stay only in the core `/agents` subpath** — `defineAgentAdapter`, `TurnAccumulator`, `composeAbort`, `createEventQueue`, `lazyEvents`, `applyStructuredOutputPrompt`, `parseStructured*`, `requireCapability`, `serializeError`. The split keeps the package boundary meaningful: `-agents` is for adapter consumers and chain-builders; the `/agents` subpath of core is for adapter authors.
+
+### Rule of thumb
+
+| You're... | Import from |
+|---|---|
+| Building a pipeline that uses pre-built adapters (claude-code, codex, hermes, anthropic, pi, ...) | `@autonome-research/thread-phase-agents` |
+| Chaining multiple adapters via Thread, event bus, memory | `@autonome-research/thread-phase-agents` |
+| Authoring a NEW custom AgentAdapter | `@autonome-research/thread-phase/agents` (for `defineAgentAdapter` + helpers) |
+
 ## [3.0.3] — 2026-05-21
 
 Locked-version release in step with `@autonome-research/thread-phase@3.0.3` (agent-facing docs updated to lead with the convenience helpers). No adapter changes.

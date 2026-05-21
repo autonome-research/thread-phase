@@ -85,6 +85,121 @@ export default hook({ path: '/digest' }, async (payload, ctx) => {
 
 The helpers cover the **first three rows** with one function call. The rest of this doc covers the remaining four.
 
+## Building multi-phase pipelines
+
+When the user needs typed state across multiple steps, use the Phase model. Phases mutate `ctx` for outputs, yield events for progress; pipelines compose as plain arrays.
+
+```ts
+import { runPipeline, PipelineCache, requireCtx } from '@autonome-research/thread-phase';
+import type { Phase, BasePipelineContext } from '@autonome-research/thread-phase';
+
+interface Ctx extends BasePipelineContext {
+  items?: Item[];
+  digest?: string;
+}
+
+const fetch: Phase<Ctx> = {
+  name: 'fetch',
+  async *run(ctx) {
+    ctx.items = await fetchItems();
+    yield { type: 'data', key: 'count', value: ctx.items.length };
+  },
+};
+
+const summarize: Phase<Ctx> = {
+  name: 'summarize',
+  async *run(ctx) {
+    const items = requireCtx(ctx, 'items', 'summarize');  // loud failure if not set
+    ctx.digest = await summarizeItems(items);
+  },
+};
+
+for await (const event of runPipeline([fetch, summarize], { cache: new PipelineCache() })) {
+  console.log(event);
+}
+```
+
+Rules: mutate ctx, yield events, use `requireCtx` for every input, type every field optional, no DAG framework — the array IS the pipeline.
+
+## Injecting code between stages
+
+Insertion is array editing. To add a step before send:
+
+```ts
+const phases = [fetch, summarize, validate, send];  // was [fetch, summarize, send]
+```
+
+For less-trivial cases:
+
+| Want to... | Use |
+|---|---|
+| Run a step only when a condition holds | `match(name, { selector, cases, default? })` |
+| Cheaply short-circuit on a classifier | `intentGate` |
+| Run two phases concurrently as one composite | `parallelPhases(name, [a, b])` |
+| Wrap a step with retry-on-failure | `withRetry(phase, { maxAttempts })` |
+| Invoke another pipeline as a step (isolated cache, propagated signal) | `subPipeline(name, { pipeline, mapInput?, mapOutput? })` |
+| Cross-cutting behavior (logging/metrics) on every phase | Higher-order function `Phase → Phase` |
+
+All return `Phase` — slot into the array like any other step. Share state via ctx mutation. `ctx.cache` (per-pipeline `PipelineCache`) for scratch.
+
+## Implementing loops
+
+Three patterns by complexity. Pick the lightest that fits.
+
+### 1. Plain `while` inside `oneShot` / `schedule` / `hook`
+
+When the loop lives entirely in one handler:
+
+```ts
+import { oneShot } from '@autonome-research/thread-phase';
+
+export default oneShot(async () => {
+  let sources: string[] = [];
+  while (sources.length < 6) sources.push(...(await search()));
+  return synthesize(sources);
+});
+```
+
+Simplest path — no new imports, no framework loop primitive.
+
+### 2. `whileCondition` — phase-level convergence loop
+
+When the loop body is a list of phases and you want per-iteration events in the JobStore:
+
+```ts
+import { whileCondition } from '@autonome-research/thread-phase/patterns';
+
+const research = whileCondition<Ctx>('research-loop', {
+  predicate: (ctx) => !ctx.sufficient,
+  body: [search, assess],
+  maxIterations: 10,
+});
+
+// Use `research` in a pipeline like any other phase:
+runPipeline([research, synthesize], ctx);
+```
+
+Emits `${name}.converged` on clean exit, `${name}.max-iterations` if cap hits (and sets `ctx.stop`).
+
+### 3. `withRetry` — "loop until success"
+
+```ts
+import { withRetry } from '@autonome-research/thread-phase/patterns';
+
+const reliableFetch = withRetry(fetchPhase, { maxAttempts: 5, baseDelayMs: 1000 });
+```
+
+Retries on thrown errors AND `ctx.stop`. Exponential backoff. Override with `isFailure` to selectively retry.
+
+### Decision rule
+
+| Shape | Use |
+|---|---|
+| Loop in one handler, no need for per-iteration framework events | plain `while` inside the helper |
+| Loop is a body of phases with observability | `whileCondition` |
+| Loop is "retry on failure" | `withRetry` |
+| Synthesizer + critic with structured re-run signal | `whileCondition` with critic in the body — see [`recipes.md`](packages/thread-phase/docs/recipes.md) |
+
 ## Mental model: three primitives + one extension surface
 
 ```ts

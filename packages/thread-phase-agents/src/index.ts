@@ -37,3 +37,57 @@ export {
   threadToCodexInput,
   threadToMessages,
 } from './thread-bridge.js';
+
+// ---------------------------------------------------------------------------
+// Re-exports from `@autonome-research/thread-phase/agents` for the common
+// consumer + chain-builder cases. Importing these from `-agents` keeps the
+// import surface to one place when you're using adapters or chaining them.
+//
+// Canonical home is still `@autonome-research/thread-phase/agents`; these are
+// pure re-exports. Author-only helpers (`defineAgentAdapter`, `TurnAccumulator`,
+// `composeAbort`, `createEventQueue`, `lazyEvents`, the structured-output
+// helpers, `requireCapability`, `serializeError`) stay only in the core
+// subpath since they're for adapter implementations, not adapter consumers.
+// ---------------------------------------------------------------------------
+
+export {
+  // Event bus — pipe adapter events to a shared subscriber surface
+  createEventBus,
+  // EventBus → JobStore bridge for persistent event logs
+  pipeAgentEventsToJobStore,
+  // Thread primitive + helpers for cross-adapter state
+  createThread,
+  appendEvent,
+  resumeTokenFor,
+  setResumeToken,
+  // Adapter decorators for memory + thread wiring
+  withMemory,
+  withThread,
+  // Capability narrowing
+  isSteerable,
+} from '@autonome-research/thread-phase/agents';
+
+export type {
+  // Adapter protocol types
+  AgentAdapter,
+  AgentAdapterMeta,
+  AgentCapabilities,
+  AgentEvent,
+  AgentEventBus,
+  AgentFinishReason,
+  AgentRun,
+  AgentRunOptions,
+  AgentRunResult,
+  ResumeToken,
+  SerializableError,
+  SteerableAgentRun,
+  // Thread + memory types
+  Thread,
+  MemoryProvider,
+  MemoryScope,
+  // Decorator option shapes
+  WithMemoryOptions,
+  WithThreadOptions,
+  // Bridge options
+  PipeAgentEventsOptions,
+} from '@autonome-research/thread-phase/agents';

@@ -113,6 +113,192 @@ The helpers cover the **first three rows** with one function call. The rest of t
 
 ---
 
+## Building multi-phase pipelines
+
+When the user needs typed state shared across multiple steps, reach for the `Phase` model. Each phase reads from a typed `ctx`, mutates it for outputs, and yields events. Pipelines compose as plain arrays — no DAG framework, no plugin system.
+
+```ts
+import { runPipeline, PipelineCache, requireCtx } from '@autonome-research/thread-phase';
+import type { Phase, BasePipelineContext } from '@autonome-research/thread-phase';
+
+interface Ctx extends BasePipelineContext {
+  items?: Item[];
+  digest?: string;
+}
+
+const fetch: Phase<Ctx> = {
+  name: 'fetch',
+  async *run(ctx) {
+    ctx.items = await fetchItems();
+    yield { type: 'data', key: 'count', value: ctx.items.length };
+  },
+};
+
+const summarize: Phase<Ctx> = {
+  name: 'summarize',
+  async *run(ctx) {
+    const items = requireCtx(ctx, 'items', 'summarize');  // loud failure if not set
+    ctx.digest = await summarizeItems(items);
+    yield { type: 'data', key: 'digest', value: ctx.digest };
+  },
+};
+
+const ctx: Ctx = { cache: new PipelineCache() };
+for await (const event of runPipeline([fetch, summarize], ctx)) {
+  console.log(event);
+}
+```
+
+**Rules of the model:**
+
+- **Mutate `ctx` for results, `yield` events for progress.** Never return data from `run`; downstream phases read it from ctx.
+- **Use `requireCtx(ctx, 'field', phaseName)` for every input field.** Fails loud with the field name if a prerequisite phase didn't populate it. Catches phase-ordering bugs at the right layer.
+- **Type every field as optional in `Ctx`.** Not set until that phase runs. `requireCtx` does the runtime check + narrowing.
+- **No DAG framework.** The array IS the pipeline. Reorder by reordering the array.
+- **One phase fails → pipeline halts.** Set `ctx.stop = { reason }` to halt cleanly between phases, or throw to propagate as a hard error.
+
+To make this discoverable via the CLI, wrap in a `.thread-phase/pipelines/<name>.ts` extension file with `registerPipeline`. See [`EXTENDING.md`](./EXTENDING.md).
+
+## Injecting code between stages
+
+Adding a new step to an existing pipeline is **insertion into the array**. There's no plugin system to navigate — just edit the list of phases:
+
+```ts
+// Before
+const phases = [fetch, summarize, send];
+
+// Want to validate the digest before sending?
+const validate: Phase<Ctx> = {
+  name: 'validate',
+  async *run(ctx) {
+    const digest = requireCtx(ctx, 'digest', 'validate');
+    if (digest.length < 50) ctx.stop = { reason: 'digest too short, skipping send' };
+  },
+};
+
+// After
+const phases = [fetch, summarize, validate, send];
+```
+
+Patterns for the less-trivial cases:
+
+| You want to... | Reach for |
+|---|---|
+| Add a step that runs only when a condition holds | `match(name, { selector, cases, default? })` — routes to one of N phase lists |
+| Add a step that may halt the pipeline cheaply | `intentGate` — classifier + short-circuit; sets `ctx.stop` if the heavy path isn't needed |
+| Run two distinct phases concurrently as one composite | `parallelPhases(name, [a, b])` — the one DAG shape arrays can't express |
+| Wrap a step with retry-on-failure | `withRetry(phase, { maxAttempts, baseDelayMs })` |
+| Invoke another whole pipeline as a step (with isolated cache, propagated signal) | `subPipeline(name, { pipeline, mapInput?, mapOutput? })` |
+| Add cross-cutting behavior to every phase (logging, metrics) | Higher-order function that takes a `Phase` and returns a wrapped `Phase` |
+
+All of the above are themselves `Phase`s — they slot into the array like any other step.
+
+**Sharing state between phases** is just ctx mutation:
+
+```ts
+const phaseA: Phase<Ctx> = { name: 'a', async *run(ctx) { ctx.x = 42; } };
+const phaseB: Phase<Ctx> = { name: 'b', async *run(ctx) {
+  const x = requireCtx(ctx, 'x', 'b');  // 42 — written by phaseA
+  ctx.y = x * 2;
+}};
+```
+
+For state that must NOT leak between phases (cache, scratch buffers): use the per-pipeline `PipelineCache` accessed via `ctx.cache` — it's cleared at pipeline end.
+
+## Implementing loops
+
+Three patterns by increasing complexity. Pick the lightest that fits the case.
+
+### 1. Plain `while` inside a helper handler
+
+When the loop is entirely inside one handler — no need for framework-level per-iteration events or JobStore log per iteration — just use plain JS:
+
+```ts
+import { oneShot } from '@autonome-research/thread-phase';
+
+export default oneShot(async (ctx) => {
+  let sources: string[] = [];
+  while (sources.length < 6) {
+    const more = await search();
+    sources.push(...more);
+  }
+  return synthesize(sources);
+});
+```
+
+Same applies inside `schedule({ cron: ... }, async () => { while (...) ... })` and `hook(...)`. Simplest path — no new imports.
+
+### 2. `whileCondition` pattern — phase-level loop
+
+When the loop is **a body of phases**, you want per-iteration events in the JobStore, and you may want to compose it with other phases:
+
+```ts
+import { runPipeline, PipelineCache } from '@autonome-research/thread-phase';
+import { whileCondition } from '@autonome-research/thread-phase/patterns';
+import type { Phase, BasePipelineContext } from '@autonome-research/thread-phase';
+
+interface Ctx extends BasePipelineContext {
+  sources: string[];
+  sufficient: boolean;
+}
+
+const search: Phase<Ctx> = {
+  name: 'search',
+  async *run(ctx) {
+    const found = await searchOnce();
+    ctx.sources.push(...found);
+    yield { type: 'data', key: 'count', value: ctx.sources.length };
+  },
+};
+
+const assess: Phase<Ctx> = {
+  name: 'assess',
+  async *run(ctx) {
+    ctx.sufficient = ctx.sources.length >= 6;
+  },
+};
+
+const research = whileCondition<Ctx>('research-loop', {
+  predicate: (ctx) => !ctx.sufficient,
+  body: [search, assess],
+  maxIterations: 10,
+});
+
+const ctx: Ctx = { cache: new PipelineCache(), sources: [], sufficient: false };
+for await (const event of runPipeline([research, synthesizePhase], ctx)) {
+  // each search/assess iteration yields events through this stream
+}
+```
+
+`whileCondition` emits `${name}.converged` on clean exit, `${name}.max-iterations` if the cap hits (and sets `ctx.stop`).
+
+### 3. `withRetry` wrapper — "loop until success"
+
+When the loop is specifically "retry this phase on failure with exponential backoff":
+
+```ts
+import { withRetry } from '@autonome-research/thread-phase/patterns';
+
+const reliableFetch = withRetry(fetchPhase, {
+  maxAttempts: 5,
+  baseDelayMs: 1000,
+});
+// Use reliableFetch anywhere fetchPhase would go.
+```
+
+Retries on both thrown exceptions and `ctx.stop` set; override with `isFailure` for finer control.
+
+### Decision rule
+
+| Shape | Use |
+|---|---|
+| Loop entirely in one handler, no need for per-iteration framework events | plain `while` inside `oneShot` / `schedule` / `hook` |
+| Loop is a body of phases, want per-iteration JobStore log entries | `whileCondition` |
+| Loop is "retry on failure" | `withRetry` |
+| Loop is "synthesizer + critic with structured re-run signal" | `whileCondition` with the critic in the body — see [`docs/recipes.md`](./packages/thread-phase/docs/recipes.md) |
+
+---
+
 ## The mental model
 
 Three primitives plus one extension surface. Memorize these — everything else is composition.

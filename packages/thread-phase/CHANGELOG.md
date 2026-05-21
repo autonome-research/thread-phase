@@ -4,6 +4,19 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-05-21
+
+Docs-only release for core; the change of substance is in `@autonome-research/thread-phase-agents@3.1.0` (re-export of the consumer + chain-builder surface so callers using adapters import from one place).
+
+### Documentation
+
+- **AGENTS.md**: three new sections after the Quickstart — "Building multi-phase pipelines", "Injecting code between stages", "Implementing loops". Each covers the gap between the helpers (single-function automations) and the full Phase template (deep multi-agent chains).
+  - Pipelines: the Phase model, `requireCtx` for loud failure, mutate-ctx / yield-events rule.
+  - Injecting: array editing for the simple case; `match` / `intentGate` / `parallelPhases` / `withRetry` / `subPipeline` for less-trivial cases.
+  - Loops: three patterns (plain `while` in helper, `whileCondition` pattern, `withRetry` wrapper) with a decision table.
+- **SKILL.md**: mirror of the new sections.
+- Pi-local skill at `~/.pi/agent/skills/thread-phase/SKILL.md` synced.
+
 ## [3.0.3] — 2026-05-21
 
 Docs only — agent-facing. Pre-3.0.3, agents reading AGENTS.md / SKILL.md were led directly to the full Phase + `registerPipeline` template, ignoring the convenience helpers shipped in v3.0.0. Coding agents (pi, claude-code, codex) consistently wrote 30-50 lines for what `schedule()` now handles in 5.
