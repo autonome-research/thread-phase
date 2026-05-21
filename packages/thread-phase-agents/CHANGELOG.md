@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [3.2.1] — 2026-05-21
+
+Locked-version release in step with `@autonome-research/thread-phase-cli@3.2.1` (init scaffold tweaks, empty-`.thread-phase/` hint). No adapter changes.
+
 ## [3.2.0] — 2026-05-21
 
 Locked-version release in step with `@autonome-research/thread-phase-cli@3.2.0` (init command, walk-up discovery, load summary, --strict flag). No adapter changes.

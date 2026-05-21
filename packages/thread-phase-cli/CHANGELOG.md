@@ -4,6 +4,19 @@ All notable changes to this package are documented here.
 
 ## [Unreleased]
 
+## [3.2.1] — 2026-05-21
+
+Follow-up to v3.2.0 driven by post-release agent feedback.
+
+### Changed
+
+- **`thread-phase init` now scaffolds both core + CLI as explicit deps.** The generated `package.json` lists `@autonome-research/thread-phase` AND `@autonome-research/thread-phase-cli` directly. Previously only the CLI was declared; core came in transitively, which made `npm ls` misleading and risked surprises if a teammate edited the package.json without the CLI installed.
+- **`thread-phase init` drops a `lib/README.md`** explaining the convention so the empty `lib/` directory isn't mysterious. Two-paragraph note with a concrete example layout.
+
+### Added
+
+- **Empty-but-exists `.thread-phase/` hint.** When `.thread-phase/` is present but no extensions are registered, `thread-phase list` now prints a one-line "drop a file in pipelines/" hint with a working example. Previously this case showed bare `(0)` rows with no guidance — friction-report item from a coding agent.
+
 ## [3.2.0] — 2026-05-21
 
 Adoption-friendly improvements driven by the pi-agent friction report on v3.1.0. All additive; no breaking changes.

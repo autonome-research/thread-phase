@@ -4,6 +4,14 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [3.2.1] — 2026-05-21
+
+Docs-only release for core. CLI improvements (init scaffold tweaks, empty-`.thread-phase/` hint) ship in `@autonome-research/thread-phase-cli@3.2.1`.
+
+### Documentation
+
+- **README.md**: `Trigger` section refreshed. Mentions both `TimerTrigger` and the newer `CronTrigger`. Adds a worked example using the `schedule` helper so readers see the recommended high-level entry point alongside the lower-level `runTrigger` API.
+
 ## [3.2.0] — 2026-05-21
 
 Docs-only release for core. Real changes ship in `@autonome-research/thread-phase-cli@3.2.0` (init command, walk-up discovery, load summary, --strict).

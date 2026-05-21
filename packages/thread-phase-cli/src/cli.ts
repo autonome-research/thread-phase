@@ -435,14 +435,24 @@ function cmdList(
   const adapters = registry.listAdapters();
   const pipelines = registry.listPipelines();
 
-  if (!io.extDirExists && triggers.length + adapters.length + pipelines.length === 0) {
+  const totalRegistrations = triggers.length + adapters.length + pipelines.length;
+
+  if (!io.extDirExists && totalRegistrations === 0) {
     io.stdout.write(
       'No .thread-phase/ directory found here.\n' +
-        'Create one and drop an extension to get started — for example:\n' +
-        '  mkdir -p .thread-phase/pipelines\n' +
+        'Get started with: thread-phase init\n' +
+        'Or scaffold manually — see https://github.com/autonome-research/thread-phase/blob/master/EXTENDING.md\n',
+    );
+    return 0;
+  }
+
+  if (io.extDirExists && totalRegistrations === 0) {
+    io.stdout.write(
+      '.thread-phase/ exists but no extensions are registered.\n' +
+        'Drop a file in .thread-phase/pipelines/ to register one — for example:\n' +
         "  echo \"import { oneShot } from '@autonome-research/thread-phase';\\nexport default oneShot(async () => ({ hello: 'world' }));\" > .thread-phase/pipelines/hello.ts\n" +
         '  thread-phase run hello\n' +
-        'See https://github.com/autonome-research/thread-phase/blob/master/EXTENDING.md for the full extension contract.\n',
+        'See https://github.com/autonome-research/thread-phase/blob/master/EXTENDING.md for the full contract.\n',
     );
     return 0;
   }

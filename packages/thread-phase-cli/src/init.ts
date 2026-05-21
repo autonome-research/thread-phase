@@ -42,6 +42,10 @@ function makePackageJson(dirName: string, cliVersion: string): string {
         private: true,
         type: 'module',
         dependencies: {
+          // Both explicit. The CLI bundles thread-phase as a regular dep,
+          // but listing thread-phase here too keeps `npm ls` honest and
+          // makes the project's contract clear if the CLI is ever swapped.
+          '@autonome-research/thread-phase': `^${cliVersion}`,
           '@autonome-research/thread-phase-cli': `^${cliVersion}`,
         },
       },
@@ -50,6 +54,30 @@ function makePackageJson(dirName: string, cliVersion: string): string {
     ) + '\n'
   );
 }
+
+const LIB_README = `# .thread-phase/lib/
+
+Shared user-side code (custom patterns, helpers, types) imported by registered
+extensions via relative paths.
+
+Files in this directory are **NOT auto-loaded** by the CLI. The loader only
+scans \`.thread-phase/{triggers,adapters,pipelines}/\`. Use \`lib/\` for code that
+two or more extensions import — promote inline helpers here once a second
+caller appears.
+
+Example:
+
+\`\`\`
+.thread-phase/
+  lib/
+    poll-until.ts          ← custom pattern wrapping whileCondition
+  pipelines/
+    poll-job.ts            ← imports { pollUntil } from '../lib/poll-until.js'
+    poll-deployment.ts     ← imports the same helper
+\`\`\`
+
+See EXTENDING.md for the full convention.
+`;
 
 export async function cmdInit(
   args: string[],
@@ -95,6 +123,9 @@ export async function cmdInit(
 
   // Sample pipeline.
   writeFileSync(join(tpDir, 'pipelines', 'hello.ts'), HELLO_TEMPLATE);
+
+  // lib/ purpose-explainer so the empty dir isn't mysterious.
+  writeFileSync(join(tpDir, 'lib', 'README.md'), LIB_README);
 
   // package.json if absent.
   const pkgPath = join(target, 'package.json');

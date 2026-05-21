@@ -146,7 +146,9 @@ Memory across runs is outsourced: `MemoryProvider` is just a TypeScript interfac
 
 `Trigger<TInput>` is the protocol every signal source implements: timers, webhooks, queue consumers, file watchers, message brokers. Each trigger yields `TriggerEvent<TInput>` with `{ id, occurredAt, input, metadata }`. `runTrigger(trigger, factory, options)` is the canonical consumer — it reads events, dispatches pipelines (optionally through a `JobRunner`), enforces a concurrency cap with backpressure, and isolates per-event failures.
 
-Core ships `TimerTrigger` only. HTTP/queue/file-watch transports stay in `examples/triggers/` as recipes — wrap your favorite framework into the protocol, don't make thread-phase ship transports.
+Core ships two built-in triggers: `TimerTrigger` (interval-driven) and `CronTrigger` (cron-expression-driven, lazy-loaded). HTTP/queue/file-watch transports stay in `examples/triggers/` as recipes — wrap your favorite framework into the protocol, don't make thread-phase ship transports.
+
+For most automation, reach for the higher-level helpers on the main index (`schedule`, `hook`, `oneShot`) — they construct the underlying trigger and wire it through `runTrigger` in one call. The lower-level API is below if you need it:
 
 ```ts
 import { TimerTrigger, runTrigger } from '@autonome-research/thread-phase/triggers';
@@ -155,11 +157,21 @@ const trigger = new TimerTrigger({ intervalMs: 15 * 60_000, name: 'every-15m' })
 const handle = runTrigger(
   trigger,
   () => ({ phases: [myPipeline], ctx: { cache: new PipelineCache() } }),
-  { jobRunner: runner, jobStore: store },
+  { jobRunner: runner },
 );
 
 process.on('SIGTERM', () => void handle.stop());
 await handle.done;
+```
+
+Equivalent with the helper (when you don't need the lower-level pieces):
+
+```ts
+import { schedule } from '@autonome-research/thread-phase';
+
+export default schedule({ intervalMs: 15 * 60_000 }, async () => {
+  await doStuff();
+});
 ```
 
 ## Patterns
