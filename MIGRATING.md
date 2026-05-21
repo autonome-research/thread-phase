@@ -11,6 +11,17 @@ v3.0.0 is a cleanup + simplification release. Breaking changes are listed below 
 + npm install @autonome-research/thread-phase-cli
 ```
 
+**Heavy agent SDKs are optional peer deps** (since v3.0.1). Install only the ones whose adapter you actually use:
+
+```sh
+npm install @anthropic-ai/sdk                # for anthropicAgent
+npm install openai                           # for codexAgent (Responses API)
+npm install @mariozechner/pi-coding-agent    # for piAgent
+# claude-code, codex-cli, hermes, openclaw need no SDK (subprocess-based).
+```
+
+If you call an adapter whose SDK isn't installed, you get a clear `... requires the optional peer dep <pkg>. Install it with: npm install <pkg>` error rather than a missing-module crash at startup.
+
 Library-only users (no CLI, no auto-loader) keep installing the core directly:
 
 ```sh

@@ -4,6 +4,14 @@ All notable changes to this package are documented here.
 
 ## [Unreleased]
 
+## [3.0.1] — 2026-05-20
+
+Locked-version release in step with `@autonome-research/thread-phase-agents@3.0.1` (heavy agent SDKs moved to optional peer deps). No CLI changes — installing `@autonome-research/thread-phase-cli` still pulls in core + agents + tsx, but the agents package no longer drags in `@anthropic-ai/sdk`, `openai@6`, or `@mariozechner/pi-coding-agent` transitively. Install those separately for the adapters you use.
+
+## [3.0.0] — 2026-05-20
+
+Packaging restructure: `@autonome-research/thread-phase-cli` now depends on `@autonome-research/thread-phase` AND `@autonome-research/thread-phase-agents` as regular (non-peer) deps. `npm install @autonome-research/thread-phase-cli` now gets the full runtime. tsx remains a regular runtime dep (the CLI uses it for loading user extensions).
+
 ## [2.5.0] — 2026-05-20
 
 Sub-pipeline composition surfaces through the registry.

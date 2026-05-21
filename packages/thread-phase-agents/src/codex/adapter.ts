@@ -22,8 +22,23 @@
  * @internal
  */
 
-import OpenAI from 'openai';
+// `openai` is an OPTIONAL peer dep. Types stay imported (erased at runtime);
+// the runtime constructor is lazy-loaded inside runOnce() so users who never
+// invoke codexAgent don't need the package installed.
+import type OpenAI from 'openai';
 import type { Response, ResponseStreamEvent } from 'openai/resources/responses/responses.js';
+
+async function loadOpenAI(): Promise<typeof import('openai').default> {
+  try {
+    const mod = await import('openai');
+    return mod.default;
+  } catch {
+    throw new Error(
+      'codexAgent requires the optional peer dep openai. ' +
+        'Install it with: npm install openai',
+    );
+  }
+}
 
 import {
   applyStructuredOutputPrompt,
@@ -120,7 +135,7 @@ function createCodexAdapter(
 
     const client =
       config.client ??
-      new OpenAI({
+      new (await loadOpenAI())({
         apiKey: config.apiKey,
         ...(config.baseURL !== undefined ? { baseURL: config.baseURL } : {}),
       });

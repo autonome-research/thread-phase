@@ -6,15 +6,35 @@ A small stable core handles phase ordering, typed shared state, persistence, fan
 
 Out of the box: cron-driven pipelines, webhook workflows, heterogeneous agent chains, concurrency-capped fanout. Extensible by you — or your own coding agents — without forking the core.
 
+## Install
+
+```sh
+# Full runtime: CLI + library + adapter protocol (one command, the common case)
+npm install @autonome-research/thread-phase-cli
+
+# …then install only the agent SDKs you actually use (optional peer deps):
+npm install @anthropic-ai/sdk                # for the anthropicAgent adapter
+npm install openai                           # for the codexAgent (Responses API) adapter
+npm install @mariozechner/pi-coding-agent    # for the piAgent adapter
+# claude-code, codex-cli, hermes, openclaw need no SDK — they're subprocess-based.
+```
+
+Library-only use (no CLI, no auto-loader):
+
+```sh
+npm install @autonome-research/thread-phase
+# + @autonome-research/thread-phase-agents for the adapter protocol + adapters
+```
+
 ## Packages
 
 This is a monorepo. The published packages live in `packages/`:
 
 | Package | Purpose |
 |---|---|
-| [`@autonome-research/thread-phase`](./packages/thread-phase) | The substrate. `Phase`, `runPipeline`, `AgentAdapter`, `Thread`, `JobRunner`, `Trigger`, built-in patterns, the in-tree `runAgentWithTools` tool-use loop. |
-| [`@autonome-research/thread-phase-agents`](./packages/thread-phase-agents) | Agent adapters. Uniform `AgentAdapter` protocol wrapping claude-code, codex, codex-cli, hermes, openclaw, the Anthropic SDK, pi, and an ACP chassis. |
-| [`@autonome-research/thread-phase-cli`](./packages/thread-phase-cli) | CLI + auto-loader. `thread-phase {run,serve,list}` discovers extensions from `./.thread-phase/{triggers,adapters,pipelines}/`. |
+| [`@autonome-research/thread-phase`](./packages/thread-phase) | The substrate. `Phase`, `runPipeline`, `AgentAdapter`, `Thread`, `JobRunner`, `Trigger`, built-in patterns, the convenience helpers (`oneShot` / `schedule` / `hook`), the in-tree `runAgentWithTools` tool-use loop. |
+| [`@autonome-research/thread-phase-agents`](./packages/thread-phase-agents) | Agent adapters. Uniform `AgentAdapter` protocol wrapping claude-code, codex, codex-cli, hermes, openclaw, the Anthropic SDK, pi, and an ACP chassis. Heavy SDK deps are **optional peers** — install only what you use. |
+| [`@autonome-research/thread-phase-cli`](./packages/thread-phase-cli) | CLI + auto-loader. `thread-phase {run,serve,list}` discovers extensions from `./.thread-phase/{triggers,adapters,pipelines}/`. Depends on the other two so installing this gets the full runtime. |
 
 All packages release in lockstep at the same version.
 

@@ -1,7 +1,7 @@
 {
   "name": "@autonome-research/thread-phase-agents",
-  "version": "3.0.0",
-  "description": "Agent adapters for thread-phase — wraps hermes, openclaw, anthropic, codex, claude-code, pi behind a uniform AgentAdapter protocol.",
+  "version": "3.0.1",
+  "description": "Agent adapters for thread-phase — wraps hermes, openclaw, anthropic, codex, claude-code, pi behind a uniform AgentAdapter protocol. Agent SDKs are optional peer deps; install only what you use.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -21,16 +21,22 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@autonome-research/thread-phase": "^3.0.0"
-  },
-  "dependencies": {
+    "@autonome-research/thread-phase": "^3.0.1",
     "@anthropic-ai/sdk": "^0.96.0",
     "@mariozechner/pi-coding-agent": "^0.73.1",
     "openai": "^6.38.0"
   },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": { "optional": true },
+    "@mariozechner/pi-coding-agent": { "optional": true },
+    "openai": { "optional": true }
+  },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.96.0",
     "@autonome-research/thread-phase": "*",
+    "@mariozechner/pi-coding-agent": "^0.73.1",
     "@types/node": "^22.0.0",
+    "openai": "^6.38.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"

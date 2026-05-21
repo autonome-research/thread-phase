@@ -4,6 +4,32 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [3.0.1] — 2026-05-20
+
+Slim install. Move heavy agent SDKs from runtime `dependencies` to optional `peerDependencies` so users only pull in what they use.
+
+### Changed
+
+- `@anthropic-ai/sdk`, `openai`, and `@mariozechner/pi-coding-agent` moved to `peerDependencies` with `peerDependenciesMeta.<name>.optional: true`. Installing `@autonome-research/thread-phase-agents` no longer drags in those packages (or their transitives — pi-coding-agent alone was ~50MB of pi-* internals).
+- `anthropicAgent` and `codexAgent` now lazy-load their SDK via dynamic `import()` inside the run loop. Calling an adapter without its SDK installed throws `<adapter> requires the optional peer dep <pkg>. Install it with: npm install <pkg>` instead of a missing-module crash at module load.
+- `piAgent` was already lazy; no change there.
+
+### Migration
+
+If you were using these adapters, add the SDK to your install:
+
+| Adapter | Add |
+|---|---|
+| `anthropicAgent` | `npm install @anthropic-ai/sdk` |
+| `codexAgent` | `npm install openai` |
+| `piAgent` | `npm install @mariozechner/pi-coding-agent` |
+
+If you weren't using a given adapter, you save the install footprint. `claude-code`, `codex-cli`, `hermes`, `openclaw` are subprocess-based and need no SDK install at all.
+
+## [3.0.0] — 2026-05-20
+
+Locked-version release alongside `@autonome-research/thread-phase@3.0.0` (async JobStore, pattern trim, convenience helpers). No adapter changes; SDK deps still in `dependencies` at this version — see 3.0.1 for the slim-install fix.
+
 ## [2.5.0] — 2026-05-20
 
 Locked-version release alongside `@autonome-research/thread-phase@2.5.0` (sub-pipeline composition). No adapter changes.

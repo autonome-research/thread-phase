@@ -8,18 +8,20 @@ Adapter implementations for the `AgentAdapter` protocol from [`@autonome-researc
 npm install @autonome-research/thread-phase-agents @autonome-research/thread-phase
 ```
 
-`@autonome-research/thread-phase` is a peer dependency. Each adapter has its own dependency on whichever SDK or CLI it wraps:
+`@autonome-research/thread-phase` is a peer dep. **Agent SDKs are also optional peer deps** — install only the ones whose adapter you actually use. The package itself is small; the SDK weight is what you choose to add.
 
-| Adapter | Requires |
-|---|---|
-| `acpAgent` (chassis) | An ACP-speaking subprocess on your machine |
-| `hermesAgent` | `hermes` CLI in PATH (https://github.com/...) |
-| `openClawAgent` | `acpx` in PATH; optional NemoClaw sandbox |
-| `claudeCodeAgent` | `claude` CLI in PATH (https://claude.com/code) |
-| `codexCliAgent` | `codex` CLI in PATH (`codex login` for auth) |
-| `codexAgent` | `OPENAI_API_KEY` env var (Responses API direct) |
-| `anthropicAgent` | `ANTHROPIC_API_KEY` env var |
-| `piAgent` | `@mariozechner/pi-coding-agent` (already bundled), pi config under `~/.pi/agent/` |
+| Adapter | Requires | Install when used |
+|---|---|---|
+| `acpAgent` (chassis) | An ACP-speaking subprocess on your machine | — |
+| `hermesAgent` | `hermes` CLI in PATH | — |
+| `openClawAgent` | `acpx` in PATH; optional NemoClaw sandbox | — |
+| `claudeCodeAgent` | `claude` CLI in PATH (https://claude.com/code) | — |
+| `codexCliAgent` | `codex` CLI in PATH (`codex login` for auth) | — |
+| `codexAgent` | `OPENAI_API_KEY` env var (Responses API direct) | `npm install openai` |
+| `anthropicAgent` | `ANTHROPIC_API_KEY` env var | `npm install @anthropic-ai/sdk` |
+| `piAgent` | pi config under `~/.pi/agent/` | `npm install @mariozechner/pi-coding-agent` |
+
+Calling an adapter without its SDK installed throws a clear `... requires the optional peer dep <pkg>. Install it with: npm install <pkg>` error — the adapter is import-safe even when the SDK is absent.
 
 ## What's in here
 

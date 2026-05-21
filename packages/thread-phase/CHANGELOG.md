@@ -4,6 +4,12 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [3.0.1] — 2026-05-20
+
+Locked-version release in step with `@autonome-research/thread-phase-agents@3.0.1` (heavy agent SDKs moved to optional peer deps; pi-coding-agent, anthropic-sdk, openai@6 no longer pulled in by default). No core changes.
+
+## [3.0.0] — 2026-05-20
+
 ### Breaking — `JobStore` is async by default
 
 Every method on the `JobStore` interface now returns a `Promise`:

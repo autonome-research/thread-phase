@@ -3,7 +3,13 @@
 The CLI and auto-loader for [thread-phase](https://github.com/Code4me2/thread-phase). Discovers extensions under `./.thread-phase/{triggers,adapters,pipelines}/` and runs registered pipelines.
 
 ```sh
-npm install -g @autonome-research/thread-phase-cli @autonome-research/thread-phase
+# One install gets the full runtime — core + adapter protocol + bin.
+npm install -g @autonome-research/thread-phase-cli
+
+# …plus the agent SDKs your adapters actually use (optional, only when needed):
+npm install -g @anthropic-ai/sdk                # anthropicAgent
+npm install -g openai                           # codexAgent (Responses API)
+npm install -g @mariozechner/pi-coding-agent    # piAgent
 ```
 
 ## Commands

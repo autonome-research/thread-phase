@@ -21,7 +21,10 @@
  * @internal
  */
 
-import Anthropic from '@anthropic-ai/sdk';
+// `@anthropic-ai/sdk` is an OPTIONAL peer dep. Types stay imported (erased
+// at runtime); the runtime constructor is lazy-loaded inside runOnce() so
+// users who never invoke anthropicAgent don't need the package installed.
+import type Anthropic from '@anthropic-ai/sdk';
 import type {
   MessageParam,
   Tool as AnthropicTool,
@@ -29,6 +32,18 @@ import type {
   StopReason as AnthropicStopReason,
   ThinkingConfigParam,
 } from '@anthropic-ai/sdk/resources/messages.js';
+
+async function loadAnthropic(): Promise<typeof import('@anthropic-ai/sdk').default> {
+  try {
+    const mod = await import('@anthropic-ai/sdk');
+    return mod.default;
+  } catch {
+    throw new Error(
+      'anthropicAgent requires the optional peer dep @anthropic-ai/sdk. ' +
+        'Install it with: npm install @anthropic-ai/sdk',
+    );
+  }
+}
 
 import {
   applyStructuredOutputPrompt,
@@ -114,10 +129,12 @@ function createAnthropicAdapter(
   async function runOnce(): Promise<AgentRunResult> {
     queue.push({ type: 'agent_start', source, traceId });
 
-    const client = config.client ?? new Anthropic({
-      apiKey: config.apiKey,
-      baseURL: config.baseURL,
-    });
+    const client =
+      config.client ??
+      new (await loadAnthropic())({
+        apiKey: config.apiKey,
+        baseURL: config.baseURL,
+      });
 
     const systemPrompt = config.outputSchema
       ? applyStructuredOutputPrompt(config.systemPrompt ?? '', config.outputSchema)
