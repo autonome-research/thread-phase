@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [3.0.2] — 2026-05-20
+
+Locked-version release in step with `@autonome-research/thread-phase-cli@3.0.2`. No adapter changes.
+
 ## [3.0.1] — 2026-05-20
 
 Slim install. Move heavy agent SDKs from runtime `dependencies` to optional `peerDependencies` so users only pull in what they use.

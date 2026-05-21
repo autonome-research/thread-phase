@@ -37,6 +37,48 @@ describe('runCli', () => {
     expect(stdout.text()).toMatch(/run <pipeline-name>/);
   });
 
+  it('--version prints the package version and returns 0', async () => {
+    const stdout = new StringStream();
+    const stderr = new StringStream();
+    const code = await runCli({
+      cwd: fixtures('basic'),
+      args: ['--version'],
+      stdout,
+      stderr,
+    });
+    expect(code).toBe(0);
+    expect(stdout.text()).toMatch(/^thread-phase \d+\.\d+\.\d+/);
+  });
+
+  it('-v at top level prints version (not list --verbose)', async () => {
+    const stdout = new StringStream();
+    const stderr = new StringStream();
+    const code = await runCli({
+      cwd: fixtures('basic'),
+      args: ['-v'],
+      stdout,
+      stderr,
+    });
+    expect(code).toBe(0);
+    expect(stdout.text()).toMatch(/^thread-phase \d+\.\d+\.\d+/);
+  });
+
+  it('list in a dir with no .thread-phase/ prints a how-to-get-started hint', async () => {
+    // Use /tmp as cwd — a dir that definitely has no .thread-phase/.
+    const stdout = new StringStream();
+    const stderr = new StringStream();
+    const code = await runCli({
+      cwd: '/tmp',
+      args: ['list'],
+      stdout,
+      stderr,
+    });
+    expect(code).toBe(0);
+    const out = stdout.text();
+    expect(out).toMatch(/No \.thread-phase\/ directory found here/);
+    expect(out).toMatch(/EXTENDING\.md/);
+  });
+
   it('list prints registered triggers and pipelines', async () => {
     const stdout = new StringStream();
     const stderr = new StringStream();

@@ -21,12 +21,30 @@ import type {
   TriggerEvent,
 } from '@autonome-research/thread-phase/triggers';
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { Registry } from './registry.js';
 import { loadExtensions } from './loader.js';
 import type { PipelineSpec } from './types.js';
+
+/**
+ * Read this package's version from package.json (sibling of dist/). Falls back
+ * to '0.0.0-dev' if the file can't be read (e.g. running from an unbuilt source
+ * tree). Synchronous; called once when --version is requested.
+ */
+function readVersion(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkgPath = join(here, '..', 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: string };
+    return pkg.version ?? '0.0.0-dev';
+  } catch {
+    return '0.0.0-dev';
+  }
+}
 
 export interface RunCliOptions {
   /** Project root. Default: process.cwd(). */
@@ -61,10 +79,17 @@ export async function runCli(options: RunCliOptions): Promise<number> {
     return 0;
   }
 
+  if (args[0] === '--version' || args[0] === '-v') {
+    stdout.write(`thread-phase ${readVersion()}\n`);
+    return 0;
+  }
+
   const subcommand = args[0];
   const rest = args.slice(1);
 
   const registry = new Registry();
+  const extDir = join(cwd, '.thread-phase');
+  const extDirExists = existsSync(extDir);
   await loadExtensions(registry, {
     cwd,
     log: (msg) => stderr.write(`${msg}\n`),
@@ -80,7 +105,7 @@ export async function runCli(options: RunCliOptions): Promise<number> {
         abortSignal: options.abortSignal,
       });
     case 'list':
-      return cmdList(registry, rest, { stdout });
+      return cmdList(registry, rest, { stdout, extDirExists });
     default:
       stderr.write(`unknown subcommand: ${subcommand}\n`);
       printHelp(stderr);
@@ -92,16 +117,19 @@ function printHelp(out: NodeJS.WritableStream): void {
   out.write(`thread-phase — automation workflow runner
 
 Usage:
-  thread-phase run <pipeline-name>
-  thread-phase serve
-  thread-phase list
+  thread-phase run <pipeline-name> [--input <json|@file|->]
+  thread-phase serve [--health-port <n>]
+  thread-phase list [--verbose|-v]
+  thread-phase --version | -v
+  thread-phase --help | -h
 
 Discovers extensions from ./.thread-phase/{triggers,adapters,pipelines}/.
 
 Commands:
-  run    Execute a registered pipeline once and exit.
-  serve  Start all triggered pipelines and run continuously (SIGINT/SIGTERM to stop).
-  list   Print the registry: triggers, adapters, pipelines.
+  run      Execute a registered pipeline once and exit.
+  serve    Start all triggered pipelines and run continuously (SIGINT/SIGTERM to stop).
+  list     Print the registry: triggers, adapters, pipelines.
+  version  Print this package's version (also --version, -v).
 `);
 }
 
@@ -355,12 +383,24 @@ async function cmdServe(
 function cmdList(
   registry: Registry,
   args: string[],
-  io: { stdout: NodeJS.WritableStream },
+  io: { stdout: NodeJS.WritableStream; extDirExists: boolean },
 ): Promise<number> | number {
   const verbose = args.includes('--verbose') || args.includes('-v');
   const triggers = registry.listTriggers();
   const adapters = registry.listAdapters();
   const pipelines = registry.listPipelines();
+
+  if (!io.extDirExists && triggers.length + adapters.length + pipelines.length === 0) {
+    io.stdout.write(
+      'No .thread-phase/ directory found here.\n' +
+        'Create one and drop an extension to get started — for example:\n' +
+        '  mkdir -p .thread-phase/pipelines\n' +
+        "  echo \"import { oneShot } from '@autonome-research/thread-phase';\\nexport default oneShot(async () => ({ hello: 'world' }));\" > .thread-phase/pipelines/hello.ts\n" +
+        '  thread-phase run hello\n' +
+        'See https://github.com/autonome-research/thread-phase/blob/master/EXTENDING.md for the full extension contract.\n',
+    );
+    return 0;
+  }
 
   io.stdout.write(`triggers (${triggers.length}):\n`);
   for (const t of triggers) {

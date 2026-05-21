@@ -4,6 +4,17 @@ All notable changes to this package are documented here.
 
 ## [Unreleased]
 
+## [3.0.2] — 2026-05-20
+
+### Added
+
+- **`thread-phase --version` / `-v`** at top level — prints `thread-phase <version>` (read from `package.json`) and exits 0. Previously these flags were treated as unknown subcommands.
+- **Empty-`list` hint** — when `${cwd}/.thread-phase/` doesn't exist, `list` now prints a four-line "how to get started" snippet (mkdir + a sample `oneShot` pipeline + `thread-phase run`) plus a link to `EXTENDING.md`, instead of printing three empty registries.
+
+### Changed
+
+- Help text reorganized to include `--version`, `--help`, and the optional flags for each subcommand.
+
 ## [3.0.1] — 2026-05-20
 
 Locked-version release in step with `@autonome-research/thread-phase-agents@3.0.1` (heavy agent SDKs moved to optional peer deps). No CLI changes — installing `@autonome-research/thread-phase-cli` still pulls in core + agents + tsx, but the agents package no longer drags in `@anthropic-ai/sdk`, `openai@6`, or `@mariozechner/pi-coding-agent` transitively. Install those separately for the adapters you use.
