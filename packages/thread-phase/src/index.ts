@@ -96,6 +96,7 @@ export {
   hook,
   CronTrigger,
   HttpTrigger,
+  HookValidationError,
   type OneShotOptions,
   type ScheduleSpec,
   type ScheduleOptions,

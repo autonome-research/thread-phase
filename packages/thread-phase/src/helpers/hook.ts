@@ -23,6 +23,7 @@ import { PipelineCache } from '../cache.js';
 import type { BasePipelineContext, Phase } from '../phase.js';
 import type { Trigger, TriggerEvent } from '../triggers/types.js';
 import { deriveNameFromCaller } from './caller.js';
+import { toErrorMessage } from '../internal/error-message.js';
 import type {
   ExtensionRegisterFn,
   HelperHandler,
@@ -36,11 +37,45 @@ export interface HookSpec {
   method?: 'POST';
 }
 
-export interface HookOptions {
+export interface HookOptions<TBody = unknown> {
   /** Pipeline + trigger base name. Defaults to the calling file's basename. */
   name?: string;
   /** Free-form description for `thread-phase list`. */
   description?: string;
+  /**
+   * Optional runtime validator for the incoming POST body.
+   *
+   * Webhook payloads are the canonical untrusted boundary — they come from
+   * the network in arbitrary shapes. When `validate` is provided, the raw
+   * JSON body is passed through it before reaching the handler; a throw
+   * rejects the HTTP request with 400 and the thrown message.
+   *
+   * When absent, the body is cast to `TBody` without runtime checking —
+   * the handler is one malformed POST away from a TypeError. Strongly
+   * recommended to provide a validator (zod/valibot/io-ts/hand-written)
+   * for any non-trusted source.
+   *
+   * Example:
+   *   import { z } from 'zod';
+   *   const Body = z.object({ slug: z.string(), count: z.number().int().min(0) });
+   *   hook({ path: '/webhook' }, handler, { validate: (raw) => Body.parse(raw) });
+   */
+  validate?: (raw: unknown) => TBody;
+}
+
+/**
+ * Error subclass that signals "the incoming body failed validation, return
+ * 400 to the caller." The HTTP handler distinguishes this from generic
+ * handler errors (which produce 500). Throw your own validation errors
+ * wrapped in this class to surface a 400; bare throws from `validate` are
+ * wrapped automatically.
+ */
+export class HookValidationError extends Error {
+  readonly statusCode = 400;
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'HookValidationError';
+  }
 }
 
 /**
@@ -74,6 +109,20 @@ function getSharedServer(): SharedServer {
   const server = createServer((req, res) => handleRequest(req, res, routes));
   shared = { server, routes, started: false, port };
   return shared;
+}
+
+/**
+ * Tear down the shared HTTP server. Normally called automatically by the
+ * last HttpTrigger.stop() (via refcount) — exposed for tests that need a
+ * force teardown mid-suite or for atexit hooks.
+ */
+async function closeSharedServer(): Promise<void> {
+  if (!shared) return;
+  const toClose = shared;
+  shared = undefined;
+  await new Promise<void>((resolve) => {
+    toClose.server.close(() => resolve());
+  });
 }
 
 /** Test-only: tear down the shared server so each test starts clean. */
@@ -132,10 +181,17 @@ async function handleRequest(
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(result ?? null));
   } catch (err) {
-    res.statusCode = 500;
+    // Errors carrying a numeric `statusCode` (e.g. HookValidationError)
+    // propagate their intended HTTP status; anything else is treated as a
+    // generic server error. Message extraction goes through toErrorMessage
+    // so non-Error throws don't produce `undefined` payloads.
+    const statusCode = typeof (err as { statusCode?: unknown }).statusCode === 'number'
+      ? (err as { statusCode: number }).statusCode
+      : 500;
+    res.statusCode = statusCode;
     res.setHeader('content-type', 'application/json');
     res.end(
-      JSON.stringify({ error: (err as Error).message ?? 'internal error' }),
+      JSON.stringify({ error: toErrorMessage(err) || 'internal error' }),
     );
   }
 }
@@ -238,6 +294,13 @@ export class HttpTrigger implements Trigger<unknown> {
     }
     this.pendingById.clear();
     this.shared.routes.delete(this.path);
+    // Refcount: when the last registered hook removes its route, tear down
+    // the shared HTTP server so the port is released and the process can
+    // exit cleanly. _resetHttpServerForTests remains as a force-teardown
+    // escape hatch for tests that need to reset mid-suite.
+    if (this.shared.routes.size === 0 && this.shared.started) {
+      await closeSharedServer();
+    }
   }
 
   private async ensureServerStarted(): Promise<void> {
@@ -265,7 +328,7 @@ export class HttpTrigger implements Trigger<unknown> {
 export function hook<TBody = unknown, TResult = unknown>(
   spec: HookSpec,
   handler: HelperHandler<TBody, TResult>,
-  options: HookOptions = {},
+  options: HookOptions<TBody> = {},
 ): ExtensionRegisterFn {
   const name = options.name ?? deriveNameFromCaller('hook');
   const triggerName = `${name}:http`;
@@ -282,9 +345,33 @@ export function hook<TBody = unknown, TResult = unknown>(
       };
       const event = carrier.__triggerEvent;
       const httpTrig = carrier.__httpTrigger ?? trigger;
+      const eventId = event?.id ?? 0;
+
+      // Trust boundary: webhook bodies arrive as `unknown`. If the caller
+      // provided a `validate` function, parse-don't-assert; on validation
+      // failure surface a 400 by wrapping in HookValidationError. When no
+      // validator is provided, fall back to the historical cast — unsafe
+      // but documented (see HookOptions.validate).
+      let body: TBody;
+      if (options.validate) {
+        try {
+          body = options.validate(event?.input);
+        } catch (validationErr) {
+          const wrapped = validationErr instanceof HookValidationError
+            ? validationErr
+            : new HookValidationError(toErrorMessage(validationErr), {
+                cause: validationErr,
+              });
+          httpTrig.rejectResponse(eventId, wrapped);
+          throw wrapped;
+        }
+      } else {
+        body = event?.input as TBody;
+      }
+
       try {
-        const result = await handler(event?.input as TBody, ctx);
-        httpTrig.resolveResponse(event?.id ?? 0, result);
+        const result = await handler(body, ctx);
+        httpTrig.resolveResponse(eventId, result);
         yield {
           type: 'data',
           key: `${name}.result`,
@@ -292,8 +379,8 @@ export function hook<TBody = unknown, TResult = unknown>(
         };
       } catch (err) {
         httpTrig.rejectResponse(
-          event?.id ?? 0,
-          err instanceof Error ? err : new Error(String(err)),
+          eventId,
+          err instanceof Error ? err : new Error(toErrorMessage(err)),
         );
         throw err;
       }

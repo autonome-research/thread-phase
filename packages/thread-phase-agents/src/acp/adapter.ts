@@ -181,11 +181,18 @@ function makeAcpRun(source: string, config: AcpAgentConfig, options: AgentRunOpt
 
     let child: ChildProcessByStdio<Writable, Readable, Readable> | null = null;
     let transport: AcpTransport | null = null;
+    // Tracks whether cleanup() has disposed the transport. Late-arriving
+    // events (abort firing after natural completion, in-flight notify
+    // calls scheduled before dispose) read this to skip transport access
+    // and avoid the "notify on disposed transport" race.
+    let disposed = false;
     let stderrBuf = '';
     const collectedText: string[] = [];
     let activeSessionId: string | undefined;
 
     const cleanup = async (): Promise<void> => {
+      if (disposed) return;
+      disposed = true;
       transport?.dispose();
       if (child && child.exitCode === null && child.signalCode === null) {
         try {
@@ -363,7 +370,11 @@ function makeAcpRun(source: string, config: AcpAgentConfig, options: AgentRunOpt
       // 5. Wire cancel — send session/cancel when the composite aborts.
       let cancelSent = false;
       const sendCancel = (): void => {
-        if (cancelSent || !activeSessionId || !transport) return;
+        // `disposed` short-circuits a late abort that races with cleanup —
+        // without the check, notify() runs on an already-disposed transport
+        // and the cancel is silently dropped (the agent subprocess stays
+        // running until its own SIGTERM grace expires).
+        if (cancelSent || disposed || !activeSessionId || !transport) return;
         cancelSent = true;
         const params: CancelNotificationParams = { sessionId: activeSessionId };
         try {

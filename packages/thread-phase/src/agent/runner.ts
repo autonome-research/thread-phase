@@ -52,6 +52,7 @@ import type {
 import { toOpenAIMessages, toOpenAITools } from './openai-adapter.js';
 import { consumeStream, looksLikeToolCallText } from './stream-consumer.js';
 import { isRetryableError, isAbortError } from './retry.js';
+import { toErrorMessage } from '../internal/error-message.js';
 
 export async function runAgentWithTools(
   config: AgentConfig,
@@ -94,15 +95,15 @@ export async function runAgentWithTools(
         const verified = await options.verifyResult(result);
         if (verified) result = verified;
       } catch (err) {
-        const e = err as { message?: string };
+        const message = toErrorMessage(err);
         activity.push({
           agent: label,
           action: 'verify_failed',
-          detail: e.message?.slice(0, 200),
+          detail: message.slice(0, 200),
         });
         return {
           ...result,
-          text: JSON.stringify({ _error: true, message: e.message ?? 'verifyResult threw' }),
+          text: JSON.stringify({ _error: true, message: message || 'verifyResult threw' }),
           finishReason: 'error',
         };
       }
@@ -314,34 +315,34 @@ export async function runAgentWithTools(
       // perspective, even if the wire-level reason was 'tool_calls'.
       return finalize(lastAssistant?.content ?? '{}', 'length');
     } catch (err: unknown) {
-      const e = err as { message?: string };
+      const message = toErrorMessage(err);
 
       if (isAbortError(err)) {
-        activity.push({ agent: label, action: 'aborted', detail: e.message?.slice(0, 120) });
+        activity.push({ agent: label, action: 'aborted', detail: message.slice(0, 120) });
         return finalize('', 'error');
       }
 
-      activity.push({ agent: label, action: 'error', detail: e.message?.slice(0, 120) });
+      activity.push({ agent: label, action: 'error', detail: message.slice(0, 120) });
 
       if (attempt < maxRetries && isRetryableError(err)) {
         const delay = 2000 + Math.random() * 3000;
         activity.push({
           agent: label,
           action: 'retry',
-          detail: `Retrying after ${e.message?.slice(0, 60)}`,
+          detail: `Retrying after ${message.slice(0, 60)}`,
         });
         // eslint-disable-next-line no-console
         console.warn(
-          `[${label}] retryable error, waiting ${Math.round(delay)}ms: ${e.message?.slice(0, 100)}`,
+          `[${label}] retryable error, waiting ${Math.round(delay)}ms: ${message.slice(0, 100)}`,
         );
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
 
       // eslint-disable-next-line no-console
-      console.error(`[${label}] agent failed (attempt ${attempt + 1}):`, e.message);
+      console.error(`[${label}] agent failed (attempt ${attempt + 1}):`, message);
       return finalize(
-        JSON.stringify({ _error: true, message: e.message }),
+        JSON.stringify({ _error: true, message }),
         'error',
       );
     }

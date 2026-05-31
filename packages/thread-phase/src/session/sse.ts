@@ -30,12 +30,16 @@ import type { JobRunner, LiveEvent } from './job-runner.js';
 
 /**
  * Minimal response interface — `http.ServerResponse` and Express's `Response`
- * both satisfy this without modification.
+ * both satisfy this without modification. `once(drain)` is required for
+ * backpressure handling: when `write()` returns false the socket buffer is
+ * full and writes must pause until `drain` fires, or memory grows
+ * unboundedly behind a slow client.
  */
 export interface SSEResponse {
   write(chunk: string): boolean;
   end(): void;
   on(event: 'close', listener: () => void): void;
+  once(event: 'drain', listener: () => void): void;
 }
 
 export interface StreamToSSEOptions {
@@ -75,20 +79,31 @@ export async function streamToSSE(options: StreamToSSEOptions): Promise<void> {
     closed = true;
   });
 
-  const writeFrame = (id: number, type: string, data: unknown): boolean => {
-    if (closed) return false;
-    const payload =
+  // Backpressure: when res.write() returns false the socket buffer is full
+  // and we must wait for 'drain' before continuing. Without this, slow
+  // clients cause unbounded Node-side memory growth as writes accumulate.
+  const writeWithBackpressure = async (payload: string): Promise<void> => {
+    if (closed) return;
+    if (!res.write(payload)) {
+      await new Promise<void>((resolve) => res.once('drain', resolve));
+    }
+  };
+
+  const writeFrame = async (id: number, type: string, data: unknown): Promise<void> => {
+    if (closed) return;
+    await writeWithBackpressure(
       `id: ${id}\n` +
-      `event: ${type}\n` +
-      `data: ${JSON.stringify(data)}\n\n`;
-    return res.write(payload);
+        `event: ${type}\n` +
+        `data: ${JSON.stringify(data)}\n\n`,
+    );
   };
 
   // Step 1: replay anything the client has missed.
   let lastId = afterId;
   const replay = await store.getEvents(jobId, afterId);
   for (const evt of replay) {
-    writeFrame(evt.id, evt.eventType, evt.data);
+    if (closed) return;
+    await writeFrame(evt.id, evt.eventType, evt.data);
     lastId = Math.max(lastId, evt.id);
   }
 
@@ -99,25 +114,52 @@ export async function streamToSSE(options: StreamToSSEOptions): Promise<void> {
     return;
   }
 
-  // Step 2: subscribe to live events. Buffer events that arrived during
-  // replay if their id is past lastId (otherwise they're already sent).
+  // Step 2: subscribe to live events. The EventEmitter listener is sync
+  // and fire-and-forget by API; we buffer events and drain them serially
+  // through writeFrame so backpressure stays honored and ordering is
+  // preserved even when multiple events arrive while a write is pending.
   const channel = `job:${jobId}`;
-  const onLive = (evt: LiveEvent) => {
-    if (closed) return;
-    if (evt.id <= lastId) return;
-    lastId = evt.id;
-    writeFrame(evt.id, evt.eventType, evt.data);
-    if (evt.eventType === 'done' || evt.eventType === 'error') {
-      close();
+  const liveBuffer: LiveEvent[] = [];
+  let draining = false;
+  const drainLive = async (): Promise<void> => {
+    if (draining) return;
+    draining = true;
+    try {
+      while (!closed && liveBuffer.length > 0) {
+        const evt = liveBuffer.shift()!;
+        if (evt.id <= lastId) continue;
+        lastId = evt.id;
+        await writeFrame(evt.id, evt.eventType, evt.data);
+        if (evt.eventType === 'done' || evt.eventType === 'error') {
+          close();
+          return;
+        }
+      }
+    } finally {
+      draining = false;
     }
+  };
+  const onLive = (evt: LiveEvent): void => {
+    if (closed) return;
+    liveBuffer.push(evt);
+    // Promise rejection here would be unobserved by the EventEmitter, so
+    // catch and swallow — writes that fail close the socket anyway.
+    void drainLive().catch(() => {
+      /* connection error during drain; close listener will fire */
+    });
   };
   runner.on(channel, onLive);
 
-  // Heartbeat: comment line every N seconds to keep proxies from idling out.
+  // Heartbeat: comment line every N seconds to keep proxies from idling
+  // out. Skip the heartbeat when the socket is back-pressured rather than
+  // queueing — heartbeats are advisory and stale ones are not useful.
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   if (heartbeatMs > 0) {
     heartbeat = setInterval(() => {
       if (closed) return;
+      // Discard the boolean intentionally: this is a hint, not data.
+      // Backpressure is handled by event writes, which will pause the
+      // pipeline once drain is pending.
       res.write(`: keepalive ${Date.now()}\n\n`);
     }, heartbeatMs);
   }

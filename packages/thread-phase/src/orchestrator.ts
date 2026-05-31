@@ -16,6 +16,7 @@
  */
 
 import type { BasePipelineContext, Phase, PipelineEvent } from './phase.js';
+import { toErrorMessage } from './internal/error-message.js';
 
 /**
  * The terminal state of a pipeline run.
@@ -52,7 +53,13 @@ export async function* runPipeline<
   phases: ReadonlyArray<Phase<TCtx, TEvent>>,
   ctx: TCtx,
   options?: RunPipelineOptions,
-): AsyncGenerator<TEvent, void> {
+  // Output type is `TEvent | PipelineEvent`: phases yield TEvent, the
+  // orchestrator additionally yields canonical `done` (PipelineEvent).
+  // The wider type also catches the foot-gun where a caller parameterized
+  // TEvent as something narrow that does NOT include PipelineEvent —
+  // previously they received `{type:'done'}` via an `as unknown as TEvent`
+  // cast; now the type system tells them they may also see PipelineEvent.
+): AsyncGenerator<TEvent | PipelineEvent, void> {
   // Signal resolution: options.signal wins if provided; otherwise honor a
   // pre-set ctx.signal (callers that already populated ctx — including
   // run-trigger and tests building ctx by hand). Whichever wins is assigned
@@ -63,19 +70,25 @@ export async function* runPipeline<
   try {
     for (const phase of phases) {
       if (signal?.aborted) {
-        const reason =
-          (signal.reason as string | undefined) ?? 'aborted';
+        // AbortSignal.reason is `any` per spec — most callers pass strings,
+        // many pass Error instances, and SDKs occasionally pass arbitrary
+        // objects. toErrorMessage extracts a string from any of these
+        // without destroying diagnostic information (vs. the prior
+        // `as string` cast that silently coerced non-strings to 'aborted').
+        const reason = signal.reason === undefined
+          ? 'aborted'
+          : toErrorMessage(signal.reason);
         const err = new Error(`runPipeline aborted: ${reason}`);
         err.name = 'AbortError';
         throw err;
       }
       yield* phase.run(ctx);
       if (ctx.stop) {
-        yield { type: 'done', reason: ctx.stop.reason } as unknown as TEvent;
+        yield { type: 'done', reason: ctx.stop.reason };
         return;
       }
     }
-    yield { type: 'done' } as unknown as TEvent;
+    yield { type: 'done' };
   } finally {
     ctx.cache.clear();
   }

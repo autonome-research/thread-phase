@@ -16,6 +16,7 @@ export {
 export {
   hook,
   HttpTrigger,
+  HookValidationError,
   type HookSpec,
   type HookOptions,
 } from './hook.js';
