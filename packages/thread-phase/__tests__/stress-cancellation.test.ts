@@ -337,19 +337,15 @@ describe('cancellation: boundedFanoutOf fail-fast awaits adapter cleanup before 
             });
         };
 
-        // Natural completion fires on the next microtask burst — no
-        // wall-clock timer. composite.abort() triggers the same cleanup
-        // path via the listener below.
-        const natural = { cancelled: false };
-        Promise.resolve().then(() => {
-          if (natural.cancelled) return;
-          if (config.shouldFail) cleanup('error');
-          else cleanup('stop');
-        });
-        composite.addEventListener('abort', () => {
-          natural.cancelled = true;
-          cleanup('aborted');
-        });
+        // Only the failing item has a natural-completion path. Non-failing
+        // peers will NEVER complete on their own — they must be aborted by
+        // boundedFanoutOf's fail-fast for cleanup to fire. This is what
+        // forces the test to exercise the abort-and-await-cleanup contract
+        // rather than letting peers finish in the same microtask burst.
+        if (config.shouldFail) {
+          Promise.resolve().then(() => cleanup('error'));
+        }
+        composite.addEventListener('abort', () => cleanup('aborted'));
 
         return {
           events: {
