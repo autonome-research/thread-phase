@@ -19,7 +19,7 @@
  * form is more direct. When you have one item, just call the adapter
  * directly.
  *
- * @internal — exported via thread-phase/patterns
+ * Stable surface — exported via thread-phase/patterns; covered by semver.
  */
 
 import type {
@@ -29,10 +29,9 @@ import type {
   AgentRunResult,
 } from '../agents/protocol.js';
 
-/** Per-item failure handling. Mirrors boundedFanout's mode. @internal */
+/** Per-item failure handling. Mirrors boundedFanout's mode. */
 export type BoundedFanoutOfMode = 'fail-fast' | 'collect';
 
-/** @internal */
 export interface BoundedFanoutOfOptions<TItem, TConfig> {
   items: ReadonlyArray<TItem>;
   concurrency: number;
@@ -57,8 +56,6 @@ export interface BoundedFanoutOfOptions<TItem, TConfig> {
  * error results (finishReason: 'error') and the batch completes. In
  * `fail-fast` (default), the first failure cancels in-flight runs and
  * the function rejects with an Error wrapping the failed item.
- *
- * @internal
  */
 export async function boundedFanoutOf<TItem, TConfig>(
   opts: BoundedFanoutOfOptions<TItem, TConfig>,
@@ -182,7 +179,6 @@ export async function boundedFanoutOf<TItem, TConfig>(
   return results as AgentRunResult[];
 }
 
-/** @internal */
 export class BoundedFanoutOfError extends Error {
   constructor(
     public itemIndex: number,
