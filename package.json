@@ -1,6 +1,6 @@
 {
   "name": "thread-phase-monorepo",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "private": true,
   "description": "Monorepo for thread-phase — TypeScript substrate for automation workflows that coordinate AI agents.",
   "license": "MIT",
