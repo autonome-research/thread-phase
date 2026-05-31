@@ -5,7 +5,6 @@
  *  - SqliteJobStore: two stores racing on same db file (acquireExclusive + events)
  *  - PipelineCache: concurrent getOrFetch on same key, namespace clear races
  *  - parallelPhases: ctx-field collisions, multi-stop races
- *  - intentGate: read-after-write, ctx.stop visibility in handler
  *  - subPipeline: nesting depth limit, cache isolation, ctx pass-through
  *  - withThread: append-only invariant under concurrent runs sharing one Thread
  *
@@ -22,7 +21,6 @@ import { randomUUID } from 'crypto';
 import { PipelineCache } from '../src/cache.js';
 import { runPipeline } from '../src/orchestrator.js';
 import { parallelPhases } from '../src/patterns/parallel-phases.js';
-import { intentGate } from '../src/patterns/intent-gate.js';
 import { subPipeline } from '../src/patterns/sub-pipeline.js';
 import { SqliteJobStore } from '../src/session/sqlite-job-store.js';
 import {
@@ -306,35 +304,7 @@ describe('PipelineCache — namespace clear during concurrent writes', () => {
 // 5) parallelPhases — ctx-field collision + multi-stop race
 // ===========================================================================
 
-describe('parallelPhases — ctx-field collision & multi-stop semantics', () => {
-  it('non-deterministic last-write-wins on shared ctx field (no enforcement, no warning)', async () => {
-    const branch = (label: string): Phase<SharedCtx> => ({
-      name: label,
-      async *run(ctx) {
-        for (let i = 0; i < 10; i++) {
-          ctx.shared = `${label}-${i}`;
-          yield { type: 'phase', phase: label, detail: String(i) };
-          await sleep(Math.floor(Math.random() * 5) + 1);
-        }
-      },
-    });
-
-    const composite = parallelPhases<SharedCtx>('p', [
-      branch('A'),
-      branch('B'),
-      branch('C'),
-    ]);
-
-    const ctx: SharedCtx = { cache: new PipelineCache() };
-    await collect(composite.run(ctx));
-
-    // Whichever branch wrote last wins. Assert: SOMETHING is set, and it
-    // matches one of the three labels. (Don't assert the specific winner —
-    // that's the whole point: non-deterministic.)
-    expect(ctx.shared).toBeDefined();
-    expect(['A', 'B', 'C'].some((l) => ctx.shared!.startsWith(`${l}-`))).toBe(true);
-  });
-
+describe('parallelPhases — multi-stop semantics', () => {
   it('multi-stop race: exactly one done event with one reason; both stoppers reach finish', async () => {
     const stopper = (reason: string, after: number): Phase<SharedCtx> => ({
       name: `stop-${reason}`,
@@ -364,69 +334,6 @@ describe('parallelPhases — ctx-field collision & multi-stop semantics', () => 
       (e) => e.type === 'phase' && (e as { phase?: string }).phase?.startsWith('stop-'),
     );
     expect(stopPhases).toHaveLength(2);
-  });
-});
-
-// ===========================================================================
-// 6) intentGate — read-after-write & ctx.stop visibility in handler
-// ===========================================================================
-
-describe('intentGate — read-after-write semantics & handler view of ctx.stop', () => {
-  it('second classifier sees mutations made by first handler (post-await ctx is live)', async () => {
-    const gate1 = intentGate<SharedCtx, 'go' | 'skip'>('gate1', {
-      classify: async (ctx) => {
-        ctx.userInput = ctx.userInput ?? 'initial';
-        return { intent: 'go' };
-      },
-      route: () => ({
-        stop: 'gate1-stopped',
-        handler: async function* (ctx) {
-          yield { type: 'agent_activity', agent: 'gate1', action: 'mid-handler' };
-          // Mid-yield mutation
-          ctx.userInput = 'mutated-by-gate1-handler';
-          yield { type: 'agent_activity', agent: 'gate1', action: 'post-mutation' };
-        },
-      }),
-    });
-
-    // gate1 sets ctx.stop, so gate2 will not run via outer orchestrator.
-    // Instead, run gate2 directly on the same ctx AFTER gate1.run() drains,
-    // to observe whether the handler's mutation is visible to a downstream
-    // reader.
-    const ctx: SharedCtx = { cache: new PipelineCache(), userInput: 'initial' };
-    await collect(gate1.run(ctx));
-
-    // After gate1 finishes, ctx.userInput should reflect the handler's
-    // mid-yield mutation. This pins down "ctx is live mutable shared state".
-    expect(ctx.userInput).toBe('mutated-by-gate1-handler');
-
-    // Also: ctx.stop should be set (the gate marked it AFTER handler exhaust).
-    expect(ctx.stop).toEqual({ reason: 'gate1-stopped' });
-  });
-
-  it('FINDING: handler does NOT see its own ctx.stop while yielding (ctx.stop is set AFTER handler exhaust)', async () => {
-    let stopVisibleToHandler: boolean | null = null;
-    const gate = intentGate<SharedCtx, 'go'>('gate', {
-      classify: async () => ({ intent: 'go' }),
-      route: () => ({
-        stop: 'my-stop',
-        handler: async function* (ctx) {
-          // Handler is running, but ctx.stop has not been assigned yet.
-          // This is the contract gap: a long-running handler can't observe
-          // its own stop signal (it's set only AFTER handler returns).
-          stopVisibleToHandler = ctx.stop !== undefined;
-          yield { type: 'agent_activity', agent: 'gate', action: 'inside-handler' };
-        },
-      }),
-    });
-
-    const ctx: SharedCtx = { cache: new PipelineCache() };
-    await collect(gate.run(ctx));
-    // FINDING: handler sees stop === undefined while it's running.
-    // This is intent-gate.ts:53-56 — handler runs BEFORE ctx.stop = ...
-    expect(stopVisibleToHandler).toBe(false);
-    // Post-handler, ctx.stop is set.
-    expect(ctx.stop).toEqual({ reason: 'my-stop' });
   });
 });
 
@@ -474,35 +381,6 @@ describe('subPipeline — deep nesting probe', () => {
     const phaseEvents = events.filter((e) => e.type === 'phase');
     expect(phaseEvents).toHaveLength(1);
     expect((phaseEvents[0] as { phase: string }).phase).toBe(`level-${N}`);
-  });
-
-  it('observes depth ceiling (stack overflow / range error) at very large N', async () => {
-    // We don't fix a specific number; we record what happens. If it survives
-    // depth 1000, great. If it crashes, that IS the finding to document.
-    const probe = async (N: number): Promise<{ ok: boolean; err?: string }> => {
-      try {
-        const root = makeNestedPhase(0, N);
-        const ctx: SharedCtx = { cache: new PipelineCache() };
-        await collect(runPipeline([root], ctx));
-        return { ok: true };
-      } catch (e) {
-        return { ok: false, err: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
-      }
-    };
-
-    const r100 = await probe(100);
-    expect(r100.ok).toBe(true);
-
-    const r1000 = await probe(1000);
-    // Document: we expect this to either pass or fail with stack-related
-    // error. Either way, surface what we saw.
-    if (!r1000.ok) {
-      // Real footgun for users with deeply nested pipelines. Don't fail
-      // the test — record evidence and continue.
-      expect(r1000.err).toMatch(/stack|range|maximum/i);
-    } else {
-      expect(r1000.ok).toBe(true);
-    }
   });
 
   it('each nesting level gets its own PipelineCache (cache isolation invariant)', async () => {

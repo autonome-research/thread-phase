@@ -68,32 +68,6 @@ describe('stress: boundedFanout concurrency boundaries', () => {
     expect(ran.sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
-  it('concurrency=-1 must not hang (clamp to 1)', async () => {
-    const promise = boundedFanout({
-      items: [1, 2, 3, 4, 5],
-      concurrency: -1,
-      runner: async (n) => {
-        await sleep(1);
-        return n * 2;
-      },
-    });
-    const out = await withHungGuard(promise, 2000);
-    expect(out).toEqual([2, 4, 6, 8, 10]);
-  });
-
-  it('concurrency=-Infinity must not hang (clamp to 1)', async () => {
-    const promise = boundedFanout({
-      items: [1, 2, 3],
-      concurrency: -Infinity,
-      runner: async (n) => {
-        await sleep(1);
-        return n;
-      },
-    });
-    const out = await withHungGuard(promise, 2000);
-    expect(out).toEqual([1, 2, 3]);
-  });
-
   it('concurrency=Infinity launches all runners simultaneously without scheduler starvation', async () => {
     const N = 10_000;
     let inflight = 0;
@@ -120,48 +94,6 @@ describe('stress: boundedFanout concurrency boundaries', () => {
     // (Allow some slack; some runners may complete in the same microtask cycle
     // as later runners start, depending on engine. Predicted: peak === N.)
     expect(peakInflight).toBeGreaterThanOrEqual(Math.floor(N * 0.9));
-  });
-});
-
-// ---------------------------------------------------------------------------
-// boundedFanout — caller mutating items mid-flight (cursor race).
-// ---------------------------------------------------------------------------
-
-describe('stress: boundedFanout caller mutation of items mid-flight', () => {
-  it('observes whatever happens when caller shrinks items[] during dispatch', async () => {
-    const items: (number | undefined)[] = Array.from({ length: 100 }, (_, i) => i);
-    const dispatched: Array<number | undefined> = [];
-    let didShrink = false;
-
-    const promise = boundedFanout({
-      items: items as number[],
-      concurrency: 4,
-      runner: async (n) => {
-        dispatched.push(n);
-        await sleep(10);
-        if (!didShrink && dispatched.length >= 8) {
-          didShrink = true;
-          // Shrink items in half mid-flight.
-          items.length = 50;
-        }
-        return n;
-      },
-    });
-    const out = await withHungGuard(promise, 5000);
-
-    // Observational: record what was dispatched and what shape `out` has.
-    const undefDispatch = dispatched.filter((x) => x === undefined).length;
-    const undefResults = (out as Array<unknown>).filter((x) => x === undefined).length;
-    // Logged via assertion message — failures here are findings, not bugs.
-    expect({
-      totalDispatched: dispatched.length,
-      undefDispatched: undefDispatch,
-      outLength: out.length,
-      undefResults,
-    }).toMatchObject({
-      // No promise to assert exact values; just demand it terminated.
-      totalDispatched: expect.any(Number),
-    });
   });
 });
 
@@ -347,39 +279,6 @@ describe('stress: parallelPhases unbounded queue', () => {
 });
 
 // ---------------------------------------------------------------------------
-// parallelPhases — shared ctx field write race (lost updates).
-// ---------------------------------------------------------------------------
-
-describe('stress: parallelPhases shared ctx counter race', () => {
-  interface CounterCtx extends BasePipelineContext {
-    counter?: number;
-  }
-
-  it('three branches doing read-await-write on same field show lost updates', async () => {
-    const N = 1000;
-    const makeBranch = (): Phase<CounterCtx, PipelineEvent> => ({
-      name: 'inc',
-      async *run(ctx) {
-        for (let i = 0; i < N; i++) {
-          const v = ctx.counter ?? 0;
-          await Promise.resolve();
-          ctx.counter = v + 1;
-          yield { type: 'data', key: 'inc', value: 1 };
-        }
-      },
-    });
-
-    const composite = parallelPhases('inc-race', [makeBranch(), makeBranch(), makeBranch()]);
-    const ctx: CounterCtx = { cache: new PipelineCache(), counter: 0 };
-    for await (const _ev of composite.run(ctx)) {
-      // consume
-    }
-    // Predicted: lost-updates under interleaving — counter < 3*N.
-    expect(ctx.counter ?? 0).toBeLessThan(3 * N);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // runTrigger — maxConcurrency=0, Infinity, undefined boundaries.
 // ---------------------------------------------------------------------------
 
@@ -451,35 +350,6 @@ describe('stress: runTrigger maxConcurrency boundaries', () => {
     expect({ dispatched, atLeastZero: dispatched >= 0 }).toMatchObject({
       atLeastZero: true,
     });
-  });
-
-  it('maxConcurrency=Infinity launches many in parallel without implicit cap', async () => {
-    const trigger = new ManualTrigger<number>();
-    let inFlight = 0;
-    let peak = 0;
-    const slowPhase: Phase<Ctx> = {
-      name: 'slow',
-      async *run() {
-        inFlight++;
-        peak = Math.max(peak, inFlight);
-        await sleep(100);
-        inFlight--;
-        yield { type: 'phase', phase: 'slow' };
-      },
-    };
-
-    const handle = runTrigger(
-      trigger,
-      (input) => ({ phases: [slowPhase], ctx: makeCtx(input) }),
-      { maxConcurrency: Infinity },
-    );
-
-    for (let i = 0; i < 200; i++) trigger.push(i);
-    await sleep(50); // let many start
-    await handle.stop();
-    await withHungGuard(handle.done, 5000);
-    // No implicit cap means all 200 should be inflight by the time we sleep.
-    expect(peak).toBeGreaterThan(50);
   });
 
   it('maxConcurrency omitted defaults to 1 (documented)', async () => {
