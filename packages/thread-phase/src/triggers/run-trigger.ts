@@ -101,7 +101,10 @@ export function runTrigger<TInput, TCtx extends BasePipelineContext>(
   },
   options: RunTriggerOptions<TInput, TCtx> = {},
 ): RunTriggerHandle {
-  const maxConcurrency = options.maxConcurrency ?? 1;
+  // Clamp to >=1: 0 or negative would deadlock the backpressure loop on an
+  // empty inflight map (Promise.race([]) never settles). Mirrors the clamp
+  // at bounded-fanout.ts:121.
+  const maxConcurrency = Math.max(1, options.maxConcurrency ?? 1);
   const pipelineName = options.pipelineName ?? trigger.name;
 
   const onError =

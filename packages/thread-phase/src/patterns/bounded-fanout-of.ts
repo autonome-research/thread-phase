@@ -72,12 +72,16 @@ export async function boundedFanoutOf<TItem, TConfig>(
 
   // Track every in-flight adapter run so fail-fast can abort them all in
   // one pass. The entry holds the per-item controller (used to compose the
-  // adapter's signal via AbortSignal.any) and the run handle itself (used
-  // to call abort() — belt-and-suspenders since the composite signal already
-  // covers it, but adapters may key off abort() rather than the signal).
+  // adapter's signal via AbortSignal.any), the run handle itself (used to
+  // call abort() — belt-and-suspenders since the composite signal already
+  // covers it, but adapters may key off abort() rather than the signal),
+  // and the run's `result` promise so we can await adapter cleanup before
+  // resolving the fanout. Without that await, fail-fast resolves while
+  // adapter handles are still finalizing.
   interface InFlight {
     controller: AbortController;
     run: AgentRun;
+    result: Promise<AgentRunResult>;
   }
   const inFlight = new Set<InFlight>();
 
@@ -85,11 +89,17 @@ export async function boundedFanoutOf<TItem, TConfig>(
   let failed: FailedRecord | null = null;
   let cursor = 0;
 
-  const abortAllInFlight = (): void => {
-    for (const entry of inFlight) {
+  const abortAllInFlight = async (): Promise<void> => {
+    const snapshot = [...inFlight];
+    for (const entry of snapshot) {
       entry.controller.abort();
       entry.run.abort('boundedFanoutOf fail-fast');
     }
+    // Wait for every aborted run's `result` to settle so adapter-side cleanup
+    // (timers, sockets, subprocesses) finishes before the fanout returns.
+    // We allSettled because the runs may reject as `aborted` and we don't
+    // want to mask the original failure with the abort-induced one.
+    await Promise.allSettled(snapshot.map((e) => e.result));
   };
 
   const worker = async (): Promise<void> => {
@@ -112,7 +122,7 @@ export async function boundedFanoutOf<TItem, TConfig>(
         traceId: opts.traceId,
       });
 
-      const entry: InFlight = { controller: itemController, run };
+      const entry: InFlight = { controller: itemController, run, result: run.result };
       inFlight.add(entry);
 
       // The adapter's events iterable is intentionally NOT consumed here.
@@ -131,7 +141,7 @@ export async function boundedFanoutOf<TItem, TConfig>(
           if (!failed) {
             failed = { index: i, result };
             opts.onItemError?.(item, i, result);
-            abortAllInFlight();
+            await abortAllInFlight();
           }
           return;
         }

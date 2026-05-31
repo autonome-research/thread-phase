@@ -22,6 +22,7 @@
  */
 
 import type { BasePipelineContext, Phase, PipelineEvent } from '../phase.js';
+import { abortableSleep } from '../internal/sleep.js';
 
 export interface WithRetryOptions<TCtx extends BasePipelineContext> {
   /** Maximum total attempts including the first. Default: 3. */
@@ -35,8 +36,6 @@ export interface WithRetryOptions<TCtx extends BasePipelineContext> {
   /** Called between attempts. Use to undo partial mutations from the failed attempt. */
   resetState?: (ctx: TCtx) => void;
 }
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export function withRetry<TCtx extends BasePipelineContext>(
   phase: Phase<TCtx>,
@@ -93,7 +92,10 @@ export function withRetry<TCtx extends BasePipelineContext>(
         options.resetState?.(ctx);
 
         const delay = baseDelay * 2 ** (attempt - 1);
-        await sleep(delay);
+        // ctx.signal is wired by runPipeline; if the caller aborts during a
+        // backoff window, surface it immediately instead of waiting out the
+        // schedule. AbortError propagates up through runPipeline.
+        await abortableSleep(delay, ctx.signal);
       }
     },
   };

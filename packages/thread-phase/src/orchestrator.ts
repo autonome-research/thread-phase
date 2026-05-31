@@ -53,7 +53,12 @@ export async function* runPipeline<
   ctx: TCtx,
   options?: RunPipelineOptions,
 ): AsyncGenerator<TEvent, void> {
-  const signal = options?.signal;
+  // Signal resolution: options.signal wins if provided; otherwise honor a
+  // pre-set ctx.signal (callers that already populated ctx — including
+  // run-trigger and tests building ctx by hand). Whichever wins is assigned
+  // back to ctx so phases observing ctx.signal see the same value the
+  // orchestrator uses for its between-phase abort check.
+  const signal = options?.signal ?? ctx.signal;
   ctx.signal = signal;
   try {
     for (const phase of phases) {

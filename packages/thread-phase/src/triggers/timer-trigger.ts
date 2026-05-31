@@ -8,6 +8,12 @@
  * No cron expression support in core — keep the impl tiny. For cron, wrap
  * a cron parser (e.g. `croner`) and produce events on its schedule;
  * `examples/triggers/timer-with-cron.ts` shows the shape.
+ *
+ * Cancellation contract: `stop()` resolves immediately and aborts the
+ * trigger's internal `AbortSignal`. Any in-flight payload factory that
+ * accepts the signal can short-circuit. Even payloads that ignore the
+ * signal don't block `stop()` — `makeEvent` races the payload promise
+ * against the abort so `start()` returns promptly.
  */
 
 import type { Trigger, TriggerEvent } from './types.js';
@@ -19,8 +25,15 @@ export interface TimerTriggerOptions<TInput = void> {
    * Payload to attach to each event. Defaults to `undefined`. If a
    * function, called each fire to produce a fresh payload (e.g. the
    * current time, a counter, a snapshot from somewhere).
+   *
+   * Async factories receive the trigger's internal `AbortSignal` so they
+   * may honor `stop()` cooperatively. The signature `(signal?) => ...`
+   * keeps existing callers working unchanged.
    */
-  payload?: TInput | (() => TInput) | (() => Promise<TInput>);
+  payload?:
+    | TInput
+    | ((signal?: AbortSignal) => TInput)
+    | ((signal?: AbortSignal) => Promise<TInput>);
   /**
    * If true, fires immediately on `start()` before the first interval
    * elapses. Default: false (first event arrives after one interval).
@@ -29,6 +42,8 @@ export interface TimerTriggerOptions<TInput = void> {
   /** Stable identifier used for logs. Default: `timer:${intervalMs}ms`. */
   name?: string;
 }
+
+const STOP_SENTINEL = Symbol('TimerTrigger.stop');
 
 export class TimerTrigger<TInput = void> implements Trigger<TInput> {
   readonly name: string;
@@ -41,6 +56,7 @@ export class TimerTrigger<TInput = void> implements Trigger<TInput> {
   private stopped = false;
   private pendingTimer: ReturnType<typeof setTimeout> | null = null;
   private notifyStop: (() => void) | null = null;
+  private readonly aborter = new AbortController();
 
   constructor(options: TimerTriggerOptions<TInput>) {
     this.intervalMs = options.intervalMs;
@@ -53,14 +69,18 @@ export class TimerTrigger<TInput = void> implements Trigger<TInput> {
     if (this.stopped) return;
 
     if (this.fireImmediately) {
-      yield await this.makeEvent();
+      const ev = await this.makeEventOrStop();
+      if (ev === STOP_SENTINEL) return;
+      yield ev;
       if (this.stopped) return;
     }
 
     while (!this.stopped) {
       const waited = await this.waitOrStop();
       if (!waited) return;
-      yield await this.makeEvent();
+      const ev = await this.makeEventOrStop();
+      if (ev === STOP_SENTINEL) return;
+      yield ev;
     }
   }
 
@@ -73,12 +93,32 @@ export class TimerTrigger<TInput = void> implements Trigger<TInput> {
     }
     this.notifyStop?.();
     this.notifyStop = null;
+    // Aborting unblocks makeEventOrStop's race and lets cooperative payload
+    // factories cancel any in-flight work they own.
+    if (!this.aborter.signal.aborted) {
+      this.aborter.abort('TimerTrigger.stop');
+    }
+  }
+
+  private async makeEventOrStop(): Promise<TriggerEvent<TInput> | typeof STOP_SENTINEL> {
+    const payloadPromise = this.makeEvent();
+    if (this.aborter.signal.aborted) return STOP_SENTINEL;
+    const stopPromise = new Promise<typeof STOP_SENTINEL>((resolve) => {
+      const onAbort = () => resolve(STOP_SENTINEL);
+      this.aborter.signal.addEventListener('abort', onAbort, { once: true });
+    });
+    const winner = await Promise.race([payloadPromise, stopPromise]);
+    // If stop won, drop the payload result on the floor (it may still resolve
+    // later, but no consumer is waiting and the trigger has shut down).
+    return winner;
   }
 
   private async makeEvent(): Promise<TriggerEvent<TInput>> {
     const input =
       typeof this.payload === 'function'
-        ? await (this.payload as () => TInput | Promise<TInput>)()
+        ? await (this.payload as (signal?: AbortSignal) => TInput | Promise<TInput>)(
+            this.aborter.signal,
+          )
         : (this.payload as TInput);
 
     return {

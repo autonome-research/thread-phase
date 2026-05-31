@@ -14,10 +14,16 @@
 
 export class PipelineCache {
   private readonly store: Map<string, unknown>;
+  private readonly pending: Map<string, Promise<unknown>>;
   private readonly prefix: string;
 
-  constructor(store?: Map<string, unknown>, prefix: string = '') {
+  constructor(
+    store?: Map<string, unknown>,
+    prefix: string = '',
+    pending?: Map<string, Promise<unknown>>,
+  ) {
     this.store = store ?? new Map();
+    this.pending = pending ?? new Map();
     this.prefix = prefix;
   }
 
@@ -37,15 +43,37 @@ export class PipelineCache {
     return this.store.has(this.k(key));
   }
 
-  /** Cache-or-fetch. */
+  /**
+   * Cache-or-fetch.
+   *
+   * Concurrent callers on the same key share one in-flight fetch — the
+   * second-through-Nth caller awaits the first caller's promise instead of
+   * each running its own. This preserves the cache's central invariant
+   * (one fetch per key per pipeline run) under fanout.
+   *
+   * On fetcher rejection the pending entry is evicted so the next caller
+   * may retry; rejections are NOT cached.
+   */
   async getOrFetch<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
     const fullKey = this.k(key);
     if (this.store.has(fullKey)) {
       return this.store.get(fullKey) as T;
     }
-    const value = await fetcher();
-    this.store.set(fullKey, value);
-    return value;
+    const inflight = this.pending.get(fullKey);
+    if (inflight) {
+      return inflight as Promise<T>;
+    }
+    const p = (async () => {
+      try {
+        const value = await fetcher();
+        this.store.set(fullKey, value);
+        return value;
+      } finally {
+        this.pending.delete(fullKey);
+      }
+    })();
+    this.pending.set(fullKey, p);
+    return p as Promise<T>;
   }
 
   /**
@@ -59,10 +87,14 @@ export class PipelineCache {
   clear(): void {
     if (!this.prefix) {
       this.store.clear();
+      this.pending.clear();
       return;
     }
     for (const k of [...this.store.keys()]) {
       if (k.startsWith(this.prefix)) this.store.delete(k);
+    }
+    for (const k of [...this.pending.keys()]) {
+      if (k.startsWith(this.prefix)) this.pending.delete(k);
     }
   }
 
@@ -83,6 +115,6 @@ export class PipelineCache {
    */
   namespace(name: string): PipelineCache {
     if (!name) throw new Error('PipelineCache.namespace: name must be non-empty');
-    return new PipelineCache(this.store, `${this.prefix}${name}:`);
+    return new PipelineCache(this.store, `${this.prefix}${name}:`, this.pending);
   }
 }

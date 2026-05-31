@@ -80,14 +80,15 @@ export function subPipeline<
         ? options.mapInput(outer)
         : source.ctx;
 
-      // Isolate the inner pipeline's cache; propagate the outer's signal.
+      // Isolate the inner pipeline's cache so writes can't bleed across
+      // nesting levels. Signal propagation is via runPipeline's options —
+      // the orchestrator assigns ctx.signal canonically, which avoids the
+      // pre-set-then-overwritten footgun at arbitrary depth.
       (inner as { cache: PipelineCache }).cache = new PipelineCache();
-      inner.signal = outer.signal;
 
-      yield* runPipeline(source.phases, inner) as AsyncGenerator<
-        PipelineEvent,
-        void
-      >;
+      yield* runPipeline(source.phases, inner, {
+        signal: outer.signal,
+      }) as AsyncGenerator<PipelineEvent, void>;
 
       options.mapOutput?.(outer, inner);
     },
@@ -143,12 +144,13 @@ export async function runSubPipeline<
 
   const inner = options.ctx ?? resolved.ctx;
   (inner as { cache: PipelineCache }).cache = new PipelineCache();
-  if (options.signal) inner.signal = options.signal;
 
   let eventCount = 0;
   let stopReason: string | undefined;
 
-  for await (const event of runPipeline(resolved.phases, inner)) {
+  for await (const event of runPipeline(resolved.phases, inner, {
+    signal: options.signal,
+  })) {
     eventCount++;
     if (event.type === 'done') {
       stopReason = (event as { reason?: string }).reason;
