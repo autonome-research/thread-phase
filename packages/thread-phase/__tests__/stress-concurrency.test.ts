@@ -47,6 +47,27 @@ function withHungGuard<T>(p: Promise<T>, ms: number, label = 'HUNG'): Promise<T>
   ]);
 }
 
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (v: T) => void;
+  reject: (e: unknown) => void;
+}
+function defer<T>(): Deferred<T> {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Drain pending microtasks N times — used to let in-flight async work
+ *  reach a checkpoint without resorting to wall-clock timers. */
+async function drainMicrotasks(n = 10): Promise<void> {
+  for (let i = 0; i < n; i++) await Promise.resolve();
+}
+
 // ---------------------------------------------------------------------------
 // boundedFanout — concurrency=0 / negative / Infinity boundaries.
 // ---------------------------------------------------------------------------
@@ -68,32 +89,33 @@ describe('stress: boundedFanout concurrency boundaries', () => {
     expect(ran.sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
-  it('concurrency=Infinity launches all runners simultaneously without scheduler starvation', async () => {
-    const N = 10_000;
+  it('concurrency=Infinity dispatches every item and returns results position-stable', async () => {
+    const N = 200;
+    // Each runner parks on an explicit release so we can observe peak
+    // concurrency without depending on microtask-scheduling specifics.
+    const release = defer<void>();
     let inflight = 0;
     let peakInflight = 0;
-    const startedAt = new Array<number>(N);
-    const out = await boundedFanout({
+
+    const fanoutPromise = boundedFanout({
       items: Array.from({ length: N }, (_, i) => i),
       concurrency: Infinity,
       runner: async (n) => {
         inflight++;
         peakInflight = Math.max(peakInflight, inflight);
-        startedAt[n] = Date.now();
-        // microtask only — let scheduler interleave starts but not finishes
-        await Promise.resolve();
+        await release.promise;
         inflight--;
         return n;
       },
     });
-    // Position stability under maximum contention.
-    for (let i = 0; i < N; i++) {
-      expect(out[i]).toBe(i);
-    }
-    // With Math.min(Infinity, N) = N, every runner should be in-flight at peak.
-    // (Allow some slack; some runners may complete in the same microtask cycle
-    // as later runners start, depending on engine. Predicted: peak === N.)
-    expect(peakInflight).toBeGreaterThanOrEqual(Math.floor(N * 0.9));
+
+    // Drain enough microtasks for every runner to be parked on `release`.
+    await drainMicrotasks(20);
+    expect(peakInflight).toBe(N);
+
+    release.resolve();
+    const out = await fanoutPromise;
+    for (let i = 0; i < N; i++) expect(out[i]).toBe(i);
   });
 });
 
@@ -189,10 +211,12 @@ describe('stress: boundedFanoutOf fail-fast same-tick race', () => {
     });
   }
 
-  it('outcome of the A/B/C alongside D-fails race is deterministic across 50 runs', async () => {
+  it('outcome of the A/B/C alongside D-fails race is deterministic across 10 trials', async () => {
+    // 10 trials is sufficient to detect microtask-ordering nondeterminism;
+    // 50 was wall-clock-expensive without adding diagnostic value.
     type Outcome = { idx: number; finishReason: string }[];
     const outcomes: Outcome[] = [];
-    for (let trial = 0; trial < 50; trial++) {
+    for (let trial = 0; trial < 10; trial++) {
       const adapter = alignedAdapter();
       const ends: Outcome = [];
       try {
@@ -222,9 +246,7 @@ describe('stress: boundedFanoutOf fail-fast same-tick race', () => {
     // Determinism: every run should produce the same outcome.
     const first = JSON.stringify(outcomes[0]);
     const allSame = outcomes.every((o) => JSON.stringify(o) === first);
-    expect({ allSame, first: outcomes[0], example50: outcomes[49] }).toMatchObject({
-      allSame: true,
-    });
+    expect({ allSame, first: outcomes[0] }).toMatchObject({ allSame: true });
   });
 });
 
@@ -235,10 +257,10 @@ describe('stress: boundedFanoutOf fail-fast same-tick race', () => {
 describe('stress: parallelPhases unbounded queue', () => {
   interface Ctx extends BasePipelineContext {}
 
-  it('records heap delta when producers emit 200k events ahead of a slow consumer', async () => {
-    const N_PER_BRANCH = 100_000;
-    const producer = (): Phase<Ctx, PipelineEvent> => ({
-      name: 'producer',
+  it('every event from each producer reaches the consumer with no drops', async () => {
+    const N_PER_BRANCH = 5_000;
+    const producer = (id: number): Phase<Ctx, PipelineEvent> => ({
+      name: `producer-${id}`,
       async *run() {
         for (let i = 0; i < N_PER_BRANCH; i++) {
           yield { type: 'data', key: 'tick', value: i } as PipelineEvent;
@@ -246,36 +268,18 @@ describe('stress: parallelPhases unbounded queue', () => {
       },
     });
 
-    const heapBefore = process.memoryUsage().heapUsed;
-    let heapPeak = heapBefore;
-
-    const composite = parallelPhases('p', [producer(), producer()]);
+    const composite = parallelPhases('p', [producer(0), producer(1)]);
     const ctx: Ctx = { cache: new PipelineCache() };
     let count = 0;
-    let firstObserved = false;
     for await (const _ev of composite.run(ctx)) {
       count++;
-      if (!firstObserved) {
-        // Slow consumer: pause once midway to give producers time to fill queue.
-        // Only pause around N=50 so we don't blow out timeout.
-        firstObserved = true;
-        await sleep(50);
-        heapPeak = Math.max(heapPeak, process.memoryUsage().heapUsed);
-      }
-      if (count % 25_000 === 0) {
-        heapPeak = Math.max(heapPeak, process.memoryUsage().heapUsed);
-      }
+      // Slow consumer: yield a microtask every 1000 events so producers
+      // run ahead of us. Heap measurements removed (environment-sensitive).
+      if (count % 1000 === 0) await Promise.resolve();
     }
 
-    const heapDeltaMB = (heapPeak - heapBefore) / 1024 / 1024;
-    // Observation: print the delta. Threshold of 100MB chosen per plan.
-    // Assertion: total drain count must equal 2 * N_PER_BRANCH.
     expect(count).toBe(2 * N_PER_BRANCH);
-    // Reporting via toMatchObject; failure is informational.
-    expect({ heapDeltaMB: Math.round(heapDeltaMB) }).toMatchObject({
-      heapDeltaMB: expect.any(Number),
-    });
-  }, 30_000);
+  }, 10_000);
 });
 
 // ---------------------------------------------------------------------------

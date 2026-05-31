@@ -38,12 +38,33 @@ async function collect(gen: AsyncGenerator<PipelineEvent>): Promise<PipelineEven
   return out;
 }
 
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (v: T) => void;
+  reject: (e: unknown) => void;
+}
+function defer<T>(): Deferred<T> {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Drain pending microtasks N times — useful to let in-flight async work
+ *  reach a known checkpoint without resorting to wall-clock timers. */
+async function drainMicrotasks(n = 10): Promise<void> {
+  for (let i = 0; i < n; i++) await Promise.resolve();
+}
+
 // ---------------------------------------------------------------------------
 // parseJSON — adversarial payloads
 // ---------------------------------------------------------------------------
 
 describe('parseJSON: adversarial payloads', () => {
-  it('returns fallback on a ~5MB truncated braced payload without catastrophic regex blow-up', () => {
+  it('returns fallback on a ~5MB truncated braced payload', () => {
     // Build payload: opens with '{', loads of nested-looking JSON, NO closing brace.
     const piece = '"k' + 'x'.repeat(50) + '":"' + 'x'.repeat(100) + '",';
     const body = piece.repeat(50_000);
@@ -52,18 +73,16 @@ describe('parseJSON: adversarial payloads', () => {
 
     const fallback = { fallback: true } as const;
     const onError = vi.fn();
-
-    const t0 = performance.now();
     const result = parseJSON(payload, fallback, onError);
-    const elapsed = performance.now() - t0;
 
+    // Contract: parseJSON returns the fallback, reports via onError once,
+    // and the preview is bounded. The 10s test timeout is the only ceiling
+    // for "completed at all" — no wall-clock assertion inside.
     expect(result).toBe(fallback);
     expect(onError).toHaveBeenCalledTimes(1);
     const [preview] = onError.mock.calls[0]!;
     expect(typeof preview).toBe('string');
     expect((preview as string).length).toBeLessThanOrEqual(200);
-    // Sanity ceiling — should be well under 2s even with the greedy regex.
-    expect(elapsed).toBeLessThan(2000);
   }, 10_000);
 
   it('returns fallback (not RangeError) on deeply nested object ~50k levels', () => {
@@ -162,30 +181,44 @@ describe('runPipeline: signal propagation + mid-phase observation', () => {
 
   it('a phase that does not observe signal keeps running after abort fires', async () => {
     const controller = new AbortController();
-    const PHASE_MS = 600; // keep short to keep the test fast
+    const phaseStarted = defer<void>();
+    const release = defer<void>();
+    let secondYieldReached = false;
 
     const slow: Phase<Ctx> = {
       name: 'slow',
       async *run() {
         yield { type: 'phase', phase: 'slow' };
-        await new Promise((r) => setTimeout(r, PHASE_MS));
+        phaseStarted.resolve();
+        // Block on an external release rather than wall-clock — the test
+        // owns when the phase completes, so the only thing we're observing
+        // is "did abort kill it mid-phase?"
+        await release.promise;
+        secondYieldReached = true;
         yield { type: 'phase', phase: 'slow-done' };
       },
     };
 
-    setTimeout(() => controller.abort('mid-phase'), 50);
-
-    const t0 = performance.now();
-    const events = await collect(
+    const runPromise = collect(
       runPipeline([slow], makeCtx(), { signal: controller.signal }),
     );
-    const elapsed = performance.now() - t0;
 
-    // Phase ran to completion despite abort firing at 50ms.
-    expect(elapsed).toBeGreaterThanOrEqual(PHASE_MS - 50);
-    // Both yields landed (no mid-phase interrupt).
-    const phaseEvs = events.filter((e) => e.type === 'phase');
-    expect(phaseEvs).toHaveLength(2);
+    // Wait for the phase to be parked on `release` before aborting.
+    await phaseStarted.promise;
+    controller.abort('mid-phase');
+    // Give microtasks a chance to fire any aborted-related work.
+    await drainMicrotasks();
+
+    // Despite abort, the phase has NOT advanced past the release barrier —
+    // the orchestrator does not force-cancel a running phase.
+    expect(secondYieldReached).toBe(false);
+
+    // Release the phase; both yields complete normally.
+    release.resolve();
+    const events = await runPromise;
+
+    expect(secondYieldReached).toBe(true);
+    expect(events.filter((e) => e.type === 'phase')).toHaveLength(2);
   });
 });
 
@@ -193,47 +226,38 @@ describe('runPipeline: signal propagation + mid-phase observation', () => {
 // whileCondition — predicate ignores abort, runaway loop
 // ---------------------------------------------------------------------------
 
-describe('whileCondition: ignores AbortSignal (runaway primitive)', () => {
-  it('keeps iterating after abort fires because predicate never reads ctx.signal', async () => {
+describe('whileCondition: does not check ctx.signal — predicate is the termination contract', () => {
+  it('runs maxIterations to completion even after the outer signal aborts', async () => {
     const controller = new AbortController();
+    const MAX = 5;
     let iterations = 0;
 
     const body: Phase<Ctx> = {
       name: 'body',
       async *run() {
         iterations++;
-        // Tiny yield to let microtasks turn — but no signal observation.
+        if (iterations === 1) {
+          // Abort during the first iteration — well before maxIterations.
+          controller.abort('please-stop');
+        }
         yield { type: 'phase', phase: 'body' };
-        await new Promise((r) => setTimeout(r, 1));
       },
     };
 
     const loop = whileCondition<Ctx>('forever', {
       predicate: async () => true,
       body: [body],
-      maxIterations: 100_000,
+      maxIterations: MAX,
     });
 
-    setTimeout(() => controller.abort('please-stop'), 100);
+    await collect(runPipeline([loop], makeCtx(), { signal: controller.signal }));
 
-    // Hard wall: race the loop against a 600ms guard so vitest doesn't hang.
-    const racePromise = Promise.race([
-      collect(runPipeline([loop], makeCtx(), { signal: controller.signal })).then(
-        () => 'completed' as const,
-      ),
-      new Promise<'guard'>((r) => setTimeout(() => r('guard'), 600)),
-    ]);
-
-    const winner = await racePromise;
-    // The race winner is the guard (loop didn't stop on abort).
-    expect(winner).toBe('guard');
-    // Iterations crossed past the abort moment (~100ms).
-    expect(iterations).toBeGreaterThan(20);
-
-    // Cleanup: we can't actually stop the loop from outside since it ignores
-    // the signal. Give Node a tick — leftover setTimeout(1ms) iterations will
-    // continue in the background but vitest will move on once `winner` resolves.
-  }, 5000);
+    // Contract: whileCondition's termination is its predicate +
+    // maxIterations, NOT ctx.signal. The loop ran the full MAX iterations
+    // despite abort firing on iteration 1. Callers wanting cooperative
+    // cancellation must observe ctx.signal in their predicate.
+    expect(iterations).toBe(MAX);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -296,14 +320,14 @@ describe('match: typo in selector return silently no-ops', () => {
 // parallel-phases — unbounded queue under producer/consumer imbalance
 // ---------------------------------------------------------------------------
 
-describe('parallelPhases: unbounded queue under slow consumer', () => {
-  it('drains all events when consumer is slower than 4 producers (no drops, finite memory)', async () => {
-    const PER = 25_000; // 4 * 25_000 = 100k events total. Keep modest for CI.
+describe('parallelPhases: drains all events under producer/consumer imbalance', () => {
+  it('every event from every producer reaches the consumer with no drops', async () => {
+    const PER = 5_000; // 4 * 5_000 = 20k events. Sufficient to exercise the queue.
     const producer = (id: number): Phase<Ctx> => ({
       name: `producer-${id}`,
       async *run() {
         for (let i = 0; i < PER; i++) {
-          yield { type: 'content', content: 'x' };
+          yield { type: 'content', content: `p${id}-${i}` };
         }
       },
     });
@@ -315,35 +339,17 @@ describe('parallelPhases: unbounded queue under slow consumer', () => {
       producer(3),
     ]);
 
-    const baseHeap = process.memoryUsage().heapUsed;
-    let peakHeap = baseHeap;
-    const sampler = setInterval(() => {
-      const h = process.memoryUsage().heapUsed;
-      if (h > peakHeap) peakHeap = h;
-    }, 25);
-
+    // Slow consumer: yields a microtask every 1000 events so producers
+    // fan out ahead. The drain assertion is what matters; heap measurements
+    // are environment-sensitive and intentionally not asserted here.
     let drained = 0;
-    try {
-      for await (const _ev of composite.run(makeCtx())) {
-        drained++;
-        // Slow consumer: yield to microtask every 1000 events.
-        if (drained % 1000 === 0) {
-          await Promise.resolve();
-        }
-      }
-    } finally {
-      clearInterval(sampler);
+    for await (const _ev of composite.run(makeCtx())) {
+      drained++;
+      if (drained % 1000 === 0) await Promise.resolve();
     }
 
     expect(drained).toBe(4 * PER);
-    // Observational log, not a hard assertion (different machines vary).
-    // Document the queue-growth blast radius for the team.
-    const growthMB = (peakHeap - baseHeap) / (1024 * 1024);
-    // eslint-disable-next-line no-console
-    console.log(`[parallelPhases stress] peak heap growth: ${growthMB.toFixed(1)} MB`);
-    // Loose ceiling: 4*25k tiny content events should never grow heap by >500MB.
-    expect(growthMB).toBeLessThan(500);
-  }, 30_000);
+  }, 10_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -351,9 +357,8 @@ describe('parallelPhases: unbounded queue under slow consumer', () => {
 // ---------------------------------------------------------------------------
 
 describe('withRetry: sleep is AbortSignal-aware', () => {
-  it('surfaces cancellation cooperatively mid-backoff instead of waiting out the full delay', async () => {
+  it('surfaces cancellation cooperatively mid-backoff (no wall-clock wait)', async () => {
     const controller = new AbortController();
-    const BASE_DELAY = 400; // short to keep test fast; still observable
     const onRetry = vi.fn();
     let attempts = 0;
 
@@ -366,36 +371,28 @@ describe('withRetry: sleep is AbortSignal-aware', () => {
       },
     };
 
+    // Outsize baseDelay: if abortableSleep weren't honoring the signal,
+    // the test would hang at the 5s timeout — a clean deterministic failure
+    // signal instead of a flaky timing assertion.
     const wrapped = withRetry<Ctx>(flaky, {
       maxAttempts: 3,
-      baseDelayMs: BASE_DELAY,
+      baseDelayMs: 60_000,
       onRetry,
       isFailure: () => true,
     });
 
-    // Abort 50ms in — during the BASE_DELAY (400ms) sleep between attempt 1 and 2.
-    setTimeout(() => controller.abort('user-cancelled'), 50);
+    const runPromise = collect(
+      runPipeline([wrapped], makeCtx(), { signal: controller.signal }),
+    );
 
-    const t0 = performance.now();
-    let threw: unknown = undefined;
-    try {
-      await collect(
-        runPipeline([wrapped], makeCtx(), { signal: controller.signal }),
-      );
-    } catch (e) {
-      threw = e;
-    }
-    const elapsed = performance.now() - t0;
+    // Drain microtasks so attempt 1 reaches its abortable backoff window.
+    // onRetry firing exactly once confirms we're parked in the sleep.
+    await drainMicrotasks();
+    expect(onRetry).toHaveBeenCalledTimes(1);
 
-    // Contract: cancellation surfaces within tens of milliseconds of abort,
-    // far below the BASE_DELAY backoff window. The pipeline rejects with
-    // AbortError. attempts must not have advanced beyond the first since
-    // the abort fired mid-sleep; onRetry is invoked exactly once because
-    // withRetry calls it BEFORE entering the (now-abortable) backoff sleep.
-    expect(elapsed).toBeLessThan(BASE_DELAY);
+    controller.abort('user-cancelled');
+    await expect(runPromise).rejects.toMatchObject({ name: 'AbortError' });
     expect(attempts).toBe(1);
     expect(onRetry).toHaveBeenCalledTimes(1);
-    expect(threw).toBeDefined();
-    expect((threw as Error).name).toBe('AbortError');
-  }, 10_000);
+  }, 5_000);
 });

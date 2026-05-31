@@ -45,6 +45,27 @@ async function collect<T>(gen: AsyncGenerator<T>): Promise<T[]> {
   return out;
 }
 
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (v: T) => void;
+  reject: (e: unknown) => void;
+}
+function defer<T>(): Deferred<T> {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Drain pending microtasks N times so awaited state machines can reach a
+ *  known checkpoint without resorting to wall-clock timers. */
+async function drainMicrotasks(n = 10): Promise<void> {
+  for (let i = 0; i < n; i++) await Promise.resolve();
+}
+
 // ---------------------------------------------------------------------------
 // 1. orchestrator never assigns options.signal to ctx.signal
 // ---------------------------------------------------------------------------
@@ -73,10 +94,12 @@ describe('cancellation: orchestrator does not wire options.signal onto ctx.signa
     expect(observed.sig).toBe(controller.signal);
   });
 
-  it('busy phase can be interrupted via ctx.signal during a cooperative wait', async () => {
+  it('busy phase can observe ctx.signal abort and short-circuit a cooperative wait', async () => {
     const controller = new AbortController();
     const ctx: Ctx = { cache: new PipelineCache() };
+    const phaseStarted = defer<void>();
     let abortFired = false;
+    let waitedReleaseReason: 'abort' | 'natural' = 'natural';
 
     const busy: Phase<Ctx> = {
       name: 'busy',
@@ -85,14 +108,19 @@ describe('cancellation: orchestrator does not wire options.signal onto ctx.signa
           abortFired = true;
         });
         yield { type: 'phase', phase: 'busy' };
-        // Cooperative wait: race the timer against the signal so abort wakes
-        // the phase immediately. This is the pattern phases use to honor
-        // cancellation; the framework provides ctx.signal so this is possible.
+        phaseStarted.resolve();
+        // Cooperative wait: race a slow natural-completion timer against
+        // ctx.signal. With a 60-second natural timer, the test will hang
+        // out past its timeout if abort isn't honored — clean signal.
         await new Promise<void>((resolve) => {
-          const t = setTimeout(resolve, 200);
+          const t = setTimeout(() => {
+            waitedReleaseReason = 'natural';
+            resolve();
+          }, 60_000);
           c.signal?.addEventListener(
             'abort',
             () => {
+              waitedReleaseReason = 'abort';
               clearTimeout(t);
               resolve();
             },
@@ -102,17 +130,13 @@ describe('cancellation: orchestrator does not wire options.signal onto ctx.signa
       },
     };
 
-    setTimeout(() => controller.abort('user-cancel'), 30);
-    const t0 = Date.now();
-    try {
-      await collect(runPipeline([busy], ctx, { signal: controller.signal }));
-    } catch {
-      /* ignore */
-    }
-    const dt = Date.now() - t0;
+    const runPromise = collect(runPipeline([busy], ctx, { signal: controller.signal }));
+    await phaseStarted.promise;
+    controller.abort('user-cancel');
+    await runPromise.catch(() => {});
 
     expect(abortFired).toBe(true);
-    expect(dt).toBeLessThan(120);
+    expect(waitedReleaseReason).toBe('abort');
   });
 });
 
@@ -168,8 +192,8 @@ describe('cancellation: aborting between phases swallows queued events / has no 
 // ---------------------------------------------------------------------------
 // 3. with-retry sleep ignores AbortSignal
 // ---------------------------------------------------------------------------
-describe('cancellation: withRetry sleep() ignores AbortSignal', () => {
-  it('outer abort during backoff waits the full delay before surfacing', { timeout: 15000 }, async () => {
+describe('cancellation: withRetry sleep is AbortSignal-aware', () => {
+  it('outer abort surfaces during backoff via abortableSleep — no wall-clock wait', async () => {
     const controller = new AbortController();
     const ctx: Ctx = { cache: new PipelineCache() };
     let attempts = 0;
@@ -183,32 +207,24 @@ describe('cancellation: withRetry sleep() ignores AbortSignal', () => {
       },
     };
 
+    // 60s baseDelay: if abortableSleep weren't honoring ctx.signal, the
+    // test would hang at its 5s timeout — a clean deterministic failure.
     const wrapped = withRetry(flaky, {
       maxAttempts: 5,
-      baseDelayMs: 400, // first backoff = 400ms; cancel mid-sleep
+      baseDelayMs: 60_000,
       isFailure: () => true,
     });
 
-    const p = runPipelineToSummary([wrapped], ctx, { signal: controller.signal });
-    // Abort after first attempt has started its backoff (~50ms after start).
-    setTimeout(() => controller.abort('user'), 50);
+    const runPromise = runPipelineToSummary([wrapped], ctx, { signal: controller.signal });
 
-    const t0 = Date.now();
-    let result: unknown;
-    try {
-      result = await p;
-    } catch (err) {
-      result = err;
-    }
-    const dt = Date.now() - t0;
+    // Wait for attempt 1 to complete and withRetry to enter its backoff.
+    await drainMicrotasks();
+    expect(attempts).toBe(1);
 
-    // Expectation: cancellation should surface cooperatively within ~120ms.
-    // sleep() in with-retry.ts:39 has no abort hook, so we expect the actual
-    // duration to be ~400ms+ (failing the bound, exposing the gap).
-    expect(dt).toBeLessThan(150);
-    // And the retry counter shouldn't have advanced past attempt 1.
-    expect(attempts).toBeLessThanOrEqual(1);
-  });
+    controller.abort('user');
+    await expect(runPromise).rejects.toMatchObject({ name: 'AbortError' });
+    expect(attempts).toBe(1);
+  }, 5_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -296,34 +312,42 @@ describe('cancellation: boundedFanoutOf fail-fast awaits adapter cleanup before 
         let resolveResult!: (v: AgentRunResult) => void;
         const resultPromise = new Promise<AgentRunResult>((r) => (resolveResult = r));
 
-        // Simulate a SIGTERM grace period: the adapter completes its cleanup
-        // BEFORE resolving `result`. Honors the AgentRun contract that
-        // run.result settles only after all in-process cleanup is finished —
-        // boundedFanoutOf awaits that for leak-free shutdown. The
-        // `cleanedUp` guard reflects the idempotence any real adapter must
-        // provide (natural completion + abort can both call cleanup).
+        // Simulate an async cleanup phase via a microtask chain — the
+        // adapter completes its cleanup BEFORE resolving `result`. Honors
+        // the AgentRun contract that run.result settles only after all
+        // in-process cleanup is finished, which boundedFanoutOf awaits for
+        // leak-free shutdown. The `cleanedUp` guard reflects the
+        // idempotence any real adapter must provide (natural completion
+        // and abort can both call cleanup).
         let cleanedUp = false;
         const cleanup = (reason: AgentRunResult['finishReason']): void => {
           if (cleanedUp) return;
           cleanedUp = true;
-          setTimeout(() => {
-            openHandles--;
-            if (resolved) postSettleMutations++;
-            resolveResult({
-              text: '',
-              finishReason: reason,
-              usage: emptyUsage,
-              executedToolCalls: [],
+          Promise.resolve()
+            .then(() => Promise.resolve())
+            .then(() => {
+              openHandles--;
+              if (resolved) postSettleMutations++;
+              resolveResult({
+                text: '',
+                finishReason: reason,
+                usage: emptyUsage,
+                executedToolCalls: [],
+              });
             });
-          }, 250);
         };
 
-        const t = setTimeout(() => {
+        // Natural completion fires on the next microtask burst — no
+        // wall-clock timer. composite.abort() triggers the same cleanup
+        // path via the listener below.
+        const natural = { cancelled: false };
+        Promise.resolve().then(() => {
+          if (natural.cancelled) return;
           if (config.shouldFail) cleanup('error');
           else cleanup('stop');
-        }, 30);
+        });
         composite.addEventListener('abort', () => {
-          clearTimeout(t);
+          natural.cancelled = true;
           cleanup('aborted');
         });
 
@@ -368,11 +392,11 @@ describe('cancellation: boundedFanoutOf fail-fast awaits adapter cleanup before 
     }
     resolved = true;
 
-    // Contract: by the time boundedFanoutOf resolves, every aborted adapter
-    // has finished its cleanup (because run.result resolves only after the
-    // adapter is done) and there are zero post-settle mutations.
+    // Contract: by the time boundedFanoutOf resolves, every aborted
+    // adapter has finished its cleanup (because run.result resolves only
+    // after the adapter is done) and there are zero post-settle mutations.
     expect(openHandles).toBe(0);
-    await sleep(400);
+    await drainMicrotasks(20);
     expect(postSettleMutations).toBe(0);
   });
 });
@@ -380,18 +404,25 @@ describe('cancellation: boundedFanoutOf fail-fast awaits adapter cleanup before 
 // ---------------------------------------------------------------------------
 // 7. TimerTrigger payload factory hangs past trigger.stop()
 // ---------------------------------------------------------------------------
-describe('cancellation: TimerTrigger.stop() does not abort an in-flight payload', () => {
-  it('handle.done blocks until slow payload resolves', async () => {
+describe('cancellation: TimerTrigger.stop() races an in-flight payload', () => {
+  it('handle.done unblocks even when the payload promise never resolves', async () => {
+    // Payload is parked on a deferred that we never resolve. If
+    // TimerTrigger.stop() correctly races the payload against its
+    // internal abort signal, handle.done resolves anyway. If it didn't,
+    // the test would hang at its 5s timeout — a clean deterministic
+    // failure signal instead of a wall-clock latency assertion.
+    const payloadStarted = defer<void>();
+    const neverResolves = defer<{ x: number }>();
+
     const trigger = new TimerTrigger<{ x: number }>({
-      intervalMs: 30,
+      intervalMs: 5,
+      fireImmediately: true,
       payload: async () => {
-        // Slow payload: 600ms; stop() will fire well before this resolves.
-        await sleep(600);
-        return { x: 1 };
+        payloadStarted.resolve();
+        return neverResolves.promise;
       },
     });
 
-    const events: number[] = [];
     const handle = runTrigger(
       trigger,
       () => ({
@@ -399,7 +430,7 @@ describe('cancellation: TimerTrigger.stop() does not abort an in-flight payload'
           {
             name: 'noop',
             async *run() {
-              events.push(1);
+              /* no events expected — the payload never resolves */
             },
           } as Phase<Ctx>,
         ],
@@ -407,18 +438,14 @@ describe('cancellation: TimerTrigger.stop() does not abort an in-flight payload'
       }),
     );
 
-    // After 100ms (timer fired once, mid-payload), stop the handle.
-    setTimeout(() => void handle.stop(), 100);
-
-    const t0 = Date.now();
+    await payloadStarted.promise;
+    await handle.stop();
     await handle.done;
-    const dt = Date.now() - t0;
-
-    // Expectation: handle.done resolves within ~200ms of stop (timer cleared,
-    // no need to wait on payload). Actual: makeEvent awaits payload with no
-    // race against notifyStop, so dt approaches 600ms+.
-    expect(dt).toBeLessThan(250);
-  });
+    // Reaching here means handle.done unblocked — the assertion is the
+    // absence of a hang. neverResolves never resolves; if the trigger
+    // had awaited the payload, handle.done would never settle.
+    expect(true).toBe(true);
+  }, 5_000);
 });
 
 // ---------------------------------------------------------------------------
