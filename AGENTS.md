@@ -504,6 +504,56 @@ That's the shape. Stretch it for more phases; remove `boundedFanout` if you only
 
 ---
 
+## API conventions — three factory shapes
+
+The public API uses **three deliberately-distinct factory signatures**. Each shape tracks a real semantic category. Match the shape to the kind of thing you're building.
+
+### 1. Pattern factories — `(name, options) → Phase<TCtx>`
+
+Produce a `Phase` that gets composed into a pipeline. The `name` shows up in telemetry, event metadata, and error traces — it's not cosmetic.
+
+```ts
+parallelPhases('fanout', [phaseA, phaseB])
+intentGate('classify-intent', { classify, route })
+match('route-by-intent', { selector, cases, default: ... })
+whileCondition('converge', { predicate, body, maxIterations })
+withRetry('flaky-call', innerPhase, { maxAttempts, baseDelayMs })   // wrapper variant
+subPipeline('nested', { phases, mapInput, mapOutput })
+```
+
+### 2. Eager runners — `(options) → Promise<T>`
+
+Execute immediately and return a `Promise`. They do **not** return a `Phase` — they're invoked inline from inside a phase body. No `name` parameter because there's no Phase identity to attach it to.
+
+```ts
+const results = await boundedFanout({ items, concurrency, runner })
+const results = await boundedFanoutOf({ items, concurrency, adapter, buildConfig })
+```
+
+### 3. Registration helpers — `(spec/handler, options?) → ExtensionRegisterFn`
+
+Top-level entry points that **register** a pipeline with the CLI auto-loader. The first arg is the meat (spec or handler); options are secondary. They auto-derive the pipeline name from the calling file via `deriveNameFromCaller`, so you don't pass one explicitly.
+
+```ts
+export default oneShot(async (ctx) => { ... })
+export default schedule({ cron: '0 * * * *' }, async (ctx) => { ... })
+export default hook({ path: '/webhook' }, async (body, ctx) => { ... }, { validate: ... })
+```
+
+### Why three shapes (and why you should respect them)
+
+These conventions encode three different relationships with the framework:
+
+| Category | Returns | Identity needed? | Lifecycle |
+|---|---|---|---|
+| Pattern factory | `Phase<TCtx>` | Yes — survives into runtime telemetry | Inert until orchestrator runs the phase |
+| Eager runner | `Promise<T>` | No — caller already has context | Runs at call site |
+| Registration helper | `ExtensionRegisterFn` | Auto-derived from caller filename | Hooked into trigger lifecycle by the CLI |
+
+When authoring a new factory, pick the category that matches what you're building and use that shape exactly. Mixing categories (e.g. an eager runner that takes `(name, options)`) muddles the convention without adding anything.
+
+---
+
 ## When to reach for which pattern
 
 ```ts
