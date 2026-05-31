@@ -54,6 +54,7 @@ export async function* runPipeline<
   options?: RunPipelineOptions,
 ): AsyncGenerator<TEvent, void> {
   const signal = options?.signal;
+  ctx.signal = signal;
   try {
     for (const phase of phases) {
       if (signal?.aborted) {
