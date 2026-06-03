@@ -85,4 +85,29 @@ describe('ToolRegistry', () => {
     reg.register(addDef, async () => '');
     expect(reg.has('add')).toBe(true);
   });
+
+  it('forwards the AbortSignal from execute() into the handler context', async () => {
+    const controller = new AbortController();
+    const observed: { sig?: AbortSignal } = {};
+    const reg = new ToolRegistry();
+    reg.register(addDef, async (_args, ctx) => {
+      observed.sig = ctx.signal;
+      return 'ok';
+    });
+    await reg.execute('add', 'id', { a: 1, b: 2 }, controller.signal);
+    expect(observed.sig).toBe(controller.signal);
+  });
+
+  it('handler can observe abort cooperatively via the threaded signal', async () => {
+    const controller = new AbortController();
+    let observedAborted = false;
+    const reg = new ToolRegistry();
+    reg.register(addDef, async (_args, ctx) => {
+      controller.abort('test-cancel');
+      observedAborted = ctx.signal?.aborted ?? false;
+      return 'done';
+    });
+    await reg.execute('add', 'id', { a: 1, b: 2 }, controller.signal);
+    expect(observedAborted).toBe(true);
+  });
 });

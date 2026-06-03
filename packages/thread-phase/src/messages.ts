@@ -84,5 +84,20 @@ export interface ToolResult {
 }
 
 export interface ToolExecutor {
-  execute(name: string, toolCallId: string, args: Record<string, unknown>): Promise<ToolResult>;
+  /**
+   * Dispatch a tool call. `signal` is the agent runner's AbortSignal — when
+   * the run is cancelled, long-running tools (HTTP calls, shell commands,
+   * file I/O) can observe this to bail cooperatively rather than running
+   * to completion before the next agent round checks for cancellation.
+   *
+   * Implementations may ignore `signal` for synchronous or fast tools;
+   * the parameter is optional for backwards compatibility with executors
+   * authored before v3.4.0.
+   */
+  execute(
+    name: string,
+    toolCallId: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<ToolResult>;
 }

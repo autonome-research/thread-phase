@@ -274,9 +274,14 @@ export async function runAgentWithTools(
           emit?.({ type: 'tool_call_started', agent: label, toolCall: tc });
         }
 
-        // Execute tools in parallel.
+        // Execute tools in parallel. Forward the run's AbortSignal so
+        // long-running tool implementations can cancel cooperatively
+        // rather than running to completion before the next round's
+        // between-round abort check fires.
         const results = await Promise.all(
-          assistantMsg.toolCalls.map((tc) => options.toolExecutor.execute(tc.name, tc.id, tc.input)),
+          assistantMsg.toolCalls.map((tc) =>
+            options.toolExecutor.execute(tc.name, tc.id, tc.input, options.signal),
+          ),
         );
 
         // --- Layer 1: cap each tool result ---

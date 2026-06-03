@@ -22,10 +22,14 @@ import type { ToolDefinition, ToolExecutor, ToolResult } from '../messages.js';
  * Handler signature — receives parsed args plus optional context, returns the
  * tool's result content as a string. Anything string-shaped works (JSON,
  * markdown, plain text); the agent sees it raw.
+ *
+ * `context.signal` is the agent runner's AbortSignal when one was provided.
+ * Long-running tools (fetch, subprocess, file I/O) can observe it to cancel
+ * cooperatively. Synchronous or fast tools may ignore it.
  */
 export type ToolHandler = (
   args: Record<string, unknown>,
-  context: { toolCallId: string },
+  context: { toolCallId: string; signal?: AbortSignal },
 ) => Promise<string>;
 
 export interface ToolRegistryOptions {
@@ -74,6 +78,7 @@ export class ToolRegistry implements ToolExecutor {
     name: string,
     toolCallId: string,
     args: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<ToolResult> {
     const entry = this.tools.get(name);
     if (!entry) {
@@ -98,7 +103,7 @@ export class ToolRegistry implements ToolExecutor {
     }
 
     try {
-      const content = await entry.handler(args, { toolCallId });
+      const content = await entry.handler(args, { toolCallId, signal });
       return { toolCallId, content };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
