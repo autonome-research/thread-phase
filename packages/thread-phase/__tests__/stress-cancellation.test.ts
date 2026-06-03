@@ -141,10 +141,10 @@ describe('cancellation: orchestrator does not wire options.signal onto ctx.signa
 });
 
 // ---------------------------------------------------------------------------
-// 2. AbortError between phases emits no terminal/cancelled event
+// 2. Aborting between phases emits a terminal 'cancelled' frame, then throws
 // ---------------------------------------------------------------------------
-describe('cancellation: aborting between phases swallows queued events / has no cancelled event', () => {
-  it('throws AbortError without emitting a terminal "done"/"cancelled" frame', async () => {
+describe('cancellation: aborting between phases yields a terminal cancelled frame before throwing', () => {
+  it('for-await consumers observe {type:"cancelled",reason} as the last event; the promise still rejects with AbortError', async () => {
     const controller = new AbortController();
     const ctx: Ctx = { cache: new PipelineCache() };
 
@@ -173,19 +173,14 @@ describe('cancellation: aborting between phases swallows queued events / has no 
       threw = err;
     }
 
-    // Observation: we get A's phase event then a thrown AbortError. No terminal
-    // frame describing the cancel — consumers must learn it from the rejection.
-    expect(events).toHaveLength(1);
+    // Contract: consumers see A's event, then the canonical cancellation
+    // frame, then the for-await ends via the rejection. Both signals
+    // together let SSE bridges record a clean terminal frame while
+    // promise-style callers still get the AbortError rejection.
+    expect(events).toHaveLength(2);
     expect(events[0]).toEqual({ type: 'phase', phase: 'a' });
+    expect(events[1]).toEqual({ type: 'cancelled', reason: 'user-cancel' });
     expect((threw as Error | null)?.name).toBe('AbortError');
-
-    // FINDING: no canonical { type: 'cancelled', reason } discriminant exists
-    // on the PipelineEvent union (phase.ts:55-63). SSE bridges and the like
-    // cannot send a final cancel frame — there is none defined.
-    const cancelLike = events.find(
-      (e) => (e as { type: string }).type === 'cancelled' || (e as { type: string }).type === 'done',
-    );
-    expect(cancelLike).toBeUndefined();
   });
 });
 

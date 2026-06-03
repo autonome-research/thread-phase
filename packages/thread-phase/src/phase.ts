@@ -60,6 +60,11 @@ export type PipelineEvent =
   | { type: 'tool_result'; toolUseId: string; content: string }
   | { type: 'data'; key: string; value: unknown }
   | { type: 'done'; reason?: string }
+  // Terminal frame emitted by the orchestrator IMMEDIATELY before throwing
+  // AbortError when ctx.signal aborts. Consumers iterating the event stream
+  // (SSE bridges, audit logs) see this last; consumers awaiting the
+  // generator promise still observe the AbortError rejection as before.
+  | { type: 'cancelled'; reason: string }
   | { type: 'error'; message: string };
 
 // ---------------------------------------------------------------------------

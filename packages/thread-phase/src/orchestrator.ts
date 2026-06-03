@@ -78,6 +78,11 @@ export async function* runPipeline<
         const reason = signal.reason === undefined
           ? 'aborted'
           : toErrorMessage(signal.reason);
+        // Emit a canonical terminal frame BEFORE throwing so for-await
+        // consumers (SSE bridges, audit logs) can record the lifecycle
+        // cleanly. Promise-style consumers still observe AbortError via
+        // the throw on the next iteration.
+        yield { type: 'cancelled', reason };
         const err = new Error(`runPipeline aborted: ${reason}`);
         err.name = 'AbortError';
         throw err;
