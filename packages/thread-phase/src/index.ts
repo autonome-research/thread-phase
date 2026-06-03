@@ -55,6 +55,7 @@ export {
 export {
   runAgentWithTools,
   parseJSON,
+  parseJSONStrict,
   type AgentConfig,
   type AgentRunnerOptions,
   type AgentRunResult,

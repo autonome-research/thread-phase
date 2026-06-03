@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { parseJSON } from '../src/agent-runner.js';
+import { parseJSON, parseJSONStrict } from '../src/agent-runner.js';
 
 describe('parseJSON', () => {
   // parseJSON warns to console when no onError is provided. Suppress for the
@@ -42,5 +42,25 @@ describe('parseJSON', () => {
     expect(onError).toHaveBeenCalledTimes(1);
     expect(onError.mock.calls[0]![0]).toMatch(/garbage/);
     expect(onError.mock.calls[0]![1]).toBeInstanceOf(Error);
+  });
+});
+
+describe('parseJSONStrict', () => {
+  it('returns the parsed value on success', () => {
+    expect(parseJSONStrict<{ a: number }>('{"a":1}')).toEqual({ a: 1 });
+  });
+
+  it('shares the extraction logic with parseJSON (fences and braced extraction work)', () => {
+    expect(parseJSONStrict('```json\n{"x":2}\n```')).toEqual({ x: 2 });
+    expect(parseJSONStrict('lead-in {"y":3} trailing')).toEqual({ y: 3 });
+  });
+
+  it('throws SyntaxError on malformed JSON instead of returning a fallback', () => {
+    expect(() => parseJSONStrict('not json')).toThrow(SyntaxError);
+  });
+
+  it('throws RangeError on adversarial nesting depth (same guard as parseJSON)', () => {
+    const adversarial = '{"a":'.repeat(2000) + '1' + '}'.repeat(2000);
+    expect(() => parseJSONStrict(adversarial)).toThrow(RangeError);
   });
 });

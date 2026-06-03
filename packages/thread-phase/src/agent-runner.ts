@@ -10,6 +10,7 @@
 export {
   runAgentWithTools,
   parseJSON,
+  parseJSONStrict,
   type AgentConfig,
   type ActivityEntry,
   type AgentRunResult,

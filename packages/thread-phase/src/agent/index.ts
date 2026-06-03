@@ -21,7 +21,7 @@
  */
 
 export { runAgentWithTools } from './runner.js';
-export { parseJSON } from './parse-json.js';
+export { parseJSON, parseJSONStrict } from './parse-json.js';
 
 export type {
   AgentConfig,

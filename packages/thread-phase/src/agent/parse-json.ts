@@ -29,26 +29,39 @@ export function parseJSON<T>(
   onError?: (preview: string, err: Error) => void,
 ): T {
   try {
-    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    const braced = text.match(/(\{[\s\S]*\})/);
-    const jsonStr = (fenced ? fenced[1]! : braced ? braced[1]! : text).trim();
-
-    if (exceedsMaxDepth(jsonStr, MAX_PARSE_DEPTH)) {
-      return report(
-        text,
-        new RangeError(
-          `parseJSON: input nesting exceeds MAX_PARSE_DEPTH=${MAX_PARSE_DEPTH}`,
-        ),
-        fallback,
-        onError,
-      );
-    }
-
-    return JSON.parse(jsonStr) as T;
+    return parseCandidate<T>(text);
   } catch (err) {
     const errObj = err instanceof Error ? err : new Error(String(err));
     return report(text, errObj, fallback, onError);
   }
+}
+
+/**
+ * Strict counterpart to `parseJSON`: same extraction logic (markdown
+ * fences, embedded `{...}`, depth guard) but throws on failure instead
+ * of returning a fallback. Use this when the caller has already checked
+ * `AgentRunResult.finishReason` and KNOWS the response should be valid
+ * JSON — surfacing the parse error is more useful than a silent default.
+ *
+ * Throws `SyntaxError` for malformed JSON; throws `RangeError` if input
+ * nesting exceeds MAX_PARSE_DEPTH (mirroring the V8 safeguard in the
+ * tolerant variant).
+ */
+export function parseJSONStrict<T>(text: string): T {
+  return parseCandidate<T>(text);
+}
+
+function parseCandidate<T>(text: string): T {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const braced = text.match(/(\{[\s\S]*\})/);
+  const jsonStr = (fenced ? fenced[1]! : braced ? braced[1]! : text).trim();
+
+  if (exceedsMaxDepth(jsonStr, MAX_PARSE_DEPTH)) {
+    throw new RangeError(
+      `parseJSON: input nesting exceeds MAX_PARSE_DEPTH=${MAX_PARSE_DEPTH}`,
+    );
+  }
+  return JSON.parse(jsonStr) as T;
 }
 
 function report<T>(
