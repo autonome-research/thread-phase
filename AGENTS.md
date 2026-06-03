@@ -129,7 +129,8 @@ The substrate ships across three packages + a few subpaths. This table is the **
 | **Chain-builder utilities**: `createEventBus`, `pipeAgentEventsToJobStore`, `createThread`, `appendEvent`, `withMemory`, `withThread`, `isSteerable` | `@autonome-research/thread-phase-agents` (re-exported from core) |
 | **Adapter-consumer types**: `AgentEvent`, `AgentRun`, `AgentRunResult`, `AgentEventBus`, `Thread`, `AgentAdapterMeta`, `AgentCapabilities` | `@autonome-research/thread-phase-agents` (re-exported from core) |
 | **Cross-adapter rendering** (when chaining different adapters): `threadToTranscript`, `threadToMessages`, `threadToAcpPrompt`, `threadToClaudeCodePrompt`, `threadToCodexInput`, `threadToAnthropicMessages` | `@autonome-research/thread-phase-agents` |
-| **Authoring a custom AgentAdapter** (small audience): `defineAgentAdapter`, `TurnAccumulator`, `composeAbort`, `createEventQueue`, `lazyEvents`, `applyStructuredOutputPrompt`, `parseStructuredFromText`, `requireCapability`, `serializeError` | `@autonome-research/thread-phase/agents` |
+| **Authoring a custom AgentAdapter** — consumer-stable bits (`defineAgentAdapter`, protocol types) | `@autonome-research/thread-phase/agents` |
+| **Authoring a custom AgentAdapter** — author-unstable helpers (`TurnAccumulator`, `composeAbort`, `createEventQueue`, `lazyEvents`, `applyStructuredOutputPrompt`, `parseStructuredFromText`, `requireCapability`, `serializeError`) | `@autonome-research/thread-phase/agents/authoring` |
 | **Pi extensions / CLI extension authoring**: `ThreadPhaseAPI`, `PipelineSpec`, `ExtensionRegisterFn` | `@autonome-research/thread-phase` (re-exported from helpers) |
 
 **Two rules of thumb that cover 95% of cases:**

@@ -22,7 +22,6 @@
  *      (`memory:recall_failed` / `memory:remember_failed`); the run
  *      itself never fails because of memory.
  *
- * @internal
  */
 
 import { createEventBus } from './event-bus.js';
@@ -35,8 +34,6 @@ import type {
   MemoryScope,
 } from './protocol.js';
 import { serializeError } from './serialize-error.js';
-
-/** @internal */
 export interface WithMemoryOptions<TConfig> {
   /** Identity scope (`userId` required; `appId` / `sessionId` optional). */
   scope: MemoryScope;
@@ -61,7 +58,6 @@ export interface WithMemoryOptions<TConfig> {
  * of `options.memoryProvider` at call time — no provider, no memory
  * activity.
  *
- * @internal
  */
 export function withMemory<TConfig>(
   meta: AgentAdapterMeta<TConfig>,

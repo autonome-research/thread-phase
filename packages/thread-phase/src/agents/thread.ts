@@ -9,7 +9,6 @@
  * adapter, it renders the canonical events into a permissive message log
  * via `threadToMessages` and starts a fresh session.
  *
- * @internal
  */
 
 import type { AgentEvent, ResumeToken } from './protocol.js';
@@ -23,29 +22,20 @@ import type { Message, ToolCall } from '../messages.js';
  *   to adapter-native state. Adapters set their own token, never another
  *   adapter's.
  *
- * @internal
  */
 export interface Thread {
   events: AgentEvent[];
   resumeTokens: Record<string, ResumeToken>;
 }
-
-/** @internal */
 export function createThread(): Thread {
   return { events: [], resumeTokens: {} };
 }
-
-/** @internal */
 export function appendEvent(thread: Thread, event: AgentEvent): void {
   thread.events.push(event);
 }
-
-/** @internal */
 export function resumeTokenFor(thread: Thread, adapterId: string): ResumeToken | undefined {
   return thread.resumeTokens[adapterId];
 }
-
-/** @internal */
 export function setResumeToken(thread: Thread, adapterId: string, token: ResumeToken): void {
   thread.resumeTokens[adapterId] = token;
 }
@@ -66,7 +56,6 @@ export function setResumeToken(thread: Thread, adapterId: string, token: ResumeT
  *
  * Treat the output as conversation history, not as an authoritative log.
  *
- * @internal
  */
 export function threadToMessages(thread: Thread): Message[] {
   const out: Message[] = [];

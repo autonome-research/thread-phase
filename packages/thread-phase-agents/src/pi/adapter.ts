@@ -33,14 +33,7 @@
  */
 
 import {
-  applyStructuredOutputPrompt,
-  composeAbort,
-  createEventQueue,
   defineAgentAdapter,
-  lazyEvents,
-  parseStructuredFromText,
-  serializeError,
-  TurnAccumulator,
   type AgentAdapterMeta,
   type AgentRun,
   type AgentRunOptions,
@@ -50,6 +43,15 @@ import {
   type SteerableAgentRun,
   type StructuredOutputConfig,
 } from '@autonome-research/thread-phase/agents';
+import {
+  TurnAccumulator,
+  applyStructuredOutputPrompt,
+  composeAbort,
+  createEventQueue,
+  lazyEvents,
+  parseStructuredFromText,
+  serializeError,
+} from '@autonome-research/thread-phase/agents/authoring';
 import type { ToolCall } from '@autonome-research/thread-phase';
 
 // We use the SDK's public re-exports, kept as `unknown` here to avoid

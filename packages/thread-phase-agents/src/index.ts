@@ -39,15 +39,18 @@ export {
 } from './thread-bridge.js';
 
 // ---------------------------------------------------------------------------
-// Re-exports from `@autonome-research/thread-phase/agents` for the common
-// consumer + chain-builder cases. Importing these from `-agents` keeps the
-// import surface to one place when you're using adapters or chaining them.
+// Re-exports from `@autonome-research/thread-phase/agents` (Tier A, stable
+// from v4.0.0) for the common consumer + chain-builder cases. Importing
+// from `-agents` keeps the import surface to one place when you're using
+// adapters or chaining them.
 //
-// Canonical home is still `@autonome-research/thread-phase/agents`; these are
-// pure re-exports. Author-only helpers (`defineAgentAdapter`, `TurnAccumulator`,
-// `composeAbort`, `createEventQueue`, `lazyEvents`, the structured-output
-// helpers, `requireCapability`, `serializeError`) stay only in the core
-// subpath since they're for adapter implementations, not adapter consumers.
+// Canonical home is still `@autonome-research/thread-phase/agents`; these
+// are pure re-exports. Author-only helpers (`composeAbort`, `createEventQueue`,
+// `lazyEvents`, `TurnAccumulator`, `serializeError`, the structured-output
+// runtime helpers, `requireCapability`) now live at
+// `@autonome-research/thread-phase/agents/authoring` (Tier B, unstable).
+// They are intentionally NOT re-exported here — consumers shouldn't need
+// them; new adapter authors import directly from /authoring.
 // ---------------------------------------------------------------------------
 
 export {

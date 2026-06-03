@@ -16,7 +16,6 @@
  * first. Translation rules from runner stream events → canonical
  * `AgentEvent`s are documented inline on the `onStreamEvent` callback.
  *
- * @internal
  */
 
 import {
@@ -50,7 +49,6 @@ const ADAPTER_ID = 'inference';
  * Configuration for the in-tree inference adapter. Wraps the same inputs
  * `runAgentWithTools` already takes plus an optional structured-output spec.
  *
- * @internal
  */
 export interface InferenceAgentConfig {
   /** Agent config passed to `runAgentWithTools`. */
@@ -70,7 +68,6 @@ export interface InferenceAgentConfig {
 /**
  * The adapter metadata, suitable for registration alongside future siblings.
  *
- * @internal
  */
 export const inferenceAgent: AgentAdapterMeta<InferenceAgentConfig> = defineAgentAdapter({
   id: ADAPTER_ID,

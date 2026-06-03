@@ -13,15 +13,28 @@
  * Retries on parse failure are not executed here — that is an adapter-level
  * concern (the adapter calls `followUp()` with the parse error and retries).
  *
- * @internal
+ * # Stability — this file straddles the tier boundary
+ *
+ *   - `StructuredOutputConfig` and `StructuredOutputParseError` are
+ *     Tier A (stable from v4.0.0). Consumers declare the config shape in
+ *     adapter options; they must handle the error type from
+ *     `AgentRunResult.parseError`. Re-exported from `thread-phase/agents`.
+ *
+ *   - `applyStructuredOutputPrompt`, `extractResponseBlock`,
+ *     `parseStructuredFromText`, `parseStructured` are Tier B (author-
+ *     unstable). They are implementation helpers for adapters wiring the
+ *     prompted-output path. Re-exported from `thread-phase/agents/authoring`.
+ *
+ *     NOTE: `parseStructuredFromText` is the closest Tier B export to a
+ *     Tier A candidate — six bundled adapters use it. If consumer-facing
+ *     re-parse of a raw response ever becomes a documented use case
+ *     (e.g. retry-from-cached-text flows), promote it via a stable wrapper.
  */
 
 import type { AgentRunResult } from './protocol.js';
 
 /**
  * Configuration for the prompted structured-output path.
- *
- * @internal
  */
 export interface StructuredOutputConfig {
   /**
@@ -47,8 +60,6 @@ export interface StructuredOutputConfig {
 /**
  * Distinct error for the prompted-output path. Carries the offending text
  * window so callers can decide whether to retry.
- *
- * @internal
  */
 export class StructuredOutputParseError extends Error {
   constructor(message: string, public window: string) {

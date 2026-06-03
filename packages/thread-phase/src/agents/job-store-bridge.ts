@@ -9,14 +9,11 @@
  * by hand would reach for `bus.on((event) => store.appendEvent(...))`;
  * this helper ships the canonical version with a clean unsubscribe.
  *
- * @internal
  */
 
 import type { PipelineEvent } from '../phase.js';
 import type { JobStore } from '../session/index.js';
 import type { AgentEvent, AgentEventBus } from './protocol.js';
-
-/** @internal */
 export interface PipeAgentEventsOptions {
   /**
    * Event types to drop rather than persist. Useful for high-volume
@@ -42,7 +39,6 @@ export interface PipeAgentEventsOptions {
  * (the JobStore's escape hatch for arbitrary payloads); the canonical
  * `AgentEvent` is the `value`.
  *
- * @internal
  */
 export function pipeAgentEventsToJobStore(
   bus: AgentEventBus,

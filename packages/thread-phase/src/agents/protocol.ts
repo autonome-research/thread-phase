@@ -6,7 +6,6 @@
  * thread-phase patterns can compose them uniformly. The protocol is types
  * and pure utilities; runtime adapters live in sibling packages.
  *
- * @internal — surface is in development and not covered by semver until
  * AgentAdapter v1 ships. See `potential_feature.md` for the design spec.
  */
 
@@ -27,7 +26,6 @@ export type { MemoryProvider, MemoryScope } from './memory.js';
  * - `session-file` is the on-disk transcript used by pi and Claude Code.
  * - `opaque` is the fallback for adapters with proprietary continuation state.
  *
- * @internal
  */
 export type ResumeToken =
   | { kind: 'response-id'; id: string; provider: string }
@@ -43,7 +41,6 @@ export type ResumeToken =
  * serialized errors anyway, so making it uniform avoids a footgun where
  * callers conditionally have raw `Error` instances vs. plain objects.
  *
- * @internal
  */
 export interface SerializableError {
   name: string;
@@ -75,7 +72,6 @@ export interface SerializableError {
  * malformed request, schema violation). Adapter authors set `true` only when
  * a sensible retry policy could succeed without user intervention.
  *
- * @internal
  */
 export type AgentEvent =
   | { type: 'agent_start';  source: string; traceId?: string; resumeToken?: ResumeToken }
@@ -93,7 +89,6 @@ export type AgentEvent =
  * `'aborted'` so cancellation has a first-class encoding instead of being
  * folded into `'error'`.
  *
- * @internal
  */
 export type AgentFinishReason = FinishReason | 'aborted';
 
@@ -111,7 +106,6 @@ export type AgentFinishReason = FinishReason | 'aborted';
  * (required → optional is widening); adapters that don't emit activity entries
  * simply leave the field undefined.
  *
- * @internal
  */
 export interface AgentRunResult {
   /** Final text output. May be JSON; callers parseJSON or parseStructured. */
@@ -155,7 +149,6 @@ export interface AgentRunResult {
  * call `requireCapability` against this at construction time so pipelines
  * fail fast before any LLM tokens are spent.
  *
- * @internal
  */
 export interface AgentCapabilities {
   streaming: 'text' | 'turns' | 'final-only';
@@ -177,7 +170,6 @@ export interface AgentCapabilities {
  * by the caller of an individual adapter run. The bus is the multi-subscriber
  * fan-out; the run's events iterable is consumed once.
  *
- * @internal
  */
 export interface AgentEventBus {
   emit(event: AgentEvent): void;
@@ -193,7 +185,6 @@ export interface AgentEventBus {
  * adapters ignore the ones they can't honor (after declaring so via
  * `AgentCapabilities`).
  *
- * @internal
  */
 export interface AgentRunOptions {
   signal?: AbortSignal;
@@ -217,7 +208,6 @@ export interface AgentRunOptions {
  *   `finishReason: 'error'` with a prior `error` event.
  * - `abort()` is idempotent.
  *
- * @internal
  */
 export interface AgentRun<TResult extends AgentRunResult = AgentRunResult> {
   readonly events: AsyncIterable<AgentEvent>;
@@ -236,7 +226,6 @@ export interface AgentRun<TResult extends AgentRunResult = AgentRunResult> {
  * (SteerableAgentRun is a subtype). Consumers narrow at the call site
  * via `isSteerable(run)`.
  *
- * @internal
  */
 export interface SteerableAgentRun<TResult extends AgentRunResult = AgentRunResult>
   extends AgentRun<TResult> {
@@ -262,7 +251,6 @@ export interface SteerableAgentRun<TResult extends AgentRunResult = AgentRunResu
  *     const run = hermesAgent.adapter(...);
  *     if (isSteerable(run)) await run.followUp('also do X');
  *
- * @internal
  */
 export function isSteerable<TResult extends AgentRunResult>(
   run: AgentRun<TResult>,
@@ -278,7 +266,6 @@ export function isSteerable<TResult extends AgentRunResult>(
  * The adapter signature. Must return synchronously — the run starts lazily
  * when either `events` is iterated or `result` is awaited.
  *
- * @internal
  */
 export type AgentAdapter<TConfig, TResult extends AgentRunResult = AgentRunResult> = (
   config: TConfig,
@@ -290,7 +277,6 @@ export type AgentAdapter<TConfig, TResult extends AgentRunResult = AgentRunResul
  * every emitted event), a declared `capabilities` descriptor, and the
  * adapter function itself.
  *
- * @internal
  */
 export interface AgentAdapterMeta<TConfig, TResult extends AgentRunResult = AgentRunResult> {
   readonly id: string;
@@ -302,7 +288,6 @@ export interface AgentAdapterMeta<TConfig, TResult extends AgentRunResult = Agen
  * Identity at runtime; exists for inference and as a hook for future
  * telemetry. Modeled on Vitest's `defineConfig`.
  *
- * @internal
  */
 export function defineAgentAdapter<TConfig, TResult extends AgentRunResult = AgentRunResult>(
   meta: AgentAdapterMeta<TConfig, TResult>,

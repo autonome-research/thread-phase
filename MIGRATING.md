@@ -1,3 +1,52 @@
+# Migrating from v3.x to v4.0.0
+
+v4.0.0 commits the `/agents` subpath to semver stability and moves the adapter-author helpers to a separate `thread-phase/agents/authoring` subpath. The split codifies the existing prose-comment-based boundary as two physical import paths.
+
+**You are unaffected if:**
+- You import only from `@autonome-research/thread-phase`, `@autonome-research/thread-phase/patterns`, `@autonome-research/thread-phase/triggers`, etc.
+- You import only from `@autonome-research/thread-phase-agents` (the sibling package)
+- You import the protocol TYPES (`AgentAdapter`, `AgentRun`, `AgentRunResult`, `AgentEvent`, etc.) or consumer-facing primitives (`createEventBus`, `withMemory`, `withThread`, `pipeAgentEventsToJobStore`, `createThread`, …) from `@autonome-research/thread-phase/agents`
+
+**You need to update one import if:**
+- You import any of the following from `@autonome-research/thread-phase/agents`:
+  - `composeAbort`, `CompositeAbort`, `createEventQueue`, `EventQueue`, `lazyEvents`
+  - `TurnAccumulator`
+  - `serializeError`
+  - `applyStructuredOutputPrompt`, `extractResponseBlock`, `parseStructuredFromText`, `parseStructured`
+  - `AgentCapabilityError`, `requireCapability`
+
+For each of those, change the import path from `'@autonome-research/thread-phase/agents'` to `'@autonome-research/thread-phase/agents/authoring'`. The names themselves are unchanged.
+
+```diff
+- import { composeAbort, TurnAccumulator } from '@autonome-research/thread-phase/agents';
++ import { composeAbort, TurnAccumulator } from '@autonome-research/thread-phase/agents/authoring';
+```
+
+If your file imports a mix of Tier A and Tier B names from the old path, split the import into two:
+
+```diff
+- import {
+-   defineAgentAdapter,
+-   composeAbort,
+-   TurnAccumulator,
+-   serializeError,
+-   type AgentRunResult,
+- } from '@autonome-research/thread-phase/agents';
++ import {
++   defineAgentAdapter,
++   type AgentRunResult,
++ } from '@autonome-research/thread-phase/agents';
++ import {
++   composeAbort,
++   TurnAccumulator,
++   serializeError,
++ } from '@autonome-research/thread-phase/agents/authoring';
+```
+
+See `STABILITY.md` at the repo root for the full tier policy and the semver commitments going forward.
+
+---
+
 # Migrating from v2.x to v3.0.0
 
 v3.0.0 is a cleanup + simplification release. Breaking changes are listed below with the equivalent v3 form.

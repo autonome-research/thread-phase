@@ -7,7 +7,6 @@
  * are fire-and-forget (no awaiting); use the bus for observation, not for
  * sequencing.
  *
- * @internal
  */
 
 import type { AgentEvent, AgentEventBus } from './protocol.js';
@@ -16,7 +15,6 @@ import type { AgentEvent, AgentEventBus } from './protocol.js';
  * Construct a new event bus. Each adapter that receives one via
  * `AgentRunOptions.eventBus` mirrors its event stream into it.
  *
- * @internal
  */
 export function createEventBus(): AgentEventBus {
   const handlers = new Set<(event: AgentEvent) => void | Promise<void>>();

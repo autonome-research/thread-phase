@@ -36,14 +36,7 @@ import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 
 import {
-  applyStructuredOutputPrompt,
-  composeAbort,
-  createEventQueue,
   defineAgentAdapter,
-  lazyEvents,
-  parseStructuredFromText,
-  serializeError,
-  TurnAccumulator,
   type AgentAdapterMeta,
   type AgentRun,
   type AgentRunOptions,
@@ -52,6 +45,15 @@ import {
   type SerializableError,
   type StructuredOutputConfig,
 } from '@autonome-research/thread-phase/agents';
+import {
+  TurnAccumulator,
+  applyStructuredOutputPrompt,
+  composeAbort,
+  createEventQueue,
+  lazyEvents,
+  parseStructuredFromText,
+  serializeError,
+} from '@autonome-research/thread-phase/agents/authoring';
 import type { ToolCall } from '@autonome-research/thread-phase';
 
 const ADAPTER_ID = 'codex-cli';

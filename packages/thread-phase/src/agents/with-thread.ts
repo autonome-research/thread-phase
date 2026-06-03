@@ -17,7 +17,6 @@
  * a cross-pipeline backend. Thread mutation happens through the same
  * `appendEvent` / `setResumeToken` helpers callers would use manually.
  *
- * @internal
  */
 
 import { createEventBus } from './event-bus.js';
@@ -33,8 +32,6 @@ import {
   setResumeToken,
   type Thread,
 } from './thread.js';
-
-/** @internal */
 export interface WithThreadOptions<TConfig> {
   /**
    * Splice the thread's per-adapter resume token into the inner config.
@@ -53,7 +50,6 @@ export interface WithThreadOptions<TConfig> {
  * Mutation is in-place on the supplied thread. The wrapper does not
  * defensively clone — caller controls the thread's lifetime.
  *
- * @internal
  */
 export function withThread<TConfig>(
   meta: AgentAdapterMeta<TConfig>,

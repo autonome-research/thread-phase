@@ -28,12 +28,7 @@ import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 
 import {
-  composeAbort,
-  createEventQueue,
   defineAgentAdapter,
-  lazyEvents,
-  serializeError,
-  TurnAccumulator,
   type AgentAdapterMeta,
   type AgentEvent,
   type AgentRun,
@@ -41,6 +36,13 @@ import {
   type AgentRunResult,
   type ResumeToken,
 } from '@autonome-research/thread-phase/agents';
+import {
+  TurnAccumulator,
+  composeAbort,
+  createEventQueue,
+  lazyEvents,
+  serializeError,
+} from '@autonome-research/thread-phase/agents/authoring';
 
 import {
   ACP_METHODS,

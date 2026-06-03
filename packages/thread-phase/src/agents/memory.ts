@@ -8,7 +8,6 @@
  * raw recall blob), and `remember` ingests an event window from the run
  * that just completed.
  *
- * @internal
  */
 
 import type { AgentEvent } from './protocol.js';
@@ -17,7 +16,6 @@ import type { AgentEvent } from './protocol.js';
  * Scope key for a memory provider. `userId` is the partition every
  * backend expects; `appId` and `sessionId` narrow further when supported.
  *
- * @internal
  */
 export interface MemoryScope {
   userId: string;
@@ -34,7 +32,6 @@ export interface MemoryScope {
  * derivers, for example). Callers that need strict ordering should
  * persist their own representation alongside the provider.
  *
- * @internal
  */
 export interface MemoryProvider {
   recall(scope: MemoryScope, query?: string): Promise<string>;

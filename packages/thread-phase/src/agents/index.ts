@@ -1,9 +1,23 @@
 /**
- * Public entry point for the AgentAdapter protocol.
+ * Public entry point for the AgentAdapter protocol — Tier A, STABLE surface.
  *
- * The protocol surface is currently `@internal` — covered by no semver
- * guarantee until the first stable release of `@autonome-research/thread-phase-agents`. Until
- * then, every export here may change in a minor version.
+ * # Stability commitment (from v4.0.0)
+ *
+ * Every export from this subpath is covered by semver:
+ *   - patch (4.0.x): bug fixes, no API changes
+ *   - minor (4.x.0): additive — new exports, new optional fields
+ *   - major (x.0.0): breaking changes (always with a migration note)
+ *
+ * Anyone building application code that uses or composes pre-built
+ * adapters (`claudeCodeAgent`, `codexAgent`, `hermesAgent`, …) imports
+ * from here.
+ *
+ * Helpers for AUTHORING new adapters — `composeAbort`, `createEventQueue`,
+ * `lazyEvents`, `TurnAccumulator`, `serializeError`, the prompted
+ * structured-output helpers, `requireCapability` — live in
+ * `thread-phase/agents/authoring` and remain unstable.
+ *
+ * See STABILITY.md at the repo root for the full tier policy.
  *
  * Subpath: `thread-phase/agents`.
  */
@@ -29,12 +43,6 @@ export {
 // Event bus.
 export { createEventBus } from './event-bus.js';
 
-// Capability assertions.
-export { AgentCapabilityError, requireCapability } from './capability.js';
-
-// Error serialization helper.
-export { serializeError } from './serialize-error.js';
-
 // Thread primitive.
 export {
   appendEvent,
@@ -48,33 +56,21 @@ export {
 // Memory provider interface.
 export type { MemoryProvider, MemoryScope } from './memory.js';
 
-// Structured-output helpers (prompted path).
+// Structured-output TYPES live in the stable barrel. The corresponding
+// runtime helpers (parseStructuredFromText, extractResponseBlock,
+// applyStructuredOutputPrompt, parseStructured) are author-only and
+// live in `thread-phase/agents/authoring`.
 export {
-  applyStructuredOutputPrompt,
-  extractResponseBlock,
-  parseStructured,
-  parseStructuredFromText,
   StructuredOutputParseError,
   type StructuredOutputConfig,
 } from './structured-output.js';
 
-// Reference adapter — wraps runAgentWithTools.
+// Reference adapter — wraps runAgentWithTools. inferenceAgent is shipped
+// as both a working adapter and the canonical example for adapter authors.
 export {
   inferenceAgent,
   type InferenceAgentConfig,
 } from './inference-adapter.js';
-
-// Helper for adapters whose runtime emits turn boundaries before tool calls.
-export { TurnAccumulator } from './turn-accumulator.js';
-
-// Helpers for adapter authors: composite abort, single-consumer event queue, lazy-start wrapper.
-export {
-  composeAbort,
-  createEventQueue,
-  lazyEvents,
-  type CompositeAbort,
-  type EventQueue,
-} from './run-helpers.js';
 
 // Adapter decorators: auto-handle memory and Thread wiring.
 export { withMemory, type WithMemoryOptions } from './with-memory.js';

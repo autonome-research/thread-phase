@@ -46,14 +46,7 @@ async function loadAnthropic(): Promise<typeof import('@anthropic-ai/sdk').defau
 }
 
 import {
-  applyStructuredOutputPrompt,
-  composeAbort,
-  createEventQueue,
   defineAgentAdapter,
-  lazyEvents,
-  parseStructuredFromText,
-  serializeError,
-  TurnAccumulator,
   type AgentAdapterMeta,
   type AgentRun,
   type AgentRunOptions,
@@ -61,6 +54,15 @@ import {
   type SerializableError,
   type StructuredOutputConfig,
 } from '@autonome-research/thread-phase/agents';
+import {
+  TurnAccumulator,
+  applyStructuredOutputPrompt,
+  composeAbort,
+  createEventQueue,
+  lazyEvents,
+  parseStructuredFromText,
+  serializeError,
+} from '@autonome-research/thread-phase/agents/authoring';
 import type { ToolCall } from '@autonome-research/thread-phase';
 
 const ADAPTER_ID = 'anthropic';
