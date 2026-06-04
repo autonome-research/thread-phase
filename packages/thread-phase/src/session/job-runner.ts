@@ -23,6 +23,7 @@ import { EventEmitter } from 'events';
 import type { BasePipelineContext, Phase, PipelineEvent } from '../phase.js';
 import { runPipeline, type PipelineSummary } from '../orchestrator.js';
 import type { JobStore } from './job-store.js';
+import { signalReasonToString } from '../internal/error-message.js';
 
 export interface LiveEvent {
   id: number;
@@ -127,8 +128,7 @@ export class JobRunner extends EventEmitter {
         }
 
         if (controller.signal.aborted) {
-          const reason =
-            (controller.signal.reason as string | undefined) ?? 'cancelled';
+          const reason = signalReasonToString(controller.signal, 'cancelled');
           await persistError(`cancelled: ${reason}`);
           const err = new Error(`cancelled: ${reason}`);
           err.name = 'AbortError';

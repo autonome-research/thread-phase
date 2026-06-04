@@ -34,6 +34,27 @@ export function toErrorMessage(err: unknown): string {
 }
 
 /**
+ * Coerce `AbortSignal.reason` to a string for logging or event payloads.
+ *
+ * `AbortSignal.reason` is typed `any` per the WHATWG spec — most callers
+ * pass strings, many pass `Error` instances, SDKs occasionally pass
+ * arbitrary objects, and `undefined` is the default before any explicit
+ * `controller.abort(reason)`. This helper centralizes the coercion so
+ * the orchestrator, JobRunner, and any future call site agree on the
+ * contract and `undefined` consistently means "no reason given."
+ *
+ * @param signal The AbortSignal whose `reason` to coerce.
+ * @param fallback String to return when `signal.reason` is undefined.
+ *                 Defaults to `'aborted'`.
+ */
+export function signalReasonToString(
+  signal: AbortSignal,
+  fallback = 'aborted',
+): string {
+  return signal.reason === undefined ? fallback : toErrorMessage(signal.reason);
+}
+
+/**
  * Stringify an arbitrary value without ever propagating an exception.
  * Hostile inputs — Proxies whose traps throw, objects with throwing
  * `Symbol.toPrimitive` or `toString` — would otherwise crash this function.

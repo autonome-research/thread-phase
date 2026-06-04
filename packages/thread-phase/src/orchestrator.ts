@@ -16,7 +16,7 @@
  */
 
 import type { BasePipelineContext, Phase, PipelineEvent } from './phase.js';
-import { toErrorMessage } from './internal/error-message.js';
+import { signalReasonToString } from './internal/error-message.js';
 
 /**
  * The terminal state of a pipeline run.
@@ -70,14 +70,12 @@ export async function* runPipeline<
   try {
     for (const phase of phases) {
       if (signal?.aborted) {
-        // AbortSignal.reason is `any` per spec — most callers pass strings,
-        // many pass Error instances, and SDKs occasionally pass arbitrary
-        // objects. toErrorMessage extracts a string from any of these
-        // without destroying diagnostic information (vs. the prior
-        // `as string` cast that silently coerced non-strings to 'aborted').
-        const reason = signal.reason === undefined
-          ? 'aborted'
-          : toErrorMessage(signal.reason);
+        // signalReasonToString centralizes the abort-reason coercion so
+        // every call site (orchestrator, JobRunner, future consumers)
+        // agrees on the contract: undefined → fallback, otherwise pass
+        // through toErrorMessage so Error and arbitrary-object reasons
+        // surface their message instead of getting silently swallowed.
+        const reason = signalReasonToString(signal);
         // Emit a canonical terminal frame BEFORE throwing so for-await
         // consumers (SSE bridges, audit logs) can record the lifecycle
         // cleanly. Promise-style consumers still observe AbortError via
