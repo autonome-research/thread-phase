@@ -20,3 +20,28 @@ export {
   type CompressorStrategy,
   type CompressionOptions,
 } from './compressor.js';
+
+export {
+  MARKED_DROP,
+  REDUCED,
+  MARKED_REDUCE_PREFIX,
+  countPendingMarks,
+  applyCuratorMarks,
+  applyCuratorMarksWithStats,
+  readMsgIdField,
+  reduceHeadTail,
+  reduceFirstNChars,
+  reduceSchemaOnly,
+  reduceSummarize,
+  reduceSync,
+  reduceAsync,
+  isAsyncStrategy,
+  type MarkCounts,
+  type MessageIdResolver,
+  type ApplyCuratorMarksOptions,
+  type ApplyResult,
+  type HeadTailOptions,
+  type FirstNCharsOptions,
+  type SummarizeOptions,
+  type ReductionStrategyName,
+} from './curator/index.js';
