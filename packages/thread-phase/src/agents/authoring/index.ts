@@ -69,3 +69,14 @@ export {
 
 // Capability assertions for adapter authors.
 export { AgentCapabilityError, requireCapability } from '../capability.js';
+
+// Child-process supervision for subprocess-based adapters. Wires
+// AbortSignal → SIGTERM → SIGKILL escalation; exposes the raw child for
+// stdio wiring and an `exited` promise that never rejects. Replaces the
+// ad-hoc supervision code in the acp/codex-cli/claude-code/openclaw
+// adapters.
+export {
+  superviseChild,
+  type SuperviseChildOptions,
+  type SuperviseChildHandle,
+} from './supervise-child.js';

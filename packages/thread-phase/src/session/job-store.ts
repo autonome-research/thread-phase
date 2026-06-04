@@ -36,7 +36,18 @@
 
 import type { PipelineEvent } from '../phase.js';
 
-export type JobStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+/**
+ * Persisted job lifecycle states + the computed read-time `'STALE'`
+ * discriminant.
+ *
+ * `'STALE'` is NEVER written to the store. It appears only as a
+ * read-time computed status when callers pass `staleAfterMs` to
+ * `getJob()` or `listJobs()` and the row meets the staleness criteria
+ * (status = RUNNING AND heartbeatAt is older than the threshold).
+ * The persisted status of any STALE-reported row is still RUNNING —
+ * the caller decides whether to transition it to FAILED.
+ */
+export type JobStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'STALE';
 
 export interface JobRecord {
   id: string;
@@ -49,6 +60,22 @@ export interface JobRecord {
   createdAt: Date;
   startedAt: Date | null;
   completedAt: Date | null;
+  // Optional ownership / liveness metadata. Auto-populated by JobRunner at
+  // setRunning() time when the runtime exposes the source (process.pid etc).
+  // sessionId is caller-supplied via JobRunner.run options. heartbeatAt is
+  // updated by JobRunner.heartbeat() and used for read-time staleness.
+  /** Caller-supplied logical session id (e.g. CLI invocation, request id). */
+  sessionId?: string;
+  /** OS process id of the owning runtime (process.pid). */
+  pid?: number;
+  /** Parent process id (process.ppid). */
+  ppid?: number;
+  /** Working directory at setRunning() time (process.cwd()). */
+  cwd?: string;
+  /** Hostname at setRunning() time (os.hostname()). */
+  hostname?: string;
+  /** Most recent heartbeat ISO timestamp. Updated by JobRunner.heartbeat(). */
+  heartbeatAt?: Date;
 }
 
 export interface EventRecord {
@@ -64,6 +91,38 @@ export interface ListJobsOptions {
   name?: string;
   /** Page size cap. Default: 50. */
   limit?: number;
+  /**
+   * Filter to a specific status. When set to `'STALE'`, callers MUST also
+   * pass `staleAfterMs`; otherwise no jobs match (STALE is never persisted).
+   */
+  status?: JobStatus;
+  /**
+   * Read-time staleness threshold in milliseconds. When set, RUNNING jobs
+   * whose `heartbeatAt` is older than `Date.now() - staleAfterMs` are
+   * surfaced with `status: 'STALE'` in the returned records. The
+   * persisted status is NOT modified — implementations compute STALE on
+   * read only. Has no effect on PENDING / COMPLETED / FAILED rows.
+   *
+   * If your runs do not heartbeat (no `heartbeatMs` on JobRunner, no
+   * manual `ctx.heartbeat?.()` calls), staleness can not be detected —
+   * RUNNING jobs are assumed live regardless of `startedAt`.
+   */
+  staleAfterMs?: number;
+}
+
+/** Options for {@link JobStore.getJob}. */
+export interface GetJobOptions {
+  /** See {@link ListJobsOptions.staleAfterMs}. */
+  staleAfterMs?: number;
+}
+
+/** Ownership metadata recorded at setRunning() time. All fields optional. */
+export interface JobOwnership {
+  sessionId?: string;
+  pid?: number;
+  ppid?: number;
+  cwd?: string;
+  hostname?: string;
 }
 
 export interface JobStore {
@@ -84,11 +143,22 @@ export interface JobStore {
    * the original startedAt intact.
    */
   acquireExclusive(name: string, input: unknown): Promise<string | null>;
-  setRunning(jobId: string): Promise<void>;
+  /**
+   * Transition a row from PENDING to RUNNING. Optionally records
+   * ownership metadata (sessionId, pid, ppid, cwd, hostname) so
+   * downstream operators can answer "which process owns this job."
+   */
+  setRunning(jobId: string, ownership?: JobOwnership): Promise<void>;
   setCompleted(jobId: string, result: unknown): Promise<void>;
   setFailed(jobId: string, error: string): Promise<void>;
+  /**
+   * Update `heartbeatAt` to "now." Called by JobRunner on its
+   * heartbeatMs interval and via `ctx.heartbeat?.()` from phase bodies.
+   * No-op if the job is not in RUNNING state.
+   */
+  heartbeat(jobId: string): Promise<void>;
 
-  getJob(jobId: string): Promise<JobRecord | null>;
+  getJob(jobId: string, options?: GetJobOptions): Promise<JobRecord | null>;
   listJobs(options?: ListJobsOptions): Promise<JobRecord[]>;
 
   /** Append one event to the log; returns its monotonic id (resume cursor). */

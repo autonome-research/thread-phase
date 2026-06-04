@@ -1,3 +1,33 @@
+# Migrating from v4.0.x to v4.1.0
+
+v4.1.0 is **purely additive**. Nothing breaks. You can upgrade without changing any code.
+
+What landed:
+- `JobRunner` gains `heartbeatMs` constructor option + `JobRunner.heartbeat(jobId)` method + `ctx.heartbeat?.()` exposure
+- `JobRecord` gains optional `sessionId`, `pid`, `ppid`, `cwd`, `hostname`, `heartbeatAt` fields
+- `JobStore.getJob(jobId, {staleAfterMs})` and `JobStore.listJobs({staleAfterMs, status: 'STALE'})` for read-time staleness detection
+- `Phase.checkpointKey?: string` for skip-on-resume marking
+- `RunPipelineOptions.resume?: { completedKeys }` for executing only the not-yet-completed checkpointed phases
+- `completedCheckpointsFromEvents(events)` helper for deriving `completedKeys` from a prior run's event log
+- `{type: 'phase_complete', phase, checkpointKey}` added to the `PipelineEvent` union — emitted after each checkpointed phase finishes cleanly
+- `superviseChild` exported from `@autonome-research/thread-phase/agents/authoring` — child-process lifecycle helper for subprocess-based adapter authors
+
+If you don't use `JobRunner` (you call `runPipeline` directly or only use the convenience helpers without persistence), these additions don't affect you. Your existing `JobRecord` rows continue to work — the new columns are nullable and the read path treats them as `undefined`.
+
+If you DO use `JobRunner`, opt into durability by:
+
+```typescript
+// Enable automatic heartbeat
+const runner = new JobRunner(store, { heartbeatMs: 15_000 });
+
+// In an operator script, detect dead runs
+const dead = await store.listJobs({ status: 'STALE', staleAfterMs: 60_000 });
+```
+
+The `SqliteJobStore` schema migration runs automatically the first time a v4.1.0+ process opens an existing v4.0.x database. The migration is additive (ALTER TABLE ADD COLUMN) and reversible only by dropping the new columns manually if you need to downgrade.
+
+---
+
 # Migrating from v3.x to v4.0.0
 
 v4.0.0 commits the `/agents` subpath to semver stability and moves the adapter-author helpers to a separate `thread-phase/agents/authoring` subpath. The split codifies the existing prose-comment-based boundary as two physical import paths.

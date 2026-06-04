@@ -44,6 +44,44 @@ export interface RunPipelineOptions {
    * observe the signal themselves and unwind cleanly.
    */
   signal?: AbortSignal;
+  /**
+   * Resume-from-checkpoint option. When provided, phases whose
+   * `checkpointKey` appears in `completedKeys` are SKIPPED — their
+   * `run(ctx)` is not invoked, no `phase_complete` event is re-emitted.
+   * Phases without a `checkpointKey` always run.
+   *
+   * Derive `completedKeys` from a prior run's event log via
+   * `completedCheckpointsFromEvents`.
+   *
+   * Resume restores ORCHESTRATOR POSITION ONLY. It does not restore the
+   * cache, `ctx.stop`, thread state, memory, or any caller-defined ctx
+   * fields. The caller is responsible for rebuilding ctx into a state
+   * the skipped phases would have left it in.
+   */
+  resume?: {
+    completedKeys: ReadonlySet<string>;
+  };
+}
+
+/**
+ * Derive the set of completed `checkpointKey` values from an iterable
+ * of `PipelineEvent`s. Use to translate a prior run's event log into
+ * `RunPipelineOptions.resume.completedKeys`.
+ *
+ *   const events = await store.getEvents(prevJobId);
+ *   const completedKeys = completedCheckpointsFromEvents(events.map(e => e.data));
+ *   await runPipeline(phases, freshCtx, { resume: { completedKeys } });
+ */
+export function completedCheckpointsFromEvents(
+  events: Iterable<PipelineEvent>,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const e of events) {
+    if (e.type === 'phase_complete') {
+      keys.add(e.checkpointKey);
+    }
+  }
+  return keys;
 }
 
 export async function* runPipeline<
@@ -67,6 +105,7 @@ export async function* runPipeline<
   // orchestrator uses for its between-phase abort check.
   const signal = options?.signal ?? ctx.signal;
   ctx.signal = signal;
+  const completedKeys = options?.resume?.completedKeys;
   try {
     for (const phase of phases) {
       if (signal?.aborted) {
@@ -85,7 +124,28 @@ export async function* runPipeline<
         err.name = 'AbortError';
         throw err;
       }
+      // Skip-on-resume: a phase is skipped iff it has a checkpointKey AND
+      // that key already appears in completedKeys (from a prior run's
+      // event log). No phase_complete is re-emitted; the existing event
+      // in the prior log is the durable record.
+      if (
+        phase.checkpointKey !== undefined &&
+        completedKeys?.has(phase.checkpointKey)
+      ) {
+        continue;
+      }
       yield* phase.run(ctx);
+      // Emit phase_complete AFTER the phase's generator has exhausted
+      // cleanly (no throw — yield* would have re-thrown). Only emitted
+      // for phases that opted in via checkpointKey, so the event log
+      // stays compact.
+      if (phase.checkpointKey !== undefined) {
+        yield {
+          type: 'phase_complete',
+          phase: phase.name,
+          checkpointKey: phase.checkpointKey,
+        };
+      }
       if (ctx.stop) {
         yield { type: 'done', reason: ctx.stop.reason };
         return;

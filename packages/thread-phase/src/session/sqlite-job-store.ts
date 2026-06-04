@@ -18,6 +18,8 @@ import { randomUUID } from 'crypto';
 import type { PipelineEvent } from '../phase.js';
 import type {
   EventRecord,
+  GetJobOptions,
+  JobOwnership,
   JobRecord,
   JobStatus,
   JobStore,
@@ -71,6 +73,23 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_event_job_id ON event (job_id, id);
     `,
   },
+  {
+    // v4.1.0 — ownership metadata + heartbeat for read-time staleness.
+    // All columns are optional and additive; older rows have NULL values
+    // and continue to work as before.
+    version: 2,
+    up: `
+      ALTER TABLE job ADD COLUMN session_id   TEXT;
+      ALTER TABLE job ADD COLUMN pid          INTEGER;
+      ALTER TABLE job ADD COLUMN ppid         INTEGER;
+      ALTER TABLE job ADD COLUMN cwd          TEXT;
+      ALTER TABLE job ADD COLUMN hostname     TEXT;
+      ALTER TABLE job ADD COLUMN heartbeat_at TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_job_status_heartbeat
+        ON job (status, heartbeat_at);
+    `,
+  },
 ];
 
 interface JobRow {
@@ -84,6 +103,12 @@ interface JobRow {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  session_id: string | null;
+  pid: number | null;
+  ppid: number | null;
+  cwd: string | null;
+  hostname: string | null;
+  heartbeat_at: string | null;
 }
 
 interface EventRow {
@@ -168,14 +193,40 @@ export class SqliteJobStore implements JobStore {
     return tx(name, input);
   }
 
-  async setRunning(jobId: string): Promise<void> {
+  async setRunning(jobId: string, ownership?: JobOwnership): Promise<void> {
     // COALESCE on started_at: idempotent w.r.t. acquireExclusive, which
     // already sets status='RUNNING' and started_at at claim time.
+    // Ownership fields use COALESCE so a re-call without ownership doesn't
+    // null out previously-recorded values.
     this.db
       .prepare(
-        `UPDATE job SET status = 'RUNNING',
-                        started_at = COALESCE(started_at, datetime('now'))
+        `UPDATE job SET status       = 'RUNNING',
+                        started_at   = COALESCE(started_at, datetime('now')),
+                        session_id   = COALESCE(?, session_id),
+                        pid          = COALESCE(?, pid),
+                        ppid         = COALESCE(?, ppid),
+                        cwd          = COALESCE(?, cwd),
+                        hostname     = COALESCE(?, hostname),
+                        heartbeat_at = COALESCE(heartbeat_at, datetime('now'))
          WHERE id = ?`,
+      )
+      .run(
+        ownership?.sessionId ?? null,
+        ownership?.pid ?? null,
+        ownership?.ppid ?? null,
+        ownership?.cwd ?? null,
+        ownership?.hostname ?? null,
+        jobId,
+      );
+  }
+
+  async heartbeat(jobId: string): Promise<void> {
+    // No-op on non-RUNNING rows; PENDING/COMPLETED/FAILED rows shouldn't
+    // accumulate phantom liveness signals if a caller mistimes a call.
+    this.db
+      .prepare(
+        `UPDATE job SET heartbeat_at = datetime('now')
+         WHERE id = ? AND status = 'RUNNING'`,
       )
       .run(jobId);
   }
@@ -200,45 +251,90 @@ export class SqliteJobStore implements JobStore {
   // Job reads
   // -------------------------------------------------------------------------
 
-  async getJob(jobId: string): Promise<JobRecord | null> {
+  async getJob(jobId: string, options: GetJobOptions = {}): Promise<JobRecord | null> {
     const row = this.db
       .prepare(
         `SELECT j.*, (SELECT COUNT(*) FROM event WHERE job_id = j.id) AS event_count
          FROM job j WHERE j.id = ?`,
       )
       .get(jobId) as JobRow | undefined;
-    return row ? this.toJobRecord(row) : null;
+    return row ? this.toJobRecord(row, options.staleAfterMs) : null;
   }
 
   async listJobs(options: ListJobsOptions = {}): Promise<JobRecord[]> {
     const limit = options.limit ?? 50;
-    // Build one parameterized query — `name IS NULL OR j.name = name` lets a
-    // null parameter act as a no-filter wildcard, removing the duplicated
-    // SELECT/ORDER/LIMIT clauses that were previously copied per branch.
+    // Status filter handling: 'STALE' is read-computed, never persisted,
+    // so we translate a STALE filter into "RUNNING with old heartbeat" at
+    // SQL time. Other statuses match the column directly.
+    const status = options.status ?? null;
+    const staleAfterMs = options.staleAfterMs;
     const sql = `
       SELECT j.*, (SELECT COUNT(*) FROM event WHERE job_id = j.id) AS event_count
       FROM job j
       WHERE (? IS NULL OR j.name = ?)
+        AND (
+          ? IS NULL
+          OR (? = 'STALE'
+              AND j.status = 'RUNNING'
+              AND ? IS NOT NULL
+              AND (j.heartbeat_at IS NULL OR j.heartbeat_at < datetime('now', ? || ' seconds')))
+          OR (? != 'STALE' AND j.status = ?)
+        )
       ORDER BY j.created_at DESC
       LIMIT ?
     `;
     const name = options.name ?? null;
-    const rows = this.db.prepare(sql).all(name, name, limit) as JobRow[];
-    return rows.map((r) => this.toJobRecord(r));
+    const staleSeconds = staleAfterMs !== undefined ? `-${staleAfterMs / 1000}` : null;
+    const staleAfterMsParam = staleAfterMs !== undefined ? staleAfterMs : null;
+    const rows = this.db
+      .prepare(sql)
+      .all(
+        name,
+        name,
+        status,
+        status,
+        staleAfterMsParam,
+        staleSeconds,
+        status,
+        status,
+        limit,
+      ) as JobRow[];
+    return rows.map((r) => this.toJobRecord(r, staleAfterMs));
   }
 
-  private toJobRecord(row: JobRow): JobRecord {
+  /**
+   * Translate a row to a JobRecord, computing the read-time STALE status
+   * when the caller requested staleness detection and this row qualifies.
+   * The persisted `status` column is never modified by reads.
+   */
+  private toJobRecord(row: JobRow, staleAfterMs?: number): JobRecord {
+    const persistedStatus = row.status;
+    const heartbeatAt = parseDate(row.heartbeat_at);
+    let status: JobStatus = persistedStatus;
+    if (
+      staleAfterMs !== undefined &&
+      persistedStatus === 'RUNNING' &&
+      (!heartbeatAt || Date.now() - heartbeatAt.getTime() > staleAfterMs)
+    ) {
+      status = 'STALE';
+    }
     return {
       id: row.id,
       name: row.name,
       input: JSON.parse(row.input),
-      status: row.status,
+      status,
       result: row.result ? JSON.parse(row.result) : null,
       error: row.error,
       eventCount: row.event_count,
       createdAt: parseDate(row.created_at)!,
       startedAt: parseDate(row.started_at),
       completedAt: parseDate(row.completed_at),
+      sessionId: row.session_id ?? undefined,
+      pid: row.pid ?? undefined,
+      ppid: row.ppid ?? undefined,
+      cwd: row.cwd ?? undefined,
+      hostname: row.hostname ?? undefined,
+      heartbeatAt: heartbeatAt ?? undefined,
     };
   }
 

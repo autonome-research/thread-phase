@@ -2,6 +2,22 @@
 
 > Applies to `@autonome-research/thread-phase`, `@autonome-research/thread-phase-agents`, and `@autonome-research/thread-phase-cli` from v4.0.0 onward.
 
+## Two modes
+
+thread-phase ships two modes of use, both supported and stable:
+
+1. **Agent-loop mode** — thread-phase is the inner `runAgentWithTools` + pipeline composition layer inside an outer workflow runtime (Temporal, Inngest, LangGraph). The outer runtime handles durability, heartbeat, supervision, retry, and observability. You consume thread-phase via the library imports; you do NOT use `JobRunner` or `JobStore`.
+2. **Primary-runtime mode** — thread-phase IS the workflow runner. You drive pipelines via `oneShot`, `schedule`, `hook`, or directly via `JobRunner.run`. Durability comes from `SqliteJobStore` + heartbeat + ownership metadata + checkpoint/resume. Single-process by deliberate choice; for distributed workflow shapes, use mode 1 instead.
+
+Primary-runtime mode landed as a coherent feature set in v4.1.0:
+- `JobRunner` heartbeat option (`heartbeatMs`) + `ctx.heartbeat?.()` for manual phase-level liveness
+- `JobRecord` ownership metadata (`sessionId`, `pid`, `ppid`, `cwd`, `hostname`, `heartbeatAt`) auto-populated at `setRunning`
+- `JobStore.getJob` / `listJobs` accept `staleAfterMs` for read-time staleness detection (status: `'STALE'`)
+- `Phase.checkpointKey` + `RunPipelineOptions.resume.completedKeys` for linear skip-on-resume
+- `superviseChild` in `thread-phase/agents/authoring` for subprocess-based adapter lifecycle
+
+The framework deliberately does NOT ship: distributed JobStore (Postgres/Redis), sweeper / reaper processes, multi-process coordination, ctx/Thread/Memory state restoration on resume, DAG-shaped checkpoint resume, or built-in observability beyond the event log.
+
 ## Two tiers in the `/agents` subpath
 
 The AgentAdapter protocol surface is split across two subpaths with different stability guarantees:

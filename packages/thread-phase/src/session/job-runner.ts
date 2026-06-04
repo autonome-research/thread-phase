@@ -20,9 +20,10 @@
  */
 
 import { EventEmitter } from 'events';
+import * as os from 'node:os';
 import type { BasePipelineContext, Phase, PipelineEvent } from '../phase.js';
 import { runPipeline, type PipelineSummary } from '../orchestrator.js';
-import type { JobStore } from './job-store.js';
+import type { JobOwnership, JobStore } from './job-store.js';
 import { signalReasonToString } from '../internal/error-message.js';
 
 export interface LiveEvent {
@@ -33,12 +34,59 @@ export interface LiveEvent {
   createdAt: string;
 }
 
+/**
+ * Constructor options for {@link JobRunner}.
+ */
+export interface JobRunnerOptions {
+  /**
+   * When set, JobRunner calls `store.heartbeat(jobId)` on a `setInterval`
+   * for the duration of each `run()`. Combined with `staleAfterMs` on
+   * `JobStore.getJob` / `listJobs`, this lets operators detect runs whose
+   * owning process disappeared mid-execution.
+   *
+   * The timer is cleared on every exit path (success, error, abort) so it
+   * cannot outlive its run. A phase that holds the event loop for longer
+   * than `heartbeatMs` (e.g. a synchronous CPU spike) will miss its tick
+   * window — phases with long inner loops should call `ctx.heartbeat?.()`
+   * manually between iterations as well.
+   *
+   * Recommended range: 5_000 – 30_000. Below 1 second the timer overhead
+   * dominates; above a minute the staleness signal lags.
+   */
+  heartbeatMs?: number;
+}
+
+/**
+ * Per-run options passed to {@link JobRunner.run}.
+ */
+export interface JobRunOptions {
+  /** Caller-supplied logical session id recorded on the JobRecord. */
+  sessionId?: string;
+  /**
+   * Additional ownership metadata. Defaults are populated automatically
+   * from the Node runtime (`process.pid`, `process.ppid`, `process.cwd()`,
+   * `os.hostname()`); pass overrides here to suppress or customize.
+   */
+  ownership?: JobOwnership;
+}
+
 export class JobRunner extends EventEmitter {
   private inflight = new Map<string, AbortController>();
+  private readonly heartbeatMs?: number;
 
-  constructor(private readonly store: JobStore) {
+  constructor(private readonly store: JobStore, options: JobRunnerOptions = {}) {
     super();
     this.setMaxListeners(100);
+    this.heartbeatMs = options.heartbeatMs;
+  }
+
+  /**
+   * Update `heartbeatAt` for an in-flight job. Called automatically by the
+   * background timer when `heartbeatMs` is configured; also exposed on
+   * `ctx.heartbeat?.()` for phases with long inner loops to call manually.
+   */
+  heartbeat(jobId: string): Promise<void> {
+    return this.store.heartbeat(jobId);
   }
 
   /**
@@ -89,11 +137,42 @@ export class JobRunner extends EventEmitter {
     phases: ReadonlyArray<Phase<TCtx, TEvent>>,
     ctx: TCtx,
     finalResult?: () => unknown,
+    options: JobRunOptions = {},
   ): Promise<PipelineSummary> {
     const controller = new AbortController();
     this.inflight.set(jobId, controller);
 
-    await this.store.setRunning(jobId);
+    // Auto-populate ownership from the Node runtime, allowing per-call
+    // overrides. Falls back to undefined fields on platforms that don't
+    // expose process.* (the store layer accepts optional fields).
+    const ownership: JobOwnership = {
+      sessionId: options.sessionId ?? options.ownership?.sessionId,
+      pid: options.ownership?.pid ?? safeReadPid(),
+      ppid: options.ownership?.ppid ?? safeReadPpid(),
+      cwd: options.ownership?.cwd ?? safeReadCwd(),
+      hostname: options.ownership?.hostname ?? safeReadHostname(),
+    };
+    await this.store.setRunning(jobId, ownership);
+
+    // Expose ctx.heartbeat so phase bodies with long inner loops can
+    // refresh liveness between iterations. Same effect as the background
+    // timer below but driven by the phase itself.
+    (ctx as BasePipelineContext).heartbeat = () => this.store.heartbeat(jobId);
+
+    // Background heartbeat timer — runs only when configured AND the
+    // store accepts heartbeat calls (no-op stubs in tests fall through).
+    // unref() prevents the timer from keeping the event loop alive past
+    // the run; the finally clause clears it on every exit path.
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+    if (this.heartbeatMs !== undefined && this.heartbeatMs > 0) {
+      heartbeatTimer = setInterval(() => {
+        // Swallow heartbeat errors — they should never fail the run.
+        void this.store.heartbeat(jobId).catch(() => {
+          /* heartbeat is best-effort */
+        });
+      }, this.heartbeatMs);
+      if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
+    }
 
     let eventCount = 0;
     let stopReason: string | undefined;
@@ -148,6 +227,45 @@ export class JobRunner extends EventEmitter {
       throw err;
     } finally {
       this.inflight.delete(jobId);
+      if (heartbeatTimer !== null) clearInterval(heartbeatTimer);
     }
+  }
+}
+
+// Safe-read helpers — return undefined on platforms or sandboxes that
+// don't expose process.* or os.hostname() rather than throwing during
+// JobRunner.run() setup.
+
+function safeReadPid(): number | undefined {
+  try {
+    return typeof process !== 'undefined' ? process.pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeReadPpid(): number | undefined {
+  try {
+    return typeof process !== 'undefined' ? process.ppid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeReadCwd(): string | undefined {
+  try {
+    return typeof process !== 'undefined' && typeof process.cwd === 'function'
+      ? process.cwd()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeReadHostname(): string | undefined {
+  try {
+    return os.hostname();
+  } catch {
+    return undefined;
   }
 }

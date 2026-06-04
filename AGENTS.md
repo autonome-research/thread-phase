@@ -130,7 +130,8 @@ The substrate ships across three packages + a few subpaths. This table is the **
 | **Adapter-consumer types**: `AgentEvent`, `AgentRun`, `AgentRunResult`, `AgentEventBus`, `Thread`, `AgentAdapterMeta`, `AgentCapabilities` | `@autonome-research/thread-phase-agents` (re-exported from core) |
 | **Cross-adapter rendering** (when chaining different adapters): `threadToTranscript`, `threadToMessages`, `threadToAcpPrompt`, `threadToClaudeCodePrompt`, `threadToCodexInput`, `threadToAnthropicMessages` | `@autonome-research/thread-phase-agents` |
 | **Authoring a custom AgentAdapter** — consumer-stable bits (`defineAgentAdapter`, protocol types) | `@autonome-research/thread-phase/agents` |
-| **Authoring a custom AgentAdapter** — author-unstable helpers (`TurnAccumulator`, `composeAbort`, `createEventQueue`, `lazyEvents`, `applyStructuredOutputPrompt`, `parseStructuredFromText`, `requireCapability`, `serializeError`) | `@autonome-research/thread-phase/agents/authoring` |
+| **Authoring a custom AgentAdapter** — author-unstable helpers (`TurnAccumulator`, `composeAbort`, `createEventQueue`, `lazyEvents`, `applyStructuredOutputPrompt`, `parseStructuredFromText`, `requireCapability`, `serializeError`, `superviseChild`) | `@autonome-research/thread-phase/agents/authoring` |
+| **Checkpoint / resume** (v4.1.0+): `completedCheckpointsFromEvents`, `Phase.checkpointKey`, `RunPipelineOptions.resume` | `@autonome-research/thread-phase` |
 | **Pi extensions / CLI extension authoring**: `ThreadPhaseAPI`, `PipelineSpec`, `ExtensionRegisterFn` | `@autonome-research/thread-phase` (re-exported from helpers) |
 
 **Two rules of thumb that cover 95% of cases:**
@@ -661,6 +662,72 @@ const decision = parseJSON<{ keep: boolean }>(text, { keep: false });
 ```
 
 `parseJSON` strips markdown code fences, falls back to extracting the first `{...}` from prose, and returns the fallback on failure. `JSON.parse(r.text)` will throw on the first ` ```json` fence the model emits, which is almost every model.
+
+---
+
+## Checkpoint / resume (v4.1.0+)
+
+Linear pipelines can be resumed: phases marked with a `checkpointKey` are skipped on rerun if the prior run already completed them. The framework records `phase_complete` events; the caller derives `completedKeys` from those events and passes them to `runPipeline`.
+
+**The agent-author rule of thumb:** add `checkpointKey` to phases that are slow OR have observable side effects you don't want to repeat. Leave it off cheap, idempotent phases — re-running them on resume is harmless and not adding the key is one fewer thing to think about.
+
+```ts
+import {
+  runPipeline,
+  completedCheckpointsFromEvents,
+  SqliteJobStore,
+  JobRunner,
+} from '@autonome-research/thread-phase';
+
+// Each slow/side-effecting phase gets a stable, unique checkpoint key.
+const phases = [
+  { name: 'fetch',  checkpointKey: 'fetched-v1',  async *run(ctx) { /* slow network */ } },
+  { name: 'process', checkpointKey: 'processed-v1', async *run(ctx) { /* expensive compute */ } },
+  { name: 'publish', async *run(ctx) { /* cheap; re-run safely */ } },
+];
+
+// Original run via JobRunner — completed phases are recorded in the event log.
+const store = new SqliteJobStore();
+const runner = new JobRunner(store);
+const jobId = await runner.create('digest', null);
+await runner.run(jobId, phases, makeCtx());
+
+// On resume: derive completedKeys from the prior run's events.
+const events = await store.getEvents(jobId);
+const completedKeys = completedCheckpointsFromEvents(events.map(e => e.data));
+await runPipeline(phases, makeCtx(), { resume: { completedKeys } });
+// → publish runs again; fetch + process are skipped.
+```
+
+Resume restores **orchestrator position only** — not the cache, not `ctx.stop`, not Thread state, not memory. The caller is responsible for rebuilding ctx into a state the skipped phases would have left it in (typically by hydrating from your own persisted state alongside the JobStore event log).
+
+If you change a `checkpointKey` value, the corresponding phase will re-run on resume (because the new key isn't in the existing log). Use this to force-rerun a phase after fixing a bug in it — bump the version suffix on the key.
+
+---
+
+## Durability — heartbeat + ownership + read-time staleness (v4.1.0+)
+
+When using `JobRunner` as the primary runtime (cron pipelines, webhook handlers, long-running runs), opt into durability:
+
+```ts
+const runner = new JobRunner(store, { heartbeatMs: 15_000 });
+
+// Phases with long inner loops should also manually refresh
+async *run(ctx) {
+  for (const item of items) {
+    await processItem(item);
+    await ctx.heartbeat?.();   // refresh between iterations
+  }
+}
+
+// Operator script: detect dead runs
+const dead = await store.listJobs({ status: 'STALE', staleAfterMs: 60_000 });
+for (const job of dead) {
+  await store.setFailed(job.id, `process ${job.pid} disappeared at ${job.heartbeatAt}`);
+}
+```
+
+Ownership metadata (`pid`, `ppid`, `cwd`, `hostname`, `sessionId`) is auto-populated by `JobRunner.run` at `setRunning` time. `STALE` is a read-time computed status — passing `staleAfterMs` to `getJob` / `listJobs` does NOT modify the persisted row.
 
 ---
 

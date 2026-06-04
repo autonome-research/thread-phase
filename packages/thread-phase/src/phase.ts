@@ -41,6 +41,20 @@ export interface BasePipelineContext {
    * this into `runAgentWithTools({ signal })` or observe it directly.
    */
   signal?: AbortSignal;
+  /**
+   * Optional liveness signal. Populated by `JobRunner.run` so phases with
+   * long inner loops can refresh `heartbeatAt` between iterations:
+   *
+   *   for (const item of items) {
+   *     await processItem(item);
+   *     await ctx.heartbeat?.();
+   *   }
+   *
+   * The JobRunner's `heartbeatMs` background timer covers the common case
+   * automatically; this is the manual escape hatch for tight loops that
+   * might starve the event loop between ticks. Absent outside JobRunner.
+   */
+  heartbeat?: () => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -59,6 +73,12 @@ export type PipelineEvent =
   | { type: 'tool_call'; toolName: string; toolUseId: string; args: Record<string, unknown> }
   | { type: 'tool_result'; toolUseId: string; content: string }
   | { type: 'data'; key: string; value: unknown }
+  // Emitted by the orchestrator AFTER a phase with a `checkpointKey`
+  // finishes cleanly (no throw). The presence of this event in a job's
+  // event log is the signal that the corresponding work can be skipped
+  // on a resume. Use `completedCheckpointsFromEvents` (orchestrator.ts)
+  // to derive a `Set<string>` for `RunPipelineOptions.resume`.
+  | { type: 'phase_complete'; phase: string; checkpointKey: string }
   | { type: 'done'; reason?: string }
   // Terminal frame emitted by the orchestrator IMMEDIATELY before throwing
   // AbortError when ctx.signal aborts. Consumers iterating the event stream
@@ -84,6 +104,26 @@ export interface Phase<
   TEvent = PipelineEvent,
 > {
   readonly name: string;
+  /**
+   * Optional checkpoint marker. When set:
+   *
+   *   1. The orchestrator emits `{type:'phase_complete', phase, checkpointKey}`
+   *      after this phase's generator exhausts cleanly.
+   *   2. If `runPipeline` is invoked with `options.resume.completedKeys`
+   *      containing this key, the phase is SKIPPED entirely — `run(ctx)`
+   *      is not called.
+   *
+   * Use this for phases whose work is slow or has observable side effects
+   * you don't want to repeat on a resumed run (network fetches, payments,
+   * file writes). Leave it off for cheap idempotent phases — re-running
+   * them on resume is harmless.
+   *
+   * Skips are all-or-nothing per phase. There is no partial-phase resume,
+   * no rollback, no ctx restoration. The caller is responsible for
+   * rehydrating ctx (cache, custom fields) from their own persisted state
+   * before passing it back to runPipeline.
+   */
+  readonly checkpointKey?: string;
   run(ctx: TCtx): AsyncGenerator<TEvent, void>;
 }
 

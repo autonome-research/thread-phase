@@ -20,7 +20,9 @@ export { PipelineCache } from './cache.js';
 export {
   runPipeline,
   runPipelineToSummary,
+  completedCheckpointsFromEvents,
   type PipelineSummary,
+  type RunPipelineOptions,
 } from './orchestrator.js';
 export {
   requireCtx,
@@ -76,7 +78,11 @@ export {
   type JobRecord,
   type EventRecord,
   type JobStatus,
+  type JobOwnership,
   type ListJobsOptions,
+  type GetJobOptions,
+  type JobRunnerOptions,
+  type JobRunOptions,
   type LiveEvent,
 } from './session/index.js';
 
