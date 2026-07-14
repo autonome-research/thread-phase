@@ -19,6 +19,7 @@ import type { PipelineEvent } from '../phase.js';
 import type {
   EventRecord,
   GetJobOptions,
+  JobFinalization,
   JobOwnership,
   JobRecord,
   JobStatus,
@@ -90,6 +91,24 @@ const MIGRATIONS: Migration[] = [
         ON job (status, heartbeat_at);
     `,
   },
+  {
+    // Reliable ownership claims. owner_id distinguishes a live owner from a
+    // recycled PID; launch_source lets hosts apply consistent visibility and
+    // authorization policy without encoding it in event payloads.
+    version: 3,
+    up: `
+      ALTER TABLE job ADD COLUMN owner_id     TEXT;
+      ALTER TABLE job ADD COLUMN launch_source TEXT;
+    `,
+  },
+  {
+    // Stale reconciliation is opt-in. Runs without automatic heartbeat must
+    // never be classified abandoned merely because their initial timestamp ages.
+    version: 4,
+    up: `
+      ALTER TABLE job ADD COLUMN heartbeat_enabled INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 interface JobRow {
@@ -108,6 +127,9 @@ interface JobRow {
   ppid: number | null;
   cwd: string | null;
   hostname: string | null;
+  owner_id: string | null;
+  launch_source: string | null;
+  heartbeat_enabled: number;
   heartbeat_at: string | null;
 }
 
@@ -193,12 +215,12 @@ export class SqliteJobStore implements JobStore {
     return tx(name, input);
   }
 
-  async setRunning(jobId: string, ownership?: JobOwnership): Promise<void> {
+  async setRunning(jobId: string, ownership?: JobOwnership): Promise<boolean> {
     // COALESCE on started_at: idempotent w.r.t. acquireExclusive, which
     // already sets status='RUNNING' and started_at at claim time.
     // Ownership fields use COALESCE so a re-call without ownership doesn't
     // null out previously-recorded values.
-    this.db
+    const result = this.db
       .prepare(
         `UPDATE job SET status       = 'RUNNING',
                         started_at   = COALESCE(started_at, datetime('now')),
@@ -207,8 +229,14 @@ export class SqliteJobStore implements JobStore {
                         ppid         = COALESCE(?, ppid),
                         cwd          = COALESCE(?, cwd),
                         hostname     = COALESCE(?, hostname),
+                        owner_id     = COALESCE(?, owner_id),
+                        launch_source = COALESCE(?, launch_source),
+                        heartbeat_enabled = COALESCE(?, heartbeat_enabled),
                         heartbeat_at = COALESCE(heartbeat_at, datetime('now'))
-         WHERE id = ?`,
+         WHERE id = ?
+           AND (status = 'PENDING'
+                OR (status = 'RUNNING' AND owner_id IS NULL)
+                OR (status = 'RUNNING' AND owner_id = ?))`,
       )
       .run(
         ownership?.sessionId ?? null,
@@ -216,35 +244,160 @@ export class SqliteJobStore implements JobStore {
         ownership?.ppid ?? null,
         ownership?.cwd ?? null,
         ownership?.hostname ?? null,
+        ownership?.ownerId ?? null,
+        ownership?.launchSource ?? null,
+        ownership?.heartbeatEnabled === undefined ? null : Number(ownership.heartbeatEnabled),
         jobId,
+        ownership?.ownerId ?? null,
       );
+    return result.changes === 1;
   }
 
-  async heartbeat(jobId: string): Promise<void> {
-    // No-op on non-RUNNING rows; PENDING/COMPLETED/FAILED rows shouldn't
-    // accumulate phantom liveness signals if a caller mistimes a call.
+  async heartbeat(jobId: string, ownerId?: string): Promise<void> {
+    // Owner-aware when called by JobRunner; unguarded calls remain available
+    // for operators and backwards-compatible direct store integrations.
     this.db
       .prepare(
         `UPDATE job SET heartbeat_at = datetime('now')
+         WHERE id = ? AND status = 'RUNNING'
+           AND (? IS NULL OR owner_id = ?)`,
+      )
+      .run(jobId, ownerId ?? null, ownerId ?? null);
+  }
+
+  async enableHeartbeat(jobId: string, ownerId: string): Promise<boolean> {
+    const result = this.db
+      .prepare(
+        `UPDATE job SET heartbeat_enabled = 1, heartbeat_at = datetime('now')
+         WHERE id = ? AND status = 'RUNNING' AND owner_id = ?`,
+      )
+      .run(jobId, ownerId);
+    return result.changes === 1;
+  }
+
+  async setCompleted(jobId: string, result: unknown, ownerId?: string): Promise<boolean> {
+    const resultRow = this.db
+      .prepare(
+        `UPDATE job SET status = 'COMPLETED', result = ?, error = NULL,
+                        completed_at = datetime('now')
+         WHERE id = ? AND status IN ('PENDING', 'RUNNING')
+           AND (? IS NULL OR owner_id = ?)`,
+      )
+      .run(JSON.stringify(result ?? null), jobId, ownerId ?? null, ownerId ?? null);
+    return resultRow.changes === 1;
+  }
+
+  async setFailed(jobId: string, error: string, ownerId?: string): Promise<boolean> {
+    const resultRow = this.db
+      .prepare(
+        `UPDATE job SET status = 'FAILED', error = ?, completed_at = datetime('now')
+         WHERE id = ? AND status IN ('PENDING', 'RUNNING')
+           AND (? IS NULL OR owner_id = ?)`,
+      )
+      .run(error, jobId, ownerId ?? null, ownerId ?? null);
+    return resultRow.changes === 1;
+  }
+
+  async setCancelled(jobId: string, reason: string, ownerId?: string): Promise<boolean> {
+    const resultRow = this.db
+      .prepare(
+        `UPDATE job SET status = 'CANCELLED', error = ?, completed_at = datetime('now')
+         WHERE id = ? AND status IN ('PENDING', 'RUNNING')
+           AND (? IS NULL OR owner_id = ?)`,
+      )
+      .run(reason, jobId, ownerId ?? null, ownerId ?? null);
+    return resultRow.changes === 1;
+  }
+
+  async setAbandoned(jobId: string, reason: string): Promise<boolean> {
+    const resultRow = this.db
+      .prepare(
+        `UPDATE job SET status = 'ABANDONED', error = ?, completed_at = datetime('now')
          WHERE id = ? AND status = 'RUNNING'`,
       )
-      .run(jobId);
+      .run(reason, jobId);
+    return resultRow.changes === 1;
   }
 
-  async setCompleted(jobId: string, result: unknown): Promise<void> {
-    this.db
+  async setAbandonedIfStale(
+    jobId: string,
+    staleBefore: Date,
+    reason: string,
+    expectedOwnerId?: string,
+  ): Promise<boolean> {
+    const resultRow = this.db
       .prepare(
-        `UPDATE job SET status = 'COMPLETED', result = ?, completed_at = datetime('now') WHERE id = ?`,
+        `UPDATE job SET status = 'ABANDONED', error = ?, completed_at = datetime('now')
+         WHERE id = ?
+           AND status = 'RUNNING'
+           AND heartbeat_enabled = 1
+           AND (heartbeat_at IS NULL OR heartbeat_at < datetime(?))
+           AND (? IS NULL OR owner_id = ?)`,
       )
-      .run(JSON.stringify(result ?? null), jobId);
+      .run(
+        reason,
+        jobId,
+        staleBefore.toISOString(),
+        expectedOwnerId ?? null,
+        expectedOwnerId ?? null,
+      );
+    return resultRow.changes === 1;
   }
 
-  async setFailed(jobId: string, error: string): Promise<void> {
-    this.db
-      .prepare(
-        `UPDATE job SET status = 'FAILED', error = ?, completed_at = datetime('now') WHERE id = ?`,
-      )
-      .run(error, jobId);
+  async finalizeJob(jobId: string, finalization: JobFinalization): Promise<EventRecord | null> {
+    const transaction = this.db.transaction((): EventRow | null => {
+      const update = this.db
+        .prepare(
+          `UPDATE job SET status = ?, result = ?, error = ?, completed_at = datetime('now')
+           WHERE id = ? AND status IN ('PENDING', 'RUNNING')
+             AND (? IS NULL OR owner_id = ?)`,
+        )
+        .run(
+          finalization.status,
+          finalization.result === undefined ? null : JSON.stringify(finalization.result),
+          finalization.error ?? null,
+          jobId,
+          finalization.ownerId ?? null,
+          finalization.ownerId ?? null,
+        );
+      if (update.changes !== 1) return null;
+      const inserted = this.db
+        .prepare(`INSERT INTO event (job_id, event_type, data) VALUES (?, ?, ?)`)
+        .run(jobId, finalization.event.type, JSON.stringify(finalization.event));
+      return this.db
+        .prepare(`SELECT id, job_id, event_type, data, created_at FROM event WHERE id = ?`)
+        .get(Number(inserted.lastInsertRowid)) as EventRow;
+    });
+    const row = transaction();
+    return row ? this.toEventRecord(row) : null;
+  }
+
+  async finalizeAbandonedIfStale(
+    jobId: string,
+    staleBefore: Date,
+    reason: string,
+    expectedOwnerId?: string,
+  ): Promise<EventRecord | null> {
+    const event: PipelineEvent = { type: 'abandoned', reason };
+    const transaction = this.db.transaction((): EventRow | null => {
+      const update = this.db
+        .prepare(
+          `UPDATE job SET status = 'ABANDONED', error = ?, completed_at = datetime('now')
+           WHERE id = ? AND status = 'RUNNING' AND heartbeat_enabled = 1
+             AND (heartbeat_at IS NULL OR heartbeat_at < datetime(?))
+             AND (? IS NULL OR owner_id = ?)`,
+        )
+        .run(reason, jobId, staleBefore.toISOString(), expectedOwnerId ?? null, expectedOwnerId ?? null);
+      if (update.changes !== 1) return null;
+      const inserted = this.db
+        .prepare(`INSERT INTO event (job_id, event_type, data) VALUES (?, ?, ?)`)
+        .run(jobId, event.type, JSON.stringify(event));
+      return this.db
+        .prepare(`SELECT id, job_id, event_type, data, created_at FROM event WHERE id = ?`)
+        .get(Number(inserted.lastInsertRowid)) as EventRow;
+    });
+    const row = transaction();
+    return row ? this.toEventRecord(row) : null;
   }
 
   // -------------------------------------------------------------------------
@@ -277,6 +430,7 @@ export class SqliteJobStore implements JobStore {
           OR (? = 'STALE'
               AND j.status = 'RUNNING'
               AND ? IS NOT NULL
+              AND j.heartbeat_enabled = 1
               AND (j.heartbeat_at IS NULL OR j.heartbeat_at < datetime('now', ? || ' seconds')))
           OR (? != 'STALE' AND j.status = ?)
         )
@@ -314,6 +468,7 @@ export class SqliteJobStore implements JobStore {
     if (
       staleAfterMs !== undefined &&
       persistedStatus === 'RUNNING' &&
+      row.heartbeat_enabled === 1 &&
       (!heartbeatAt || Date.now() - heartbeatAt.getTime() > staleAfterMs)
     ) {
       status = 'STALE';
@@ -334,6 +489,9 @@ export class SqliteJobStore implements JobStore {
       ppid: row.ppid ?? undefined,
       cwd: row.cwd ?? undefined,
       hostname: row.hostname ?? undefined,
+      ownerId: row.owner_id ?? undefined,
+      launchSource: row.launch_source ?? undefined,
+      heartbeatEnabled: row.heartbeat_enabled === 1,
       heartbeatAt: heartbeatAt ?? undefined,
     };
   }
@@ -356,13 +514,17 @@ export class SqliteJobStore implements JobStore {
          FROM event WHERE job_id = ? AND id > ? ORDER BY id ASC`,
       )
       .all(jobId, afterId) as EventRow[];
-    return rows.map((r) => ({
-      id: r.id,
-      jobId: r.job_id,
-      eventType: r.event_type,
-      data: JSON.parse(r.data) as PipelineEvent,
-      createdAt: parseDate(r.created_at)!,
-    }));
+    return rows.map((row) => this.toEventRecord(row));
+  }
+
+  private toEventRecord(row: EventRow): EventRecord {
+    return {
+      id: row.id,
+      jobId: row.job_id,
+      eventType: row.event_type,
+      data: JSON.parse(row.data) as PipelineEvent,
+      createdAt: parseDate(row.created_at)!,
+    };
   }
 
   close(): void {

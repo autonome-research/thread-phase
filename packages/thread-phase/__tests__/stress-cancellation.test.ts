@@ -440,10 +440,10 @@ describe('cancellation: TimerTrigger.stop() races an in-flight payload', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 8. Race: ctx.stop set + AbortSignal fires same tick — stop wins
+// 8. Race: ctx.stop set + AbortSignal fires same tick — cancellation wins
 // ---------------------------------------------------------------------------
 describe('cancellation: ctx.stop precedence vs AbortSignal (race nondeterminism)', () => {
-  it('phase that sets ctx.stop AND a same-tick abort: summary reports stopped, not cancelled', async () => {
+  it('phase that sets ctx.stop AND a same-tick abort reports cancellation', async () => {
     const controller = new AbortController();
     const ctx: Ctx = { cache: new PipelineCache() };
 
@@ -458,19 +458,8 @@ describe('cancellation: ctx.stop precedence vs AbortSignal (race nondeterminism)
       },
     };
 
-    const summary = await runPipelineToSummary([phase], ctx, {
-      signal: controller.signal,
-    });
-
-    // Observation per orchestrator.ts:67-69: ctx.stop wins because it's
-    // checked AFTER the phase returns, BEFORE the next iteration's abort
-    // check. So the summary reports 'stopped' with 'natural-stop' even
-    // though the user requested cancellation.
-    expect(summary.status).toBe('stopped');
-    expect(summary.reason).toBe('natural-stop');
-    // UX surprise: a caller doing `if (summary.reason === 'cancelled')` to
-    // detect cancels will misclassify this as a clean stop. There is no
-    // 'cancelled' discriminant on PipelineSummary either.
-    expect((summary as { reason?: string }).reason).not.toBe('cancelled');
+    await expect(
+      runPipelineToSummary([phase], ctx, { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError', message: expect.stringContaining('user-cancel') });
   });
 });

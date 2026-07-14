@@ -135,6 +135,16 @@ export async function* runPipeline<
         continue;
       }
       yield* phase.run(ctx);
+      // A cooperative phase may observe the signal and return cleanly. Check
+      // again before recording its checkpoint or emitting done so callers can
+      // never mistake a cancelled run for successful completion.
+      if (signal?.aborted) {
+        const reason = signalReasonToString(signal);
+        yield { type: 'cancelled', reason } as TEvent;
+        const err = new Error(`runPipeline aborted: ${reason}`);
+        err.name = 'AbortError';
+        throw err;
+      }
       // Emit phase_complete AFTER the phase's generator has exhausted
       // cleanly (no throw — yield* would have re-thrown). Only emitted
       // for phases that opted in via checkpointKey, so the event log

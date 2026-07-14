@@ -5,7 +5,7 @@
  * SSE frames without binding to a real HTTP server.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -33,6 +33,12 @@ class FakeRes implements SSEResponse {
   }
   on(_evt: 'close', listener: () => void): void {
     this.closeListeners.push(listener);
+  }
+  off(_evt: 'close' | 'drain', listener: () => void): void {
+    this.closeListeners = this.closeListeners.filter((candidate) => candidate !== listener);
+  }
+  once(_evt: 'drain', _listener: () => void): void {
+    // Writes never backpressure in the default fake.
   }
   output(): string {
     return this.chunks.join('');
@@ -84,6 +90,40 @@ describe('streamToSSE — wire format', () => {
     expect(out).toMatch(/id: \d+\nevent: \w+\ndata: \{[^\n]*\}\n\n/);
   });
 
+  it('does not miss a close emitted synchronously by a backpressured write', async () => {
+    const jobId = await runner.create('sync-close', null);
+    await store.appendEvent(jobId, { type: 'content', content: 'close-now' });
+    class SynchronousCloseRes extends FakeRes {
+      override write(chunk: string): boolean {
+        this.chunks.push(chunk);
+        this.end();
+        return false;
+      }
+    }
+    const res = new SynchronousCloseRes();
+    await expect(streamToSSE({ runner, store, jobId, res, heartbeatMs: 0 })).resolves.toBeUndefined();
+  });
+
+  it('resolves backpressure waits when the client closes without drain', async () => {
+    const jobId = await runner.create('backpressure-close', null);
+    await store.appendEvent(jobId, { type: 'content', content: 'blocked' });
+    class BackpressureRes extends FakeRes {
+      override write(chunk: string): boolean {
+        this.chunks.push(chunk);
+        return false;
+      }
+      disconnect(): void {
+        this.closed = true;
+        for (const listener of this.closeListeners) listener();
+      }
+    }
+    const res = new BackpressureRes();
+    const stream = streamToSSE({ runner, store, jobId, res, heartbeatMs: 0 });
+    await new Promise((resolve) => setImmediate(resolve));
+    res.disconnect();
+    await expect(stream).resolves.toBeUndefined();
+  });
+
   it('replays past events when client supplies afterId=0 after job completed', async () => {
     const phase: Phase<Ctx> = {
       name: 'p',
@@ -101,6 +141,46 @@ describe('streamToSSE — wire format', () => {
     expect(out).toMatch(/event: phase\n/);
     expect(out).toMatch(/event: content\n/);
     expect(out).toMatch(/event: done\n/);
+  });
+
+  it('polls durable events finalized by another JobRunner instance', async () => {
+    const jobId = await runner.create('cross-runner', null);
+    const res = new FakeRes();
+    const stream = streamToSSE({ runner, store, jobId, res, heartbeatMs: 0, pollMs: 10 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const otherRunner = new JobRunner(store);
+    await otherRunner.run(jobId, [{ name: 'remote', async *run() { yield { type: 'phase', phase: 'remote' }; } }], { cache: new PipelineCache() });
+    await stream;
+    expect(res.output()).toContain('event: done');
+    expect(res.closed).toBe(true);
+  });
+
+  it('does not lose a terminal event emitted during replay-to-live handoff', async () => {
+    const jobId = await runner.create('handoff-race', null);
+    await store.setRunning(jobId);
+    const originalGetJob = store.getJob.bind(store);
+    let injected = false;
+    vi.spyOn(store, 'getJob').mockImplementation(async (...args) => {
+      if (!injected) {
+        injected = true;
+        const data = { type: 'done' as const };
+        const id = await store.appendEvent(jobId, data);
+        await store.setCompleted(jobId, null);
+        runner.emit(`job:${jobId}`, {
+          id,
+          jobId,
+          eventType: 'done',
+          data,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      return originalGetJob(...args);
+    });
+
+    const res = new FakeRes();
+    await streamToSSE({ runner, store, jobId, res, heartbeatMs: 0 });
+    expect(res.output().match(/event: done/g)).toHaveLength(1);
+    expect(res.closed).toBe(true);
   });
 
   it('replays only events after Last-Event-ID', async () => {

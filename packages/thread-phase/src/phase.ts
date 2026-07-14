@@ -80,11 +80,15 @@ export type PipelineEvent =
   // to derive a `Set<string>` for `RunPipelineOptions.resume`.
   | { type: 'phase_complete'; phase: string; checkpointKey: string }
   | { type: 'done'; reason?: string }
+  // Persisted by JobRunner when cancellation is requested. This is an
+  // acknowledgement of the request, not the terminal cancellation frame.
+  | { type: 'cancellation_requested'; reason: string }
   // Terminal frame emitted by the orchestrator IMMEDIATELY before throwing
   // AbortError when ctx.signal aborts. Consumers iterating the event stream
   // (SSE bridges, audit logs) see this last; consumers awaiting the
   // generator promise still observe the AbortError rejection as before.
   | { type: 'cancelled'; reason: string }
+  | { type: 'abandoned'; reason: string }
   | { type: 'error'; message: string };
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 /**
  * JobRunner cancellation: a long-running phase that observes the runner's
  * abort signal must unwind cleanly when cancel() is called, marking the job
- * FAILED with the cancel reason.
+ * CANCELLED with request and terminal events.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -46,6 +46,22 @@ describe('JobRunner.run summary', () => {
     const jobId = await runner.create('test', null);
     const summary = await runner.run(jobId, [phase], { cache: new PipelineCache() });
     expect(summary).toEqual({ status: 'completed', eventCount: 2 });
+  });
+
+  it('finalResult failure persists only error, never a premature done event', async () => {
+    const phase: Phase<Ctx> = {
+      name: 'work',
+      async *run() { yield { type: 'phase', phase: 'work' }; },
+    };
+    const jobId = await runner.create('final-result-failure', null);
+    await expect(
+      runner.run(jobId, [phase], { cache: new PipelineCache() }, () => {
+        throw new Error('result serialization failed');
+      }),
+    ).rejects.toThrow('result serialization failed');
+    const events = await store.getEvents(jobId);
+    expect(events.filter((event) => ['done', 'error', 'cancelled'].includes(event.eventType)).map((event) => event.eventType)).toEqual(['error']);
+    expect((await store.getJob(jobId))?.status).toBe('FAILED');
   });
 
   it('rejects with the phase error, marks job FAILED, writes a synthesized error event', async () => {
@@ -93,7 +109,7 @@ describe('JobRunner.cancel', () => {
     expect(runner.signalFor(jobId)).toBeUndefined();
   });
 
-  it('cancel() aborts the in-flight pipeline and marks job FAILED', async () => {
+  it('cancel() aborts the in-flight pipeline and marks job CANCELLED', async () => {
     const phase: Phase<Ctx> = {
       name: 'long',
       async *run() {
@@ -114,8 +130,61 @@ describe('JobRunner.cancel', () => {
       message: /cancelled.*user-stop/,
     });
     const job = (await store.getJob(jobId))!;
-    expect(job.status).toBe('FAILED');
-    expect(job.error).toMatch(/cancelled.*user-stop/);
+    expect(job.status).toBe('CANCELLED');
+    expect(job.error).toBe('user-stop');
+    const events = await store.getEvents(jobId);
+    expect(events.map((event) => event.eventType)).toContain('cancellation_requested');
+    expect(events.map((event) => event.eventType)).toContain('cancelled');
+    expect(events.map((event) => event.eventType)).not.toContain('error');
+  });
+
+  it('orders pre-aborted caller cancellation as request then atomic terminal cancellation', async () => {
+    const upstream = new AbortController();
+    upstream.abort('already stopped');
+    const jobId = await runner.create('pre-aborted', null);
+    await expect(
+      runner.run(jobId, [{ name: 'never', async *run() { yield { type: 'phase', phase: 'never' }; } }], {
+        cache: new PipelineCache(),
+        signal: upstream.signal,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    const events = await store.getEvents(jobId);
+    expect(events.map((event) => event.eventType)).toEqual(['cancellation_requested', 'cancelled']);
+    expect((await store.getJob(jobId))?.status).toBe('CANCELLED');
+  });
+
+  it('never emits done when an aborted phase unwinds cleanly', async () => {
+    const jobId = await runner.create('clean-unwind', null);
+    const phase: Phase<Ctx> = {
+      name: 'cooperative',
+      async *run(ctx) {
+        await new Promise<void>((resolve) => {
+          ctx.signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+    };
+    const running = runner.run(jobId, [phase], { cache: new PipelineCache() });
+    setTimeout(() => runner.cancel(jobId, 'clean stop'), 10);
+    await expect(running).rejects.toMatchObject({ name: 'AbortError' });
+    const terminal = (await store.getEvents(jobId)).filter((event) => ['done', 'error', 'cancelled'].includes(event.eventType));
+    expect(terminal.map((event) => event.eventType)).toEqual(['cancelled']);
+  });
+
+  it('never appends cancellation events when its ownership claim loses', async () => {
+    const jobId = await runner.create('owned-elsewhere', null);
+    await store.setRunning(jobId, { ownerId: 'winner' });
+    const loser = new JobRunner(store);
+    const handle = loser.start(
+      jobId,
+      [{ name: 'never', async *run() { yield { type: 'phase', phase: 'never' }; } }],
+      { cache: new PipelineCache() },
+      undefined,
+      { ownership: { ownerId: 'loser' } },
+    );
+    handle.cancel('should not pollute');
+    await expect(handle.result).rejects.toThrow(/already owned/);
+    expect(await store.getEvents(jobId)).toEqual([]);
+    expect((await store.getJob(jobId))?.ownerId).toBe('winner');
   });
 
   it('cancel() is a no-op for jobs that are not running', () => {
@@ -141,12 +210,64 @@ describe('JobRunner.cancel', () => {
     const jobId = await runner.create('wired', null);
     const p = runner.run(jobId, [phase], { cache: new PipelineCache() });
     setTimeout(() => runner.cancel(jobId, 'wired-cancel'), 20);
-    // Phase throws 'aborted' synchronously off the signal listener; that
-    // surfaces as a phase failure (not the runner's AbortError path).
-    await expect(p).rejects.toThrow(/aborted/);
+    // A phase may reject with its own error while unwinding, but the runner's
+    // aborted signal remains authoritative for lifecycle classification.
+    await expect(p).rejects.toMatchObject({ name: 'AbortError', message: /wired-cancel/ });
     expect(capturedSignal).toBeDefined();
     expect(capturedSignal!.aborted).toBe(true);
     const job = (await store.getJob(jobId))!;
-    expect(job.status).toBe('FAILED');
+    expect(job.status).toBe('CANCELLED');
+  });
+
+  it('automatically installs the runner signal on ctx and restores it afterward', async () => {
+    const upstream = new AbortController();
+    const ctx: Ctx = { cache: new PipelineCache(), signal: upstream.signal };
+    let phaseSignal: AbortSignal | undefined;
+    const phase: Phase<Ctx> = {
+      name: 'observe',
+      async *run(runCtx) {
+        phaseSignal = runCtx.signal;
+        yield { type: 'phase', phase: 'observe' };
+      },
+    };
+    const jobId = await runner.create('signal-compose', null);
+    await runner.run(jobId, [phase], ctx);
+    expect(phaseSignal).toBeDefined();
+    expect(phaseSignal).not.toBe(upstream.signal);
+    expect(ctx.signal).toBe(upstream.signal);
+  });
+
+  it('rejects concurrent runs that share one mutable pipeline context', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const phase: Phase<Ctx> = {
+      name: 'wait',
+      async *run() {
+        await gate;
+        yield { type: 'phase', phase: 'wait' };
+      },
+    };
+    const ctx: Ctx = { cache: new PipelineCache() };
+    const firstId = await runner.create('first', null);
+    const secondId = await runner.create('second', null);
+    const first = runner.run(firstId, [phase], ctx);
+    await expect(runner.run(secondId, [phase], ctx)).rejects.toThrow(/same pipeline context/);
+    release();
+    await first;
+  });
+
+  it('start() exposes an immediate handle for deterministic subagent deployment', async () => {
+    const phase: Phase<Ctx> = {
+      name: 'work',
+      async *run(ctx) {
+        expect(ctx.signal).toBeDefined();
+        yield { type: 'phase', phase: 'work' };
+      },
+    };
+    const jobId = await runner.create('handle', null);
+    const handle = runner.start(jobId, [phase], { cache: new PipelineCache() });
+    expect(handle.jobId).toBe(jobId);
+    expect(handle.signal).toBe(runner.signalFor(jobId));
+    await expect(handle.result).resolves.toMatchObject({ status: 'completed' });
   });
 });

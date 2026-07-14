@@ -1,44 +1,18 @@
 /**
- * Server-Sent Events helper — adapt a JobRunner live stream + replay log
- * into an SSE wire format for HTTP consumers.
- *
- * Wire shape:
- *   - Each event is `id: <eventId>\nevent: <type>\ndata: <json>\n\n`.
- *   - The eventId is the JobStore's monotonic id, so disconnected clients
- *     can resume by reading `Last-Event-ID` and replaying via JobStore.
- *   - The connection closes after a `done` or `error` event.
- *
- * The helper is framework-agnostic: it writes to a minimal `SSEResponse`
- * interface so it works with Node's `http.ServerResponse`, Express's
- * `Response`, Fastify's reply (after .raw), etc.
- *
- * Typical usage:
- *
- *   app.get('/jobs/:id/events', (req, res) => {
- *     const lastId = Number(req.headers['last-event-id'] ?? 0);
- *     res.writeHead(200, {
- *       'Content-Type': 'text/event-stream',
- *       'Cache-Control': 'no-cache',
- *       'Connection': 'keep-alive',
- *     });
- *     streamToSSE({ runner, store, jobId: req.params.id, res, afterId: lastId });
- *   });
+ * Server-Sent Events bridge for JobRunner live events plus JobStore replay.
+ * Event ids are store cursors, allowing clients to resume with Last-Event-ID.
  */
 
 import type { JobStore } from './job-store.js';
 import type { JobRunner, LiveEvent } from './job-runner.js';
 
-/**
- * Minimal response interface — `http.ServerResponse` and Express's `Response`
- * both satisfy this without modification. `once(drain)` is required for
- * backpressure handling: when `write()` returns false the socket buffer is
- * full and writes must pause until `drain` fires, or memory grows
- * unboundedly behind a slow client.
- */
+/** Minimal response shape. `once('drain')` and `off('close')` are required
+ * so backpressure waits can be cancelled without leaking listeners. */
 export interface SSEResponse {
   write(chunk: string): boolean;
   end(): void;
   on(event: 'close', listener: () => void): void;
+  off(event: 'close' | 'drain', listener: () => void): void;
   once(event: 'drain', listener: () => void): void;
 }
 
@@ -47,128 +21,175 @@ export interface StreamToSSEOptions {
   store: JobStore;
   jobId: string;
   res: SSEResponse;
-  /**
-   * Replay events with id > afterId before subscribing live. Use the value
-   * of the client's `Last-Event-ID` header to resume after disconnect.
-   */
+  /** Replay events with id > afterId before draining buffered live events. */
   afterId?: number;
-  /**
-   * Heartbeat interval in ms. Default 25s. Sends an SSE comment line to
-   * keep proxies and intermediaries from closing the connection. Set 0 to
-   * disable.
-   */
+  /** SSE comment heartbeat interval. Default 25s; set 0 to disable. */
   heartbeatMs?: number;
+  /** Store polling interval for terminal events emitted by other processes. Default 1s; set 0 to disable. */
+  pollMs?: number;
 }
 
-/**
- * Pump a job's events to an SSE response. Resolves when the connection
- * closes (either because the job ended or the client disconnected).
- */
+const TERMINAL_EVENTS = new Set(['done', 'error', 'cancelled', 'abandoned']);
+const TERMINAL_STATUSES = new Set(['COMPLETED', 'FAILED', 'CANCELLED', 'ABANDONED']);
+
+/** Pump a job's events until terminal state or client disconnect. */
 export async function streamToSSE(options: StreamToSSEOptions): Promise<void> {
   const { runner, store, jobId, res, afterId = 0 } = options;
   const heartbeatMs = options.heartbeatMs ?? 25_000;
+  const pollMs = options.pollMs ?? 1_000;
+  for (const [label, value] of [['heartbeatMs', heartbeatMs], ['pollMs', pollMs]] as const) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError(`${label} must be a non-negative safe integer`);
+    }
+  }
+  const channel = `job:${jobId}`;
 
   let closed = false;
-  const close = () => {
+  let replaying = true;
+  let draining = false;
+  let lastId = afterId;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let polling = false;
+  const liveBuffer: LiveEvent[] = [];
+
+  const close = (): void => {
     if (closed) return;
     closed = true;
     res.end();
   };
+  const onResponseClose = (): void => { closed = true; };
+  res.on('close', onResponseClose);
 
-  res.on('close', () => {
-    closed = true;
-  });
-
-  // Backpressure: when res.write() returns false the socket buffer is full
-  // and we must wait for 'drain' before continuing. Without this, slow
-  // clients cause unbounded Node-side memory growth as writes accumulate.
   const writeWithBackpressure = async (payload: string): Promise<void> => {
     if (closed) return;
     if (!res.write(payload)) {
-      await new Promise<void>((resolve) => res.once('drain', resolve));
+      if (closed) return;
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const done = (): void => {
+          if (settled) return;
+          settled = true;
+          resolve();
+        };
+        const onClose = (): void => {
+          res.off('drain', onDrain);
+          done();
+        };
+        const onDrain = (): void => {
+          res.off('close', onClose);
+          done();
+        };
+        res.once('drain', onDrain);
+        res.on('close', onClose);
+        if (closed) onClose();
+      });
     }
   };
-
   const writeFrame = async (id: number, type: string, data: unknown): Promise<void> => {
-    if (closed) return;
+    if (closed || id <= lastId) return;
     await writeWithBackpressure(
       `id: ${id}\n` +
         `event: ${type}\n` +
         `data: ${JSON.stringify(data)}\n\n`,
     );
+    lastId = id;
+    if (TERMINAL_EVENTS.has(type)) close();
   };
 
-  // Step 1: replay anything the client has missed.
-  let lastId = afterId;
-  const replay = await store.getEvents(jobId, afterId);
-  for (const evt of replay) {
-    if (closed) return;
-    await writeFrame(evt.id, evt.eventType, evt.data);
-    lastId = Math.max(lastId, evt.id);
-  }
-
-  // If the job is already finished and replay covered everything, close.
-  const job = await store.getJob(jobId);
-  if (job && (job.status === 'COMPLETED' || job.status === 'FAILED')) {
-    close();
-    return;
-  }
-
-  // Step 2: subscribe to live events. The EventEmitter listener is sync
-  // and fire-and-forget by API; we buffer events and drain them serially
-  // through writeFrame so backpressure stays honored and ordering is
-  // preserved even when multiple events arrive while a write is pending.
-  const channel = `job:${jobId}`;
-  const liveBuffer: LiveEvent[] = [];
-  let draining = false;
   const drainLive = async (): Promise<void> => {
-    if (draining) return;
+    if (draining || replaying) return;
     draining = true;
     try {
+      liveBuffer.sort((a, b) => a.id - b.id);
       while (!closed && liveBuffer.length > 0) {
-        const evt = liveBuffer.shift()!;
-        if (evt.id <= lastId) continue;
-        lastId = evt.id;
-        await writeFrame(evt.id, evt.eventType, evt.data);
-        if (evt.eventType === 'done' || evt.eventType === 'error') {
-          close();
-          return;
-        }
+        const event = liveBuffer.shift()!;
+        await writeFrame(event.id, event.eventType, event.data);
       }
     } finally {
       draining = false;
     }
   };
-  const onLive = (evt: LiveEvent): void => {
+
+  const onLive = (event: LiveEvent): void => {
     if (closed) return;
-    liveBuffer.push(evt);
-    // Promise rejection here would be unobserved by the EventEmitter, so
-    // catch and swallow — writes that fail close the socket anyway.
-    void drainLive().catch(() => {
-      /* connection error during drain; close listener will fire */
-    });
+    liveBuffer.push(event);
+    if (!replaying) void drainLive().catch(close);
   };
+
+  // Subscribe before the first replay read. Events emitted during replay are
+  // buffered and deduplicated by their monotonic ids when live draining starts.
   runner.on(channel, onLive);
 
-  // Heartbeat: comment line every N seconds to keep proxies from idling
-  // out. Skip the heartbeat when the socket is back-pressured rather than
-  // queueing — heartbeats are advisory and stale ones are not useful.
-  let heartbeat: ReturnType<typeof setInterval> | null = null;
-  if (heartbeatMs > 0) {
-    heartbeat = setInterval(() => {
+  try {
+    const replay = await store.getEvents(jobId, afterId);
+    for (const event of replay) {
       if (closed) return;
-      // Discard the boolean intentionally: this is a hint, not data.
-      // Backpressure is handled by event writes, which will pause the
-      // pipeline once drain is pending.
-      res.write(`: keepalive ${Date.now()}\n\n`);
-    }, heartbeatMs);
+      await writeFrame(event.id, event.eventType, event.data);
+    }
+
+    const job = await store.getJob(jobId);
+    // Catch events appended while the first replay/status reads were in flight.
+    const catchUp = await store.getEvents(jobId, lastId);
+    for (const event of catchUp) {
+      if (closed) return;
+      await writeFrame(event.id, event.eventType, event.data);
+    }
+
+    replaying = false;
+    await drainLive();
+    if (closed) return;
+
+    if (job && TERMINAL_STATUSES.has(job.status)) {
+      // JobStore terminal transitions and their terminal events are atomic,
+      // so one final cursor read is sufficient even for network-backed stores.
+      const terminalCatchUp = await store.getEvents(jobId, lastId);
+      for (const event of terminalCatchUp) {
+        if (closed) return;
+        await writeFrame(event.id, event.eventType, event.data);
+      }
+      await drainLive();
+      if (!closed) close();
+      return;
+    }
+
+    if (pollMs > 0) {
+      pollTimer = setInterval(() => {
+        if (closed || polling) return;
+        polling = true;
+        void store.getEvents(jobId, lastId)
+          .then(async (events) => {
+            for (const event of events) {
+              liveBuffer.push({
+                id: event.id,
+                jobId: event.jobId,
+                eventType: event.eventType,
+                data: event.data,
+                createdAt: event.createdAt.toISOString(),
+              });
+            }
+            await drainLive();
+          })
+          .catch(close)
+          .finally(() => { polling = false; });
+      }, pollMs);
+      pollTimer.unref?.();
+    }
+
+    if (heartbeatMs > 0) {
+      heartbeat = setInterval(() => {
+        if (closed || draining) return;
+        void writeWithBackpressure(`: keepalive ${Date.now()}\n\n`).catch(close);
+      }, heartbeatMs);
+      heartbeat.unref?.();
+    }
+
+    await new Promise<void>((resolve) => res.on('close', resolve));
+  } finally {
+    replaying = false;
+    if (heartbeat) clearInterval(heartbeat);
+    if (pollTimer) clearInterval(pollTimer);
+    res.off('close', onResponseClose);
+    runner.off(channel, onLive);
   }
-
-  // Wait until the connection closes.
-  await new Promise<void>((resolve) => {
-    res.on('close', resolve);
-  });
-
-  if (heartbeat) clearInterval(heartbeat);
-  runner.off(channel, onLive);
 }

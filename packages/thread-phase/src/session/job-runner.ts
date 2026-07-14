@@ -1,24 +1,13 @@
 /**
- * Job runner — wraps a pipeline run with persistent event logging and live
- * event emission.
+ * Job runner — persistent execution, live events, cancellation, and liveness.
  *
- * Three audiences for the same event stream:
- *   - The store (for resumability via JobStore.getEvents).
- *   - Live SSE-style listeners (subscribe via runner.on(`job:${id}`, ...)).
- *   - The caller's own AsyncGenerator consumer if they want to drive directly.
- *
- * Pipeline execution is decoupled from client connection: a job runs to
- * completion regardless of who's listening. Late-attaching consumers replay
- * via JobStore.getEvents.
- *
- * Cancellation: each in-flight job tracks an AbortController. Call
- * `runner.cancel(jobId, reason?)` to abort the in-flight pipeline. The
- * controller's signal is exposed via `runner.signalFor(jobId)` so callers
- * (typically phase code that calls runAgentWithTools) can plumb it into
- * the inference layer. Without that plumbing, cancellation only halts
- * BETWEEN phases.
+ * JobRunner owns the authoritative lifecycle for one in-process pipeline run.
+ * It composes its cancellation signal with any caller-provided ctx.signal,
+ * persists cancellation separately from failure, and guarantees that terminal
+ * store transitions cannot overwrite one another.
  */
 
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'events';
 import * as os from 'node:os';
 import type { BasePipelineContext, Phase, PipelineEvent } from '../phase.js';
@@ -34,104 +23,139 @@ export interface LiveEvent {
   createdAt: string;
 }
 
-/**
- * Constructor options for {@link JobRunner}.
- */
 export interface JobRunnerOptions {
-  /**
-   * When set, JobRunner calls `store.heartbeat(jobId)` on a `setInterval`
-   * for the duration of each `run()`. Combined with `staleAfterMs` on
-   * `JobStore.getJob` / `listJobs`, this lets operators detect runs whose
-   * owning process disappeared mid-execution.
-   *
-   * The timer is cleared on every exit path (success, error, abort) so it
-   * cannot outlive its run. A phase that holds the event loop for longer
-   * than `heartbeatMs` (e.g. a synchronous CPU spike) will miss its tick
-   * window — phases with long inner loops should call `ctx.heartbeat?.()`
-   * manually between iterations as well.
-   *
-   * Recommended range: 5_000 – 30_000. Below 1 second the timer overhead
-   * dominates; above a minute the staleness signal lags.
-   */
+  /** Automatic heartbeat interval for active runs. */
   heartbeatMs?: number;
 }
 
-/**
- * Per-run options passed to {@link JobRunner.run}.
- */
 export interface JobRunOptions {
   /** Caller-supplied logical session id recorded on the JobRecord. */
   sessionId?: string;
-  /**
-   * Additional ownership metadata. Defaults are populated automatically
-   * from the Node runtime (`process.pid`, `process.ppid`, `process.cwd()`,
-   * `os.hostname()`); pass overrides here to suppress or customize.
-   */
+  /** Additional or overridden ownership metadata. */
   ownership?: JobOwnership;
+  /** Host-defined source such as `pi-tool`, `cron`, or `webhook`. */
+  launchSource?: string;
+}
+
+/** Immediate handle returned by {@link JobRunner.start}. */
+export interface JobRunHandle {
+  readonly jobId: string;
+  readonly signal: AbortSignal;
+  readonly result: Promise<PipelineSummary>;
+  cancel(reason?: string): void;
+}
+
+interface InflightRun {
+  controller: AbortController;
+  signal: AbortSignal;
+  claim: Promise<boolean>;
+  cancellationRequested?: Promise<void>;
+  cancelReason?: string;
 }
 
 export class JobRunner extends EventEmitter {
-  private inflight = new Map<string, AbortController>();
+  private inflight = new Map<string, InflightRun>();
+  private activeContexts = new WeakSet<object>();
   private readonly heartbeatMs?: number;
 
   constructor(private readonly store: JobStore, options: JobRunnerOptions = {}) {
     super();
     this.setMaxListeners(100);
+    if (
+      options.heartbeatMs !== undefined &&
+      (!Number.isSafeInteger(options.heartbeatMs) || options.heartbeatMs < 1)
+    ) {
+      throw new RangeError('heartbeatMs must be a positive safe integer');
+    }
     this.heartbeatMs = options.heartbeatMs;
   }
 
-  /**
-   * Update `heartbeatAt` for an in-flight job. Called automatically by the
-   * background timer when `heartbeatMs` is configured; also exposed on
-   * `ctx.heartbeat?.()` for phases with long inner loops to call manually.
-   */
   heartbeat(jobId: string): Promise<void> {
     return this.store.heartbeat(jobId);
   }
 
-  /**
-   * Create a job row, return its id. Use `start()` to actually run it.
-   */
   create(name: string, input: unknown): Promise<string> {
     return this.store.createJob(name, input);
   }
 
-  /**
-   * AbortSignal for a running job. Phase code should pass this through to
-   * `runAgentWithTools({ signal })` so cancellation reaches the inference
-   * call instead of just halting between phases.
-   *
-   * Returns `undefined` if the job isn't currently running on this runner.
-   */
   signalFor(jobId: string): AbortSignal | undefined {
     return this.inflight.get(jobId)?.signal;
   }
 
   /**
-   * Request cancellation of an in-flight job. Aborts the controller (which
-   * propagates into any inference call wired to `signalFor(jobId)`) and
-   * lets the run-loop unwind. The job is marked FAILED with the given
-   * reason once unwinding completes. No-op if the job isn't running.
+   * Start a run and return its cancellation signal/result immediately.
+   * The job row must already exist; call {@link create} first.
    */
-  cancel(jobId: string, reason: string = 'cancelled'): void {
-    const controller = this.inflight.get(jobId);
-    if (!controller) return;
-    if (!controller.signal.aborted) {
-      // Node's AbortController accepts an optional reason on abort().
-      controller.abort(reason);
-    }
+  start<TCtx extends BasePipelineContext, TEvent extends PipelineEvent = PipelineEvent>(
+    jobId: string,
+    phases: ReadonlyArray<Phase<TCtx, TEvent>>,
+    ctx: TCtx,
+    finalResult?: () => unknown,
+    options: JobRunOptions = {},
+  ): JobRunHandle {
+    this.assertLocalAvailability(jobId, ctx);
+    const result = this.run(jobId, phases, ctx, finalResult, options);
+    const signal = this.signalFor(jobId);
+    if (!signal) throw new Error(`JobRunner failed to initialize run ${jobId}`);
+    return {
+      jobId,
+      signal,
+      result,
+      cancel: (reason = 'cancelled') => this.cancel(jobId, reason),
+    };
   }
 
   /**
-   * Run a pipeline as job `jobId`. Persists every event, emits on `job:${id}`.
-   *
-   * Returns a `PipelineSummary` on success; rejects with the original error
-   * on phase failure (after the runner has marked the job FAILED, written a
-   * synthesized `error` event to the store, and emitted it to subscribers).
-   * Cancellation via `runner.cancel(jobId, reason)` rejects with an
-   * `AbortError`-shaped Error (`name === 'AbortError'`); the same FAILED
-   * persistence path runs first.
+   * Request cancellation. The request is persisted before terminal
+   * cancellation is finalized. Returns false when no local run owns jobId.
    */
+  cancel(jobId: string, reason: string = 'cancelled'): boolean {
+    const entry = this.inflight.get(jobId);
+    if (!entry) return false;
+    if (!entry.cancellationRequested) {
+      entry.cancelReason = reason;
+      entry.cancellationRequested = entry.claim.then(async (claimed) => {
+        if (!claimed) return;
+        await this.appendLive(jobId, { type: 'cancellation_requested', reason });
+      }).catch(() => undefined);
+    }
+    if (!entry.controller.signal.aborted) entry.controller.abort(reason);
+    return true;
+  }
+
+  /**
+   * Convert read-time stale jobs into durable ABANDONED terminal records.
+   * A separate operator/host decides how often reconciliation runs.
+   */
+  async reconcileAbandoned(staleAfterMs: number, reason = 'owner heartbeat expired'): Promise<string[]> {
+    if (!Number.isFinite(staleAfterMs) || staleAfterMs <= 0) {
+      throw new RangeError('staleAfterMs must be a finite positive number');
+    }
+    const staleBefore = new Date(Date.now() - staleAfterMs);
+    const reconciled: string[] = [];
+    while (true) {
+      const stale = await this.store.listJobs({ status: 'STALE', staleAfterMs, limit: 100 });
+      if (stale.length === 0) break;
+      let transitioned = 0;
+      for (const job of stale) {
+        const terminal = await this.store.finalizeAbandonedIfStale(
+          job.id,
+          staleBefore,
+          reason,
+          job.ownerId,
+        );
+        if (!terminal) continue;
+        transitioned++;
+        this.emitRecord(terminal);
+        reconciled.push(job.id);
+      }
+      // Avoid an infinite loop with a backend whose stale snapshot is not
+      // refreshed or whose conditional transition rejects every candidate.
+      if (transitioned === 0 || stale.length < 100) break;
+    }
+    return reconciled;
+  }
+
   async run<TCtx extends BasePipelineContext, TEvent extends PipelineEvent = PipelineEvent>(
     jobId: string,
     phases: ReadonlyArray<Phase<TCtx, TEvent>>,
@@ -139,117 +163,180 @@ export class JobRunner extends EventEmitter {
     finalResult?: () => unknown,
     options: JobRunOptions = {},
   ): Promise<PipelineSummary> {
-    const controller = new AbortController();
-    this.inflight.set(jobId, controller);
+    this.assertLocalAvailability(jobId, ctx);
+    this.activeContexts.add(ctx);
 
-    // Auto-populate ownership from the Node runtime, allowing per-call
-    // overrides. Falls back to undefined fields on platforms that don't
-    // expose process.* (the store layer accepts optional fields).
+    const controller = new AbortController();
+    const previousSignal = ctx.signal;
+    const signal = previousSignal
+      ? AbortSignal.any([previousSignal, controller.signal])
+      : controller.signal;
+    const previousHeartbeat = ctx.heartbeat;
     const ownership: JobOwnership = {
       sessionId: options.sessionId ?? options.ownership?.sessionId,
       pid: options.ownership?.pid ?? safeReadPid(),
       ppid: options.ownership?.ppid ?? safeReadPpid(),
       cwd: options.ownership?.cwd ?? safeReadCwd(),
       hostname: options.ownership?.hostname ?? safeReadHostname(),
+      ownerId: options.ownership?.ownerId ?? randomUUID(),
+      launchSource: options.launchSource ?? options.ownership?.launchSource,
+      heartbeatEnabled: options.ownership?.heartbeatEnabled ?? (this.heartbeatMs !== undefined && this.heartbeatMs > 0),
     };
-    await this.store.setRunning(jobId, ownership);
+    const ownerId = ownership.ownerId!;
+    const entry: InflightRun = {
+      controller,
+      signal,
+      claim: this.store.setRunning(jobId, ownership),
+    };
+    this.inflight.set(jobId, entry);
+    ctx.signal = signal;
 
-    // Expose ctx.heartbeat so phase bodies with long inner loops can
-    // refresh liveness between iterations. Same effect as the background
-    // timer below but driven by the phase itself.
-    (ctx as BasePipelineContext).heartbeat = () => this.store.heartbeat(jobId);
-
-    // Background heartbeat timer — runs only when configured AND the
-    // store accepts heartbeat calls (no-op stubs in tests fall through).
-    // unref() prevents the timer from keeping the event loop alive past
-    // the run; the finally clause clears it on every exit path.
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-    if (this.heartbeatMs !== undefined && this.heartbeatMs > 0) {
-      heartbeatTimer = setInterval(() => {
-        // Swallow heartbeat errors — they should never fail the run.
-        void this.store.heartbeat(jobId).catch(() => {
-          /* heartbeat is best-effort */
-        });
-      }, this.heartbeatMs);
-      if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
-    }
-
     let eventCount = 0;
     let stopReason: string | undefined;
+    let ownershipAcquired = false;
 
-    const persistError = async (message: string): Promise<void> => {
-      await this.store.setFailed(jobId, message);
-      const errEvent: PipelineEvent = { type: 'error', message };
-      const eventId = await this.store.appendEvent(jobId, errEvent);
-      this.emit(`job:${jobId}`, {
-        id: eventId,
-        jobId,
-        eventType: 'error',
-        data: errEvent,
-        createdAt: new Date().toISOString(),
-      } satisfies LiveEvent);
+    const ensureCancellationRequested = async (reason: string): Promise<void> => {
+      if (!entry.cancellationRequested) {
+        entry.cancelReason = reason;
+        entry.cancellationRequested = entry.claim.then(async (claimed) => {
+          if (!claimed) return;
+          await this.appendLive(jobId, { type: 'cancellation_requested', reason });
+        }).catch(() => undefined);
+      }
+      await entry.cancellationRequested;
+    };
+
+    const persistCancellation = async (reason: string): Promise<void> => {
+      await ensureCancellationRequested(reason);
+      const terminal = await this.store.finalizeJob(jobId, {
+        status: 'CANCELLED',
+        error: reason,
+        event: { type: 'cancelled', reason },
+        ownerId,
+      });
+      if (terminal) this.emitRecord(terminal);
+    };
+
+    const persistFailure = async (message: string): Promise<void> => {
+      const terminal = await this.store.finalizeJob(jobId, {
+        status: 'FAILED',
+        error: message,
+        event: { type: 'error', message },
+        ownerId,
+      });
+      if (terminal) this.emitRecord(terminal);
     };
 
     try {
-      for await (const event of runPipeline<TCtx, TEvent>(phases, ctx)) {
-        const eventId = await this.store.appendEvent(jobId, event as PipelineEvent);
-        this.emit(`job:${jobId}`, {
-          id: eventId,
-          jobId,
-          eventType: event.type,
-          data: event,
-          createdAt: new Date().toISOString(),
-        } satisfies LiveEvent);
-        eventCount++;
+      const claimed = await entry.claim;
+      if (!claimed) throw new Error(`Job ${jobId} is already owned or terminal`);
+      ownershipAcquired = true;
+      ctx.heartbeat = async () => {
+        // A pipeline using only manual heartbeats opts into stale detection on
+        // first use, without requiring heartbeatMs at runner construction.
+        const enabled = await this.store.enableHeartbeat(jobId, ownerId);
+        if (!enabled) throw new Error(`Job ${jobId} is no longer owned by ${ownerId}`);
+      };
 
-        if ((event as PipelineEvent).type === 'done') {
-          stopReason = (event as { reason?: string }).reason;
+      if (this.heartbeatMs !== undefined && this.heartbeatMs > 0) {
+        heartbeatTimer = setInterval(() => {
+          void this.store.heartbeat(jobId, ownerId).catch(() => undefined);
+        }, this.heartbeatMs);
+        if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
+      }
+
+      for await (const event of runPipeline<TCtx, TEvent>(phases, ctx, { signal })) {
+        const pipelineEvent = event as PipelineEvent;
+        if (pipelineEvent.type === 'done') {
+          stopReason = (pipelineEvent as { reason?: string }).reason;
+        } else if (pipelineEvent.type !== 'cancelled') {
+          await this.appendLive(jobId, pipelineEvent);
+          eventCount++;
         }
-
-        if (controller.signal.aborted) {
-          const reason = signalReasonToString(controller.signal, 'cancelled');
-          await persistError(`cancelled: ${reason}`);
-          const err = new Error(`cancelled: ${reason}`);
-          err.name = 'AbortError';
-          throw err;
+        if (signal.aborted) {
+          const reason = signalReasonToString(signal, 'cancelled');
+          const error = new Error(`cancelled: ${reason}`);
+          error.name = 'AbortError';
+          throw error;
         }
       }
-      await this.store.setCompleted(jobId, finalResult ? finalResult() : null);
+
+      const result = finalResult ? finalResult() : null;
+      const doneEvent: PipelineEvent = stopReason === undefined
+        ? { type: 'done' }
+        : { type: 'done', reason: stopReason };
+      const completed = await this.store.finalizeJob(jobId, {
+        status: 'COMPLETED',
+        result,
+        event: doneEvent,
+        ownerId,
+      });
+      if (!completed) throw new Error(`Job ${jobId} reached success after another terminal transition`);
+      this.emitRecord(completed);
+      eventCount++;
       return stopReason !== undefined
         ? { status: 'stopped', reason: stopReason, eventCount }
         : { status: 'completed', eventCount };
-    } catch (err: unknown) {
-      // Re-throw cancellation rejections (already persisted above).
-      if (err instanceof Error && err.name === 'AbortError') throw err;
-      // Phase exception: persist + rethrow.
-      const message = err instanceof Error ? err.message : String(err);
-      await persistError(message);
-      throw err;
+    } catch (error: unknown) {
+      if (!ownershipAcquired) throw error;
+      if (signal.aborted) {
+        const reason = signalReasonToString(signal, entry.cancelReason ?? 'cancelled');
+        await persistCancellation(reason);
+        if (error instanceof Error && error.name === 'AbortError') throw error;
+        const abort = new Error(`cancelled: ${reason}`);
+        abort.name = 'AbortError';
+        throw abort;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      await persistFailure(message);
+      throw error;
     } finally {
       this.inflight.delete(jobId);
+      this.activeContexts.delete(ctx);
       if (heartbeatTimer !== null) clearInterval(heartbeatTimer);
+      ctx.signal = previousSignal;
+      ctx.heartbeat = previousHeartbeat;
     }
+  }
+
+  private assertLocalAvailability(jobId: string, ctx: BasePipelineContext): void {
+    if (this.inflight.has(jobId)) throw new Error(`Job ${jobId} is already running on this runner`);
+    if (this.activeContexts.has(ctx)) {
+      throw new Error('The same pipeline context cannot be used by concurrent JobRunner runs');
+    }
+  }
+
+  private async appendLive(jobId: string, event: PipelineEvent): Promise<void> {
+    const eventId = await this.store.appendEvent(jobId, event);
+    this.emitRecord({
+      id: eventId,
+      jobId,
+      eventType: event.type,
+      data: event,
+      createdAt: new Date(),
+    });
+  }
+
+  private emitRecord(record: { id: number; jobId: string; eventType: string; data: PipelineEvent; createdAt: Date }): void {
+    this.emit(`job:${record.jobId}`, {
+      id: record.id,
+      jobId: record.jobId,
+      eventType: record.eventType,
+      data: record.data,
+      createdAt: record.createdAt.toISOString(),
+    } satisfies LiveEvent);
   }
 }
 
-// Safe-read helpers — return undefined on platforms or sandboxes that
-// don't expose process.* or os.hostname() rather than throwing during
-// JobRunner.run() setup.
-
 function safeReadPid(): number | undefined {
-  try {
-    return typeof process !== 'undefined' ? process.pid : undefined;
-  } catch {
-    return undefined;
-  }
+  try { return typeof process !== 'undefined' ? process.pid : undefined; }
+  catch { return undefined; }
 }
 
 function safeReadPpid(): number | undefined {
-  try {
-    return typeof process !== 'undefined' ? process.ppid : undefined;
-  } catch {
-    return undefined;
-  }
+  try { return typeof process !== 'undefined' ? process.ppid : undefined; }
+  catch { return undefined; }
 }
 
 function safeReadCwd(): string | undefined {
@@ -257,15 +344,10 @@ function safeReadCwd(): string | undefined {
     return typeof process !== 'undefined' && typeof process.cwd === 'function'
       ? process.cwd()
       : undefined;
-  } catch {
-    return undefined;
-  }
+  } catch { return undefined; }
 }
 
 function safeReadHostname(): string | undefined {
-  try {
-    return os.hostname();
-  } catch {
-    return undefined;
-  }
+  try { return os.hostname(); }
+  catch { return undefined; }
 }

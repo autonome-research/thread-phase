@@ -45,9 +45,17 @@ import type { PipelineEvent } from '../phase.js';
  * `getJob()` or `listJobs()` and the row meets the staleness criteria
  * (status = RUNNING AND heartbeatAt is older than the threshold).
  * The persisted status of any STALE-reported row is still RUNNING —
- * the caller decides whether to transition it to FAILED.
+ * the caller decides whether to transition it to ABANDONED (for example via
+ * `JobRunner.reconcileAbandoned`).
  */
-export type JobStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'STALE';
+export type JobStatus =
+  | 'PENDING'
+  | 'RUNNING'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'ABANDONED'
+  | 'STALE';
 
 export interface JobRecord {
   id: string;
@@ -74,6 +82,12 @@ export interface JobRecord {
   cwd?: string;
   /** Hostname at setRunning() time (os.hostname()). */
   hostname?: string;
+  /** Unique identity for this process/run ownership claim. */
+  ownerId?: string;
+  /** Application-defined source, e.g. `pi-tool`, `cron`, or `webhook`. */
+  launchSource?: string;
+  /** Whether this run opted into heartbeat-based stale reconciliation. */
+  heartbeatEnabled?: boolean;
   /** Most recent heartbeat ISO timestamp. Updated by JobRunner.heartbeat(). */
   heartbeatAt?: Date;
 }
@@ -84,6 +98,14 @@ export interface EventRecord {
   eventType: string;
   data: PipelineEvent;
   createdAt: Date;
+}
+
+export interface JobFinalization {
+  status: 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'ABANDONED';
+  result?: unknown;
+  error?: string;
+  event: PipelineEvent;
+  ownerId?: string;
 }
 
 export interface ListJobsOptions {
@@ -101,7 +123,7 @@ export interface ListJobsOptions {
    * whose `heartbeatAt` is older than `Date.now() - staleAfterMs` are
    * surfaced with `status: 'STALE'` in the returned records. The
    * persisted status is NOT modified — implementations compute STALE on
-   * read only. Has no effect on PENDING / COMPLETED / FAILED rows.
+   * read only. Has no effect on PENDING or terminal rows.
    *
    * If your runs do not heartbeat (no `heartbeatMs` on JobRunner, no
    * manual `ctx.heartbeat?.()` calls), staleness can not be detected —
@@ -123,6 +145,9 @@ export interface JobOwnership {
   ppid?: number;
   cwd?: string;
   hostname?: string;
+  ownerId?: string;
+  launchSource?: string;
+  heartbeatEnabled?: boolean;
 }
 
 export interface JobStore {
@@ -148,15 +173,47 @@ export interface JobStore {
    * ownership metadata (sessionId, pid, ppid, cwd, hostname) so
    * downstream operators can answer "which process owns this job."
    */
-  setRunning(jobId: string, ownership?: JobOwnership): Promise<void>;
-  setCompleted(jobId: string, result: unknown): Promise<void>;
-  setFailed(jobId: string, error: string): Promise<void>;
+  /** Atomically claim PENDING/unowned work. False means another owner won. */
+  setRunning(jobId: string, ownership?: JobOwnership): Promise<boolean>;
+  /**
+   * Terminal transitions are atomic first-writer-wins operations. They return
+   * true only when this call changed a PENDING/RUNNING row; custom stores must
+   * not overwrite an existing terminal status.
+   */
+  setCompleted(jobId: string, result: unknown, ownerId?: string): Promise<boolean>;
+  setFailed(jobId: string, error: string, ownerId?: string): Promise<boolean>;
+  /** Persist a cooperative or forced user/system cancellation. */
+  setCancelled(jobId: string, reason: string, ownerId?: string): Promise<boolean>;
+  /** Persist an explicit owner-loss decision for a RUNNING job. */
+  setAbandoned(jobId: string, reason: string): Promise<boolean>;
+  /**
+   * Atomically abandon a job only if it is still RUNNING, still owned by the
+   * expected owner (when supplied), and its heartbeat remains older than the
+   * cutoff. Prevents a stale-list/read race from abandoning a recovered job.
+   */
+  setAbandonedIfStale(
+    jobId: string,
+    staleBefore: Date,
+    reason: string,
+    expectedOwnerId?: string,
+  ): Promise<boolean>;
+  /** Atomically persist one terminal transition and its terminal event. */
+  finalizeJob(jobId: string, finalization: JobFinalization): Promise<EventRecord | null>;
+  /** Atomic stale-check + ABANDONED transition + event append. */
+  finalizeAbandonedIfStale(
+    jobId: string,
+    staleBefore: Date,
+    reason: string,
+    expectedOwnerId?: string,
+  ): Promise<EventRecord | null>;
   /**
    * Update `heartbeatAt` to "now." Called by JobRunner on its
    * heartbeatMs interval and via `ctx.heartbeat?.()` from phase bodies.
    * No-op if the job is not in RUNNING state.
    */
-  heartbeat(jobId: string): Promise<void>;
+  heartbeat(jobId: string, ownerId?: string): Promise<void>;
+  /** Atomically opt an owned run into stale detection and refresh heartbeat. */
+  enableHeartbeat(jobId: string, ownerId: string): Promise<boolean>;
 
   getJob(jobId: string, options?: GetJobOptions): Promise<JobRecord | null>;
   listJobs(options?: ListJobsOptions): Promise<JobRecord[]>;

@@ -149,7 +149,7 @@ describe('JobRunner.cancel propagates into runAgentWithTools', () => {
       // The agent saw the signal and returned with finishReason=error.
       expect(ctx.agentResult).toBe('error');
       const job = (await store.getJob(jobId))!;
-      expect(job.status).toBe('FAILED');
+      expect(job.status).toBe('CANCELLED');
     } finally {
       warnSpy?.mockRestore();
       errorSpy?.mockRestore();
@@ -223,6 +223,10 @@ describe('streamToSSE — client disconnect cleanup', () => {
       on(_evt: 'close', listener: () => void): void {
         this.closeListeners.push(listener);
       }
+      off(_evt: 'close' | 'drain', listener: () => void): void {
+        this.closeListeners = this.closeListeners.filter((candidate) => candidate !== listener);
+      }
+      once(_evt: 'drain', _listener: () => void): void {}
       simulateClientDisconnect() {
         this.end();
       }
@@ -275,6 +279,10 @@ describe('streamToSSE — client disconnect cleanup', () => {
       on(_evt: 'close', listener: () => void): void {
         this.closeListeners.push(listener);
       }
+      off(_evt: 'close' | 'drain', listener: () => void): void {
+        this.closeListeners = this.closeListeners.filter((candidate) => candidate !== listener);
+      }
+      once(_evt: 'drain', _listener: () => void): void {}
     }
 
     const phase: Phase<Ctx> = {

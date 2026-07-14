@@ -213,12 +213,11 @@ describe('runPipeline: signal propagation + mid-phase observation', () => {
     // the orchestrator does not force-cancel a running phase.
     expect(secondYieldReached).toBe(false);
 
-    // Release the phase; both yields complete normally.
+    // Release the phase. Its own code can finish, but the orchestrator checks
+    // cancellation before checkpoint/done and rejects rather than reporting success.
     release.resolve();
-    const events = await runPromise;
-
+    await expect(runPromise).rejects.toMatchObject({ name: 'AbortError' });
     expect(secondYieldReached).toBe(true);
-    expect(events.filter((e) => e.type === 'phase')).toHaveLength(2);
   });
 });
 
@@ -226,8 +225,8 @@ describe('runPipeline: signal propagation + mid-phase observation', () => {
 // whileCondition — predicate ignores abort, runaway loop
 // ---------------------------------------------------------------------------
 
-describe('whileCondition: does not check ctx.signal — predicate is the termination contract', () => {
-  it('runs maxIterations to completion even after the outer signal aborts', async () => {
+describe('whileCondition: outer orchestrator enforces cancellation after composite phase', () => {
+  it('never reports success after the outer signal aborts', async () => {
     const controller = new AbortController();
     const MAX = 5;
     let iterations = 0;
@@ -250,12 +249,12 @@ describe('whileCondition: does not check ctx.signal — predicate is the termina
       maxIterations: MAX,
     });
 
-    await collect(runPipeline([loop], makeCtx(), { signal: controller.signal }));
+    await expect(
+      collect(runPipeline([loop], makeCtx(), { signal: controller.signal })),
+    ).rejects.toMatchObject({ name: 'AbortError' });
 
-    // Contract: whileCondition's termination is its predicate +
-    // maxIterations, NOT ctx.signal. The loop ran the full MAX iterations
-    // despite abort firing on iteration 1. Callers wanting cooperative
-    // cancellation must observe ctx.signal in their predicate.
+    // The composite pattern is still responsible for prompt mid-loop abort
+    // checks, but the outer orchestrator cannot emit a successful done frame.
     expect(iterations).toBe(MAX);
   });
 });

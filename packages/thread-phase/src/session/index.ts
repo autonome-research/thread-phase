@@ -2,6 +2,7 @@ export {
   type JobStore,
   type JobRecord,
   type EventRecord,
+  type JobFinalization,
   type JobStatus,
   type JobOwnership,
   type ListJobsOptions,
@@ -14,6 +15,7 @@ export {
   JobRunner,
   type JobRunnerOptions,
   type JobRunOptions,
+  type JobRunHandle,
   type LiveEvent,
 } from './job-runner.js';
 

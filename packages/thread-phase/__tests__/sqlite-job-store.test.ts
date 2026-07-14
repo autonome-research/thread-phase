@@ -60,6 +60,77 @@ describe('SqliteJobStore — lifecycle', () => {
     expect(job.error).toBe('kaboom');
   });
 
+  it('persists CANCELLED and ABANDONED as distinct terminal states', async () => {
+    const cancelled = await store.createJob('cancelled', null);
+    await store.setRunning(cancelled);
+    await store.setCancelled(cancelled, 'user requested');
+    expect(await store.getJob(cancelled)).toMatchObject({
+      status: 'CANCELLED',
+      error: 'user requested',
+    });
+
+    const abandoned = await store.createJob('abandoned', null);
+    await store.setRunning(abandoned);
+    await store.setAbandoned(abandoned, 'owner disappeared');
+    expect(await store.getJob(abandoned)).toMatchObject({
+      status: 'ABANDONED',
+      error: 'owner disappeared',
+    });
+  });
+
+  it('does not allow a later terminal write to overwrite the first terminal state', async () => {
+    const id = await store.createJob('terminal', null);
+    await store.setRunning(id);
+    await store.setFailed(id, 'first failure');
+    await store.setCompleted(id, { incorrect: true });
+    await store.setCancelled(id, 'too late');
+    expect(await store.getJob(id)).toMatchObject({
+      status: 'FAILED',
+      error: 'first failure',
+      result: null,
+    });
+  });
+
+  it('atomically enables and refreshes heartbeat for the current owner', async () => {
+    const id = await store.createJob('manual-heartbeat', null);
+    await store.setRunning(id, { ownerId: 'owner' });
+    const before = (await store.getJob(id))!.heartbeatAt!;
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await expect(store.enableHeartbeat(id, 'owner')).resolves.toBe(true);
+    const after = (await store.getJob(id))!;
+    expect(after.heartbeatEnabled).toBe(true);
+    expect(after.heartbeatAt!.getTime()).toBeGreaterThan(before.getTime());
+    await expect(store.enableHeartbeat(id, 'other-owner')).resolves.toBe(false);
+  });
+
+  it('persists durable owner identity and launch source', async () => {
+    const id = await store.createJob('owned', null);
+    await store.setRunning(id, { ownerId: 'owner-123', launchSource: 'pi-tool' });
+    expect(await store.getJob(id)).toMatchObject({
+      ownerId: 'owner-123',
+      launchSource: 'pi-tool',
+    });
+  });
+
+  it('atomically finalizes status and terminal event exactly once', async () => {
+    const id = await store.createJob('atomic-terminal', null);
+    await store.setRunning(id, { ownerId: 'owner' });
+    const terminal = await store.finalizeJob(id, {
+      status: 'FAILED',
+      error: 'boom',
+      event: { type: 'error', message: 'boom' },
+      ownerId: 'owner',
+    });
+    expect(terminal?.eventType).toBe('error');
+    expect(await store.getJob(id)).toMatchObject({ status: 'FAILED', error: 'boom', eventCount: 1 });
+    await expect(store.finalizeJob(id, {
+      status: 'COMPLETED',
+      event: { type: 'done' },
+      ownerId: 'owner',
+    })).resolves.toBeNull();
+    expect(await store.getEvents(id)).toHaveLength(1);
+  });
+
   it('getJob returns null for missing id', async () => {
     expect(await store.getJob('00000000-0000-0000-0000-000000000000')).toBeNull();
   });

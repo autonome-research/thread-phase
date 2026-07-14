@@ -68,21 +68,23 @@ export {
 } from './agent/index.js';
 
 // Session — persisted event log + job runner. SqliteJobStore is the
-// bundled default; JobStore is the interface — bring your own backend if
-// needed. The interface is sync by deliberate choice for v1 (sqlite hot
-// path); see ROADMAP for the rationale.
+// bundled default; JobStore is the async interface — bring your own backend
+// if needed. SqliteJobStore wraps its synchronous hot path in async methods so
+// local and network-backed stores share one consistency contract.
 export {
   type JobStore,
   SqliteJobStore,
   JobRunner,
   type JobRecord,
   type EventRecord,
+  type JobFinalization,
   type JobStatus,
   type JobOwnership,
   type ListJobsOptions,
   type GetJobOptions,
   type JobRunnerOptions,
   type JobRunOptions,
+  type JobRunHandle,
   type LiveEvent,
 } from './session/index.js';
 
