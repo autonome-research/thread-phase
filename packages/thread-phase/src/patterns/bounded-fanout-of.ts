@@ -42,7 +42,11 @@ export interface BoundedFanoutOfOptions<TItem, TConfig> {
   eventBus?: AgentEventBus;
   /** Optional traceId propagated into each adapter's options.traceId. */
   traceId?: string;
-  /** Default 'fail-fast'. */
+  /**
+   * Default `fail-fast`. `collect` collects adapter results whose
+   * finishReason is `error`; mechanical setup/result/callback exceptions still
+   * reject because no valid AgentRunResult exists to place in that slot.
+   */
   mode?: BoundedFanoutOfMode;
   /** Called when an item's adapter result is in. Synchronous-only. */
   onItemEnd?: (item: TItem, index: number, result: AgentRunResult) => void;
@@ -61,118 +65,96 @@ export async function boundedFanoutOf<TItem, TConfig>(
   opts: BoundedFanoutOfOptions<TItem, TConfig>,
 ): Promise<AgentRunResult[]> {
   const items = opts.items;
+  if (!Number.isSafeInteger(opts.concurrency) || opts.concurrency < 1) {
+    throw new RangeError('boundedFanoutOf concurrency must be a positive safe integer');
+  }
   if (items.length === 0) return [];
 
-  const concurrency = Math.max(1, Math.min(opts.concurrency, items.length));
+  const concurrency = Math.min(opts.concurrency, items.length);
   const mode: BoundedFanoutOfMode = opts.mode ?? 'fail-fast';
   const results: Array<AgentRunResult | undefined> = new Array(items.length);
 
-  // Track every in-flight adapter run so fail-fast can abort them all in
-  // one pass. The entry holds the per-item controller (used to compose the
-  // adapter's signal via AbortSignal.any), the run handle itself (used to
-  // call abort() — belt-and-suspenders since the composite signal already
-  // covers it, but adapters may key off abort() rather than the signal),
-  // and the run's `result` promise so we can await adapter cleanup before
-  // resolving the fanout. Without that await, fail-fast resolves while
-  // adapter handles are still finalizing.
   interface InFlight {
     controller: AbortController;
     run: AgentRun;
     result: Promise<AgentRunResult>;
   }
   const inFlight = new Set<InFlight>();
-
-  type FailedRecord = { index: number; result: AgentRunResult };
-  let failed: FailedRecord | null = null;
+  let firstFailure: Error | undefined;
   let cursor = 0;
 
-  const abortAllInFlight = async (): Promise<void> => {
+  const abortAndSettle = async (): Promise<void> => {
     const snapshot = [...inFlight];
     for (const entry of snapshot) {
-      entry.controller.abort();
+      entry.controller.abort(firstFailure);
       entry.run.abort('boundedFanoutOf fail-fast');
     }
-    // Wait for every aborted run's `result` to settle so adapter-side cleanup
-    // (timers, sockets, subprocesses) finishes before the fanout returns.
-    // We allSettled because the runs may reject as `aborted` and we don't
-    // want to mask the original failure with the abort-induced one.
-    await Promise.allSettled(snapshot.map((e) => e.result));
+    await Promise.allSettled(snapshot.map((entry) => entry.result));
+  };
+
+  const fail = async (error: unknown): Promise<void> => {
+    if (firstFailure) return;
+    firstFailure = error instanceof Error ? error : new Error(String(error));
+    await abortAndSettle();
   };
 
   const worker = async (): Promise<void> => {
-    while (true) {
-      if (failed) return;
-      if (opts.signal?.aborted) return;
+    while (!firstFailure && !opts.signal?.aborted) {
       const i = cursor++;
       if (i >= items.length) return;
       const item = items[i]!;
-
-      const itemController = new AbortController();
-      const compositeSignal: AbortSignal = opts.signal
-        ? AbortSignal.any([opts.signal, itemController.signal])
-        : itemController.signal;
-
-      const config = opts.buildConfig(item, i);
-      const run = opts.adapter.adapter(config, {
-        signal: compositeSignal,
-        eventBus: opts.eventBus,
-        traceId: opts.traceId,
-      });
-
-      const entry: InFlight = { controller: itemController, run, result: run.result };
-      inFlight.add(entry);
-
-      // The adapter's events iterable is intentionally NOT consumed here.
-      // The event bus is the multi-subscriber seam; double-iteration would
-      // break the single-consumer invariant. Awaiting `result` is sufficient
-      // to start lazy adapters.
-      let result: AgentRunResult;
       try {
-        result = await run.result;
-      } finally {
-        inFlight.delete(entry);
-      }
+        const itemController = new AbortController();
+        const compositeSignal = opts.signal
+          ? AbortSignal.any([opts.signal, itemController.signal])
+          : itemController.signal;
+        const config = opts.buildConfig(item, i);
+        const run = opts.adapter.adapter(config, {
+          signal: compositeSignal,
+          eventBus: opts.eventBus,
+          traceId: opts.traceId,
+        });
+        const entry: InFlight = { controller: itemController, run, result: run.result };
+        inFlight.add(entry);
 
-      if (result.finishReason === 'error') {
-        if (mode === 'fail-fast') {
-          if (!failed) {
-            failed = { index: i, result };
-            opts.onItemError?.(item, i, result);
-            await abortAllInFlight();
-          }
+        let result: AgentRunResult;
+        try {
+          result = await run.result;
+        } finally {
+          inFlight.delete(entry);
+        }
+
+        if (result.finishReason === 'error' && mode === 'fail-fast') {
+          const failure = new BoundedFanoutOfError(i, result);
+          try { opts.onItemError?.(item, i, result); } catch { /* preserve primary failure */ }
+          await fail(failure);
           return;
         }
-        // collect: store and keep going.
+
         results[i] = result;
         opts.onItemEnd?.(item, i, result);
-        continue;
+      } catch (error) {
+        await fail(error);
+        return;
       }
-
-      results[i] = result;
-      opts.onItemEnd?.(item, i, result);
     }
   };
 
-  const workers: Promise<void>[] = [];
-  for (let w = 0; w < concurrency; w++) workers.push(worker());
-  await Promise.all(workers);
-
-  if (failed) {
-    const f: FailedRecord = failed;
-    throw new BoundedFanoutOfError(f.index, f.result);
+  const workers = Array.from({ length: concurrency }, () => worker());
+  const settlements = await Promise.allSettled(workers);
+  if (!firstFailure) {
+    const rejected = settlements.find(
+      (settlement): settlement is PromiseRejectedResult => settlement.status === 'rejected',
+    );
+    if (rejected) firstFailure = rejected.reason instanceof Error ? rejected.reason : new Error(String(rejected.reason));
   }
 
-  // collect mode may still have undefined slots if the outer signal aborted
-  // before some items were dispatched. Adapters honoring `compositeSignal`
-  // produce `finishReason: 'aborted'` results for items that started post-
-  // abort; items that never started leave the slot undefined. Fill those
-  // with a synthetic aborted result so the returned array stays position-
-  // stable with the input items array.
+  if (opts.signal?.aborted && mode === 'fail-fast') throw signalAbortError(opts.signal);
+  if (firstFailure) throw firstFailure;
+
   if (opts.signal?.aborted) {
     for (let i = 0; i < items.length; i++) {
-      if (results[i] === undefined) {
-        results[i] = syntheticAbortedResult();
-      }
+      if (results[i] === undefined) results[i] = syntheticAbortedResult();
     }
   }
 
@@ -187,6 +169,13 @@ export class BoundedFanoutOfError extends Error {
     super(`boundedFanoutOf failed at item ${itemIndex}: ${result.finishReason}`);
     this.name = 'BoundedFanoutOfError';
   }
+}
+
+function signalAbortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const error = new Error(typeof signal.reason === 'string' ? signal.reason : 'aborted');
+  error.name = 'AbortError';
+  return error;
 }
 
 function syntheticAbortedResult(): AgentRunResult {

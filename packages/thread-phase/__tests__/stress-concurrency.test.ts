@@ -47,76 +47,28 @@ function withHungGuard<T>(p: Promise<T>, ms: number, label = 'HUNG'): Promise<T>
   ]);
 }
 
-interface Deferred<T> {
-  promise: Promise<T>;
-  resolve: (v: T) => void;
-  reject: (e: unknown) => void;
-}
-function defer<T>(): Deferred<T> {
-  let resolve!: (v: T) => void;
-  let reject!: (e: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-/** Drain pending microtasks N times — used to let in-flight async work
- *  reach a checkpoint without resorting to wall-clock timers. */
-async function drainMicrotasks(n = 10): Promise<void> {
-  for (let i = 0; i < n; i++) await Promise.resolve();
-}
-
 // ---------------------------------------------------------------------------
 // boundedFanout — concurrency=0 / negative / Infinity boundaries.
 // ---------------------------------------------------------------------------
 
 describe('stress: boundedFanout concurrency boundaries', () => {
-  it('concurrency=0 with non-empty items must not hang (clamp to 1)', async () => {
-    const ran: number[] = [];
-    const promise = boundedFanout({
-      items: Array.from({ length: 10 }, (_, i) => i),
-      concurrency: 0,
-      runner: async (n) => {
-        await sleep(2);
-        ran.push(n);
-        return n;
-      },
-    });
-    const out = await withHungGuard(promise, 2000);
-    expect(out).toHaveLength(10);
-    expect(ran.sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-  });
-
-  it('concurrency=Infinity dispatches every item and returns results position-stable', async () => {
-    const N = 200;
-    // Each runner parks on an explicit release so we can observe peak
-    // concurrency without depending on microtask-scheduling specifics.
-    const release = defer<void>();
-    let inflight = 0;
-    let peakInflight = 0;
-
-    const fanoutPromise = boundedFanout({
-      items: Array.from({ length: N }, (_, i) => i),
-      concurrency: Infinity,
-      runner: async (n) => {
-        inflight++;
-        peakInflight = Math.max(peakInflight, inflight);
-        await release.promise;
-        inflight--;
-        return n;
-      },
-    });
-
-    // Drain enough microtasks for every runner to be parked on `release`.
-    await drainMicrotasks(20);
-    expect(peakInflight).toBe(N);
-
-    release.resolve();
-    const out = await fanoutPromise;
-    for (let i = 0; i < N; i++) expect(out[i]).toBe(i);
-  });
+  it.each([0, -1, 1.5, Number.NaN, Infinity])(
+    'rejects unsafe concurrency=%s before dispatch',
+    async (concurrency) => {
+      let ran = false;
+      await expect(
+        boundedFanout({
+          items: [1, 2, 3],
+          concurrency,
+          runner: async (item) => {
+            ran = true;
+            return item;
+          },
+        }),
+      ).rejects.toThrow(/positive safe integer/);
+      expect(ran).toBe(false);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

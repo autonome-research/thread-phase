@@ -70,7 +70,7 @@ export type FanOutResult<TResult> =
 
 export interface BoundedFanOutOptions<TItem, TResult> {
   items: ReadonlyArray<TItem>;
-  /** Max concurrent runners. Default 4. Clamped to [1, items.length]. */
+  /** Max concurrent runners. Default 4; must be a positive safe integer. */
   concurrency?: number;
   /** If set, only the first `maxItems` items are processed. */
   maxItems?: number;
@@ -113,70 +113,97 @@ export function boundedFanout<TItem, TResult>(
 export async function boundedFanout<TItem, TResult>(
   options: BoundedFanOutOptions<TItem, TResult>,
 ): Promise<TResult[] | FanOutResult<TResult>[]> {
+  if (
+    options.maxItems !== undefined &&
+    (!Number.isSafeInteger(options.maxItems) || options.maxItems < 0)
+  ) {
+    throw new RangeError('boundedFanout maxItems must be a non-negative safe integer');
+  }
+  const requestedConcurrency = options.concurrency ?? 4;
+  if (!Number.isSafeInteger(requestedConcurrency) || requestedConcurrency < 1) {
+    throw new RangeError('boundedFanout concurrency must be a positive safe integer');
+  }
+
   const items =
     options.maxItems !== undefined ? options.items.slice(0, options.maxItems) : options.items;
-
   if (items.length === 0) return [];
 
-  const concurrency = Math.max(1, Math.min(options.concurrency ?? 4, items.length));
+  const concurrency = Math.min(requestedConcurrency, items.length);
   const collect = options.mode === 'collect';
   const results: Array<TResult | FanOutResult<TResult> | undefined> = new Array(items.length);
   let cursor = 0;
-  const signal = options.signal;
+  let firstError: Error | undefined;
+  const failFastController = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, failFastController.signal])
+    : failFastController.signal;
 
-  // Already aborted before any dispatch.
-  //   - 'reject' mode: throw, matches HTTP-cancel semantics.
-  //   - 'collect' mode: short-circuit with synthetic AbortError slots so
-  //     consumers always get a full-length, position-stable array.
-  if (signal?.aborted) {
-    if (collect) return fillAbortedSlots([], items.length, signal);
-    throw signalAbortError(signal);
+  if (options.signal?.aborted) {
+    if (collect) return fillAbortedSlots([], items.length, options.signal);
+    throw signalAbortError(options.signal);
   }
 
   const worker = async (): Promise<void> => {
     while (true) {
-      if (signal?.aborted) return;
+      if (signal.aborted || firstError) return;
       const i = cursor++;
       if (i >= items.length) return;
       const item = items[i]!;
       try {
         const result = await options.runner(item, i, signal);
-        if (signal?.aborted) return;
-        if (collect) {
-          results[i] = { ok: true, value: result };
-        } else {
-          results[i] = result;
-        }
+        if (signal.aborted || firstError) return;
+        if (collect) results[i] = { ok: true, value: result };
+        else results[i] = result;
         options.onItemDone?.({ item, index: i, result });
       } catch (rawErr) {
         const error = toError(rawErr);
-        options.onItemError?.({ item, index: i, error });
-        if (collect) {
-          results[i] = { ok: false, error };
-          continue; // keep draining
+        if (collect) results[i] = { ok: false, error };
+        if (!collect && !firstError && !options.signal?.aborted) {
+          firstError = error;
+          failFastController.abort(error);
         }
-        throw error; // 'reject' mode: bubble out, Promise.all will reject
+        try {
+          options.onItemError?.({ item, index: i, error });
+        } catch (hookError) {
+          if (!firstError && !options.signal?.aborted) {
+            firstError = toError(hookError);
+            failFastController.abort(firstError);
+          }
+          return;
+        }
+        if (collect) continue;
+        return;
       }
     }
   };
 
   const workers: Promise<void>[] = [];
   for (let w = 0; w < concurrency; w++) workers.push(worker());
-  await Promise.all(workers);
-
-  // Aborted at some point after dispatch began.
-  //   - 'reject' mode: throw, partial results discarded (matches v1.0/1.1).
-  //   - 'collect' mode: soft-cancel — return what completed, fill the slots
-  //     of items that were never started (or whose runner exited via the
-  //     in-loop signal check before writing a result) with synthetic
-  //     AbortError FanOutResults. onItemError does NOT fire for these
-  //     synthetic fills — the runner never ran for them.
-  if (signal?.aborted) {
-    if (collect) {
-      return fillAbortedSlots(results as Array<FanOutResult<TResult> | undefined>, items.length, signal);
-    }
-    throw signalAbortError(signal);
+  // A fail-fast result is not exposed until all sibling workers settle.
+  // The local signal asks in-flight runners to abort; runners that ignore it
+  // delay rejection rather than continuing after a workflow turns terminal.
+  const settlements = await Promise.allSettled(workers);
+  const unexpectedWorkerFailure = settlements.find(
+    (settlement): settlement is PromiseRejectedResult => settlement.status === 'rejected',
+  );
+  if (unexpectedWorkerFailure && !firstError && !options.signal?.aborted) {
+    firstError = toError(unexpectedWorkerFailure.reason);
   }
+
+  // Caller cancellation is authoritative even when sibling runners reject
+  // with their own generic abort errors while unwinding.
+  if (options.signal?.aborted) {
+    if (collect) {
+      return fillAbortedSlots(
+        results as Array<FanOutResult<TResult> | undefined>,
+        items.length,
+        options.signal,
+      );
+    }
+    throw signalAbortError(options.signal);
+  }
+
+  if (firstError) throw firstError;
 
   return results as TResult[] | FanOutResult<TResult>[];
 }

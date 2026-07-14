@@ -355,6 +355,26 @@ describe('boundedFanoutOf — fail-fast mode', () => {
     expect(err.result.finishReason).toBe('error');
   });
 
+  it('aborts and awaits active siblings when buildConfig throws', async () => {
+    let siblingEnded = false;
+    const adapter = createScriptedAdapter();
+    await expect(
+      boundedFanoutOf({
+        items: [0, 1],
+        concurrency: 2,
+        adapter,
+        buildConfig: (item) => {
+          if (item === 1) throw new Error('configuration failed');
+          return {
+            delayMs: 10_000,
+            hooks: { onEnd: () => { siblingEnded = true; } },
+          };
+        },
+      }),
+    ).rejects.toThrow('configuration failed');
+    expect(siblingEnded).toBe(true);
+  });
+
   it('cancels remaining items so they never start after the first failure', async () => {
     let started = 0;
     const adapter = createScriptedAdapter();

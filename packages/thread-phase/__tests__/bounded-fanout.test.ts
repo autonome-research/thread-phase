@@ -223,6 +223,20 @@ describe('boundedFanout — onItemError telemetry', () => {
     expect(errors.find((e) => e.index === 1)!.message).toBe('even 2');
   });
 
+  it('never returns sparse success when onItemError itself throws', async () => {
+    await expect(
+      boundedFanout({
+        items: [1, 2, 3],
+        mode: 'collect',
+        runner: async (item) => {
+          if (item === 2) throw new Error('item failure');
+          return item;
+        },
+        onItemError: () => { throw new Error('telemetry failure'); },
+      }),
+    ).rejects.toThrow('telemetry failure');
+  });
+
   it("fires onItemError before rejecting in 'reject' mode", async () => {
     const onItemError = vi.fn();
     await expect(
@@ -255,7 +269,33 @@ describe('boundedFanout — signal forwarding', () => {
       signal: controller.signal,
     });
     expect(seenSignals).toHaveLength(3);
-    expect(seenSignals.every((s) => s === controller.signal)).toBe(true);
+    // The forwarded signal composes caller cancellation with fail-fast sibling
+    // cancellation, so identity differs while abort propagation is preserved.
+    expect(seenSignals.every((s) => s !== controller.signal && !s.aborted)).toBe(true);
+    controller.abort('after completion');
+    expect(seenSignals.every((s) => s.aborted)).toBe(true);
+  });
+
+  it('waits for signal-aware siblings to settle before rejecting fail-fast', async () => {
+    let siblingSettled = false;
+    const promise = boundedFanout({
+      items: ['slow', 'fail'],
+      concurrency: 2,
+      runner: async (item, _index, signal) => {
+        if (item === 'fail') throw new Error('primary failure');
+        await new Promise<void>((resolve) => {
+          signal?.addEventListener('abort', () => {
+            setTimeout(() => {
+              siblingSettled = true;
+              resolve();
+            }, 10);
+          }, { once: true });
+        });
+        return item;
+      },
+    });
+    await expect(promise).rejects.toThrow('primary failure');
+    expect(siblingSettled).toBe(true);
   });
 
   it('runner can observe the forwarded signal to abort early', async () => {
@@ -279,7 +319,7 @@ describe('boundedFanout — signal forwarding', () => {
       },
       signal: controller.signal,
     });
-    await expect(promise).rejects.toThrow();
+    await expect(promise).rejects.toThrow('user cancelled');
     // At least one in-flight runner observed the signal and unwound rather
     // than running its full 50ms timer.
     expect(unwoundEarly).toBeGreaterThan(0);
