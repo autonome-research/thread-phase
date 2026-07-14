@@ -61,6 +61,14 @@ afterEach(() => {
 });
 
 describe('streamToSSE — wire format', () => {
+  it('rejects response adapters without listener cleanup methods', async () => {
+    const jobId = await runner.create('invalid-response', null);
+    const res = { write: () => true, end() {}, on() {} } as unknown as SSEResponse;
+    await expect(streamToSSE({ runner, store, jobId, res })).rejects.toThrow(
+      'SSEResponse must implement off()',
+    );
+  });
+
   it('emits id/event/data lines per event and closes on done', async () => {
     const phase: Phase<Ctx> = {
       name: 'p',

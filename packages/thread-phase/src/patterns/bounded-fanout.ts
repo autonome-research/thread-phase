@@ -26,6 +26,7 @@
  *
  * `onItemError` fires regardless of mode, before the rejection in `'reject'`
  * mode and once per failed item in `'collect'` mode. Use it for telemetry.
+ * Callback failures are mechanical failures and reject in both modes.
  *
  * # Cancellation
  *

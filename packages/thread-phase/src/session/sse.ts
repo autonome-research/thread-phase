@@ -37,6 +37,11 @@ export async function streamToSSE(options: StreamToSSEOptions): Promise<void> {
   const { runner, store, jobId, res, afterId = 0 } = options;
   const heartbeatMs = options.heartbeatMs ?? 25_000;
   const pollMs = options.pollMs ?? 1_000;
+  for (const method of ['off', 'once'] as const) {
+    if (typeof res[method] !== 'function') {
+      throw new TypeError(`SSEResponse must implement ${method}()`);
+    }
+  }
   for (const [label, value] of [['heartbeatMs', heartbeatMs], ['pollMs', pollMs]] as const) {
     if (!Number.isSafeInteger(value) || value < 0) {
       throw new RangeError(`${label} must be a non-negative safe integer`);
