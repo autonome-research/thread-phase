@@ -12,7 +12,7 @@ A small TypeScript runtime for executing bounded, deterministic, composable sequ
 npm install @autonome-research/thread-phase-cli
 ```
 
-That's everything: library + adapter protocol + `thread-phase` CLI. The heavy agent SDKs (`@anthropic-ai/sdk`, `openai`, `@mariozechner/pi-coding-agent`) are optional peer deps — install only the ones whose adapter you use.
+That's everything: library + adapter protocol + `thread-phase` CLI. The heavy agent SDKs (`@anthropic-ai/sdk`, `openai`, `@earendil-works/pi-coding-agent`) are optional peer deps — install only the ones whose adapter you use.
 
 ## Hello world
 

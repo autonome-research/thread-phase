@@ -12,6 +12,7 @@ All notable changes to thread-phase will be documented here. The format is based
 - Added owner IDs, launch-source metadata, and stale-run reconciliation through `JobRunner.reconcileAbandoned()`.
 - Fail-fast `boundedFanout` now aborts and awaits sibling workers before rejecting; unsafe concurrency and item-limit values are rejected before dispatch.
 - Upgraded `better-sqlite3` to the Node 26-compatible 12.x line.
+- Upgraded the OpenAI runtime dependency to 6.x and the development test stack to Vitest 4.
 
 These changes extend the `JobStore` interface and are breaking for custom store implementations. Implementations must adopt boolean first-writer-wins terminal transitions, owner-aware claiming/heartbeat, and atomic `finalizeJob` / `finalizeAbandonedIfStale` methods.
 

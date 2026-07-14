@@ -1,5 +1,5 @@
 /**
- * Pi adapter — in-process via `@mariozechner/pi-coding-agent`.
+ * Pi adapter — in-process via `@earendil-works/pi-coding-agent`.
  *
  * Pi is a fully-featured TypeScript coding agent SDK. Unlike the
  * subprocess-based adapters (claude-code, codex-cli, ACP), pi runs in
@@ -82,7 +82,7 @@ export interface PiAgentConfig {
   continueSession?: boolean;
   /**
    * Pi model object — pass `getModel('provider', 'model')` from
-   * `@mariozechner/pi-ai`. When omitted, pi uses the default from
+   * `@earendil-works/pi-ai`. When omitted, pi uses the default from
    * settings.json.
    */
   model?: unknown;
@@ -162,10 +162,18 @@ function createPiAdapter(config: PiAgentConfig, options: AgentRunOptions = {}): 
       } else {
         // Dynamic import keeps pi-coding-agent out of the type/runtime
         // path for consumers who don't use this adapter.
-        const piModule = await import('@mariozechner/pi-coding-agent');
+        let piModule: typeof import('@earendil-works/pi-coding-agent');
+        try {
+          piModule = await import('@earendil-works/pi-coding-agent');
+        } catch {
+          throw new Error(
+            'piAgent requires the optional peer dep @earendil-works/pi-coding-agent. ' +
+              'Install it with: npm install @earendil-works/pi-coding-agent (requires Node >=22.19.0)',
+          );
+        }
         const factory = (piModule as { createAgentSession?: (opts: unknown) => Promise<{ session: unknown }> }).createAgentSession;
         if (typeof factory !== 'function') {
-          throw new Error('@mariozechner/pi-coding-agent: createAgentSession not exported');
+          throw new Error('@earendil-works/pi-coding-agent: createAgentSession not exported');
         }
         const result = await factory({
           cwd: config.cwd ?? process.cwd(),

@@ -16,7 +16,7 @@ Three npm packages, all at the same locked version (v3.x):
 npm install -g @autonome-research/thread-phase-cli
 
 # Optional, only if you use that adapter:
-# npm install -g @anthropic-ai/sdk @mariozechner/pi-coding-agent openai
+# npm install -g @anthropic-ai/sdk @earendil-works/pi-coding-agent openai
 ```
 
 ## When to reach for thread-phase

@@ -9,7 +9,7 @@ npm install -g @autonome-research/thread-phase-cli
 # …plus the agent SDKs your adapters actually use (optional, only when needed):
 npm install -g @anthropic-ai/sdk                # anthropicAgent
 npm install -g openai                           # codexAgent (Responses API)
-npm install -g @mariozechner/pi-coding-agent    # piAgent
+npm install -g @earendil-works/pi-coding-agent    # piAgent (Node.js >=22.19.0)
 ```
 
 ## Commands

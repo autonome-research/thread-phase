@@ -1,7 +1,7 @@
 /**
  * Real-binary smoke test for `piAgent`.
  *
- * Runs in-process via `@mariozechner/pi-coding-agent`. Pi auto-discovers
+ * Runs in-process via `@earendil-works/pi-coding-agent`. Pi auto-discovers
  * its model from `~/.pi/agent/settings.json` and providers from
  * `~/.pi/agent/models.json` — typical setup uses a local vLLM/Ollama or
  * a configured cloud provider.

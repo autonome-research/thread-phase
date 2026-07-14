@@ -33,7 +33,7 @@
     "@autonome-research/thread-phase-agents": "*",
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0",
-    "vitest": "^2.1.0"
+    "vitest": "^4.1.10"
   },
   "engines": {
     "node": "20.x || 22.x || 23.x || 24.x || 25.x || 26.x"

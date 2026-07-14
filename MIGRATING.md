@@ -30,6 +30,17 @@ Terminal setters return `boolean`; `false` means another owner or terminal trans
 
 The SQLite schema migration is automatic and additive. Existing PENDING/RUNNING/COMPLETED/FAILED rows remain readable.
 
+## Pi adapter SDK rename
+
+The optional `piAgent` SDK moved from `@mariozechner/pi-coding-agent` to `@earendil-works/pi-coding-agent`. Replace the old package when using the adapter:
+
+```bash
+npm uninstall @mariozechner/pi-coding-agent
+npm install @earendil-works/pi-coding-agent
+```
+
+The current Pi SDK requires Node.js 22.19.0 or newer; the rest of thread-phase retains its broader Node engine support.
+
 ---
 
 # Migrating from v4.0.x to v4.1.0
@@ -129,7 +140,7 @@ v3.0.0 is a cleanup + simplification release. Breaking changes are listed below 
 ```sh
 npm install @anthropic-ai/sdk                # for anthropicAgent
 npm install openai                           # for codexAgent (Responses API)
-npm install @mariozechner/pi-coding-agent    # for piAgent
+npm install @earendil-works/pi-coding-agent    # for piAgent
 # claude-code, codex-cli, hermes, openclaw need no SDK (subprocess-based).
 ```
 

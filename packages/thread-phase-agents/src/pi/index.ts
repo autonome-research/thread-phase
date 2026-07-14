@@ -1,5 +1,5 @@
 /**
- * Pi adapter entry. In-process via `@mariozechner/pi-coding-agent`.
+ * Pi adapter entry. In-process via `@earendil-works/pi-coding-agent`.
  *
  * The first adapter in this package that natively supports
  * `SteerableAgentRun.steer()` and `.followUp()`. Use `isSteerable`

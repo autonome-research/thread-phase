@@ -43,7 +43,8 @@ Install once:
 ```sh
 npm install -g @autonome-research/thread-phase-cli
 # …plus the agent SDKs your adapters use (optional; only when you import them):
-# npm install -g @anthropic-ai/sdk @mariozechner/pi-coding-agent openai
+# npm install -g @anthropic-ai/sdk @earendil-works/pi-coding-agent openai
+# piAgent's @earendil-works/pi-coding-agent SDK requires Node.js >=22.19.0.
 ```
 
 Each helper returns the default export of a `.thread-phase/pipelines/<name>.ts` file. Drop the file in, then `thread-phase run <name>` or `thread-phase serve`.
