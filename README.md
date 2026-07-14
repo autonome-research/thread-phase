@@ -2,7 +2,9 @@
 
 > Extensible automation building blocks for agent authors.
 
-A small TypeScript runtime for composing AI-agent calls into deterministic pipelines — cron jobs, webhooks, one-shots, agent chains. Drop a file into `.thread-phase/`, the framework picks it up.
+A small TypeScript runtime for executing bounded, deterministic, composable sequences of agent and code phases — cron jobs, webhooks, one-shots, agent chains, and reusable workflow extensions. Drop a file into `.thread-phase/`, the framework picks it up.
+
+“Deterministic” describes workflow structure: phase order, concurrency, branching, retries, cancellation, checkpoints, and terminal states are encoded. Agent output inside a phase remains probabilistic. thread-phase can own a standalone job or run inside a node of Temporal/LangGraph/Inngest; it is not a distributed DAG scheduler, product UI, or JavaScript sandbox.
 
 ## Install
 

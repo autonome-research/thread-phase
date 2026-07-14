@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+- Locked-version v5 release alongside the core reliable run-lifecycle APIs. Adapter behavior is unchanged.
+
 ## [3.2.2] — 2026-05-21
 
 Locked-version release in step with `@autonome-research/thread-phase-cli@3.2.2` (fixes a dangling `EXTENDING.md` ref in the `init` scaffold). No adapter changes.

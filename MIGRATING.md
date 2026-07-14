@@ -1,3 +1,37 @@
+# Migrating from v4.1.x to v5.0.0
+
+v5 makes the persisted run lifecycle authoritative and safe for workflow hosts deploying deterministic subagents.
+
+## Custom JobStore implementations
+
+`JobStore` now requires:
+
+- atomic owner claiming through boolean `setRunning(...)`
+- owner-aware heartbeat and terminal transitions, including atomic `enableHeartbeat(...)`
+- distinct `CANCELLED` and `ABANDONED` statuses
+- `setAbandonedIfStale(...)`
+- atomic `finalizeJob(...)` and `finalizeAbandonedIfStale(...)`, which commit terminal state and terminal event together
+
+Terminal setters return `boolean`; `false` means another owner or terminal transition won. Copy the SQLite implementation's first-writer-wins conditions when adapting another backend.
+
+## JobRunner
+
+- `JobRunner.start(...)` returns `{ jobId, signal, cancel, result }` immediately.
+- The runner automatically composes and installs `ctx.signal`.
+- Cancellation persists `cancellation_requested` followed by atomic `CANCELLED` + `cancelled` terminal state/event.
+- `reconcileAbandoned(...)` atomically verifies the heartbeat cutoff and owner identity.
+- Automatic staleness is opt-in through `heartbeatMs`; calling manual `ctx.heartbeat()` opts the run in on first use.
+
+## Fanout and SSE
+
+- Invalid concurrency now throws instead of clamping unsafe values.
+- Fail-fast fanout aborts and awaits active siblings before rejecting.
+- `SSEResponse` now requires `off('close', listener)` in addition to `on` and `once`, allowing backpressure cleanup without listener leaks.
+
+The SQLite schema migration is automatic and additive. Existing PENDING/RUNNING/COMPLETED/FAILED rows remain readable.
+
+---
+
 # Migrating from v4.0.x to v4.1.0
 
 v4.1.0 is **purely additive**. Nothing breaks. You can upgrade without changing any code.

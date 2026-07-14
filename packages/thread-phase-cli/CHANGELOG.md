@@ -4,6 +4,8 @@ All notable changes to this package are documented here.
 
 ## [Unreleased]
 
+- Locked-version v5 release consuming the core reliable run-lifecycle APIs. CLI behavior is unchanged.
+
 ## [3.2.2] — 2026-05-21
 
 ### Fixed

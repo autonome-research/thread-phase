@@ -38,16 +38,18 @@ Same signal underneath. Different names because each layer caches a reference to
 ## What gets persisted
 
 When cancellation happens during a `JobRunner.run`:
-1. `runner.cancel(jobId, reason)` aborts the controller
-2. `JobRunner` catches the AbortError, calls `store.setFailed(jobId, "cancelled: <reason>")`
-3. A synthesized `{ type: 'error', message: "cancelled: <reason>" }` event is appended to the event log
-4. `runner.run()` rejects with the AbortError (`err.name === 'AbortError'`)
 
-Live `job:${jobId}` subscribers see the synthesized error event before the promise rejection.
+1. `runner.cancel(jobId, reason)` appends `cancellation_requested` and aborts the controller.
+2. The runner-composed `ctx.signal` asks active phase work to unwind.
+3. `JobRunner` persists the job as `CANCELLED`, distinct from `FAILED`.
+4. A terminal `cancelled` event is appended after cancellation settles.
+5. `runner.run()` rejects with an AbortError (`err.name === 'AbortError'`).
+
+Live `job:${jobId}` subscribers therefore see request acknowledgement and terminal cancellation as separate events. The first persisted terminal state wins; a late success/error path cannot overwrite cancellation.
 
 ## Caveats
 
-- **Between-phase cancellation only by default.** `runPipeline` checks the signal between phases. Within a phase, the phase must observe `ctx.signal` itself.
-- **Cancellation reasons are strings, not Errors.** When you call `runner.cancel(jobId, 'user-stop')`, the resulting AbortError's message is `"cancelled: user-stop"`.
+- **Mid-phase cancellation is cooperative.** `JobRunner` automatically composes and installs `ctx.signal`, and `runPipeline` checks it between phases. Within a phase, pass `ctx.signal` into abortable calls. Code that blocks the event loop or ignores the signal cannot be interrupted by an in-process AbortController.
+- **Cancellation reasons are persisted as strings.** When you call `runner.cancel(jobId, 'user-stop')`, the resulting AbortError's message is `"cancelled: user-stop"` and `JobRecord.error` contains `"user-stop"`.
 - **`handle.cancel(eventId)` returns false if the pipeline already completed.** Idempotent.
 - **`handle.stop()` is NOT the same as cancelling all pipelines.** It stops the trigger from producing new events and waits for in-flight pipelines to drain naturally. To cancel everything in flight, iterate `handle.cancel(...)` first, then `await handle.stop()`.

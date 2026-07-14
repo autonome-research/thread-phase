@@ -4,6 +4,17 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+### Reliable run lifecycle
+
+- Added distinct persisted `CANCELLED` and `ABANDONED` states plus atomic owner claims, owner-guarded transitions, `JobStore.setCancelled` / `setAbandoned`, and atomic terminal status+event finalization methods.
+- Added `JobRunner.start()` and `JobRunHandle` for immediate run identity, signal, cancellation, and result access.
+- `JobRunner` now composes its controller with caller `ctx.signal`, restores context hooks after execution, records cancellation request acknowledgement, and prevents late terminal writes from replacing the first terminal state.
+- Added owner IDs, launch-source metadata, and stale-run reconciliation through `JobRunner.reconcileAbandoned()`.
+- Fail-fast `boundedFanout` now aborts and awaits sibling workers before rejecting; unsafe concurrency and item-limit values are rejected before dispatch.
+- Upgraded `better-sqlite3` to the Node 26-compatible 12.x line.
+
+These changes extend the `JobStore` interface and are breaking for custom store implementations. Implementations must adopt boolean first-writer-wins terminal transitions, owner-aware claiming/heartbeat, and atomic `finalizeJob` / `finalizeAbandonedIfStale` methods.
+
 ## [3.2.2] — 2026-05-21
 
 Locked-version release in step with `@autonome-research/thread-phase-cli@3.2.2` (fixes a dangling `EXTENDING.md` ref in the `init` scaffold). No core changes.

@@ -1,6 +1,8 @@
 # thread-phase
 
-A TypeScript framework that composes deterministic phases over **heterogeneous agents** — the iterated tool-use loop against OpenAI-compatible inference for raw model calls, the `AgentAdapter` protocol for delegating to ready agents (Claude Code, Hermes, Codex, OpenClaw, Anthropic SDK). Multi-phase pipelines with a typed shared context, persistent event logs, and concurrency-capped fanout.
+A TypeScript framework that composes deterministic phases over **heterogeneous agents** — the iterated tool-use loop against OpenAI-compatible inference for raw model calls, the `AgentAdapter` protocol for delegating to ready agents (Claude Code, Hermes, Codex, OpenClaw, Anthropic SDK). Multi-phase pipelines with a typed shared context, persistent event logs, cancellation, checkpoints, and concurrency-capped fanout.
+
+The workflow structure is deterministic: phase order, bounds, branching, retries, and terminal-state behavior are encoded in TypeScript. Agent output inside a phase remains probabilistic. thread-phase is a bounded execution substrate, not a distributed DAG scheduler or product UI.
 
 ```bash
 npm install @autonome-research/thread-phase
@@ -118,9 +120,9 @@ await runner.run(jobId, [phaseA, phaseB], ctx);
 // or subscribe live via runner.on(`job:${jobId}`, ...)
 ```
 
-`JobRunner.signalFor(jobId)` exposes the `AbortSignal` so phase code can wire it into individual `runAgentWithTools` calls — without that wiring, cancellation only halts between phases.
+`JobRunner` automatically composes its cancellation signal with any caller-provided signal and installs the result as `ctx.signal`. Phase code passes `ctx.signal` into `runAgentWithTools`, adapters, HTTP calls, or other abortable work. `runner.start(...)` returns an immediate run handle with `signal`, `cancel()`, and `result`; `signalFor(jobId)` remains available for existing integrations.
 
-The interface is sync by design (sqlite hot path; fire-and-forget event writes). Async backends will land as an additive `JobStoreAsync` interface if/when needed; see [ROADMAP](./ROADMAP.md).
+`JobStore` is asynchronous so SQLite, Postgres, Redis, and network-backed implementations share one consistency contract. The bundled `SqliteJobStore` keeps better-sqlite3's synchronous hot path internally and exposes it through the same Promise-based interface.
 
 ### `AgentAdapter` — the extension surface
 

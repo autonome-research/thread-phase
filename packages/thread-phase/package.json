@@ -1,6 +1,6 @@
 {
   "name": "@autonome-research/thread-phase",
-  "version": "4.1.0",
+  "version": "5.0.0",
   "description": "TypeScript substrate for building automation workflows that coordinate AI agents. Phase ordering, typed shared state, persistence, fanout, event flow.",
   "license": "MIT",
   "type": "module",
@@ -31,7 +31,7 @@
   },
   "dependencies": {
     "ajv": "^8.17.0",
-    "better-sqlite3": "^11.5.0",
+    "better-sqlite3": "^12.11.1",
     "openai": "^4.77.0"
   },
   "devDependencies": {
@@ -55,7 +55,7 @@
     }
   },
   "engines": {
-    "node": ">=20"
+    "node": "20.x || 22.x || 23.x || 24.x || 25.x || 26.x"
   },
   "repository": {
     "type": "git",
