@@ -189,6 +189,17 @@ export function createAgentEventPersistenceBridge(
     });
   };
 
+  const deliverPending = (
+    kind: AgentEventPersistenceFailureKind,
+    state: FailureState,
+  ): void => {
+    if (state.active) return;
+    const pending = state.pending;
+    if (!pending) return;
+    state.pending = undefined;
+    deliver(kind, state, pending.accumulator, pending);
+  };
+
   const report = (
     kind: AgentEventPersistenceFailureKind,
     event: AgentEvent,
@@ -200,35 +211,29 @@ export function createAgentEventPersistenceBridge(
       failureStates.set(kind, state);
     }
 
-    if (state.active) {
-      if (state.pending) {
-        const pending = state.pending;
-        state.pending = {
-          ...pending,
-          accumulator: {
-            ...pending.accumulator,
-            occurrences: pending.accumulator.occurrences + 1,
-          },
-        };
-      } else {
-        const batch = newBatch();
-        state.pending = {
-          ...batch,
-          accumulator: { event, error: errorFrom(error), occurrences: 1 },
-        };
-        state.barrier = batch.settled;
-      }
+    if (state.pending) {
+      const pending = state.pending;
+      state.pending = {
+        ...pending,
+        accumulator: {
+          ...pending.accumulator,
+          occurrences: pending.accumulator.occurrences + 1,
+        },
+      };
       return;
     }
 
     const batch = newBatch();
+    state.pending = {
+      ...batch,
+      accumulator: { event, error: errorFrom(error), occurrences: 1 },
+    };
     state.barrier = batch.settled;
-    deliver(
-      kind,
-      state,
-      { event, error: errorFrom(error), occurrences: 1 },
-      batch,
-    );
+    if (!state.active) {
+      // Defer initial delivery so a synchronous failure burst is aggregated
+      // before its immutable public notification is materialized.
+      queueMicrotask(() => deliverPending(kind, state));
+    }
   };
 
   const failureBarrier = (): Promise<void> =>

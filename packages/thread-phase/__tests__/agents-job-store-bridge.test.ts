@@ -182,7 +182,7 @@ describe('persistAgentEventsToJobStore', () => {
       },
     });
     bus.emit({ type: 'text', source: 'mock', delta: 'accepted' });
-    for (let index = 0; index < 10_000; index += 1) {
+    for (let index = 0; index < 5_000; index += 1) {
       bus.emit({ type: 'text', source: 'mock', delta: `overflow-${index}` });
     }
 
@@ -191,9 +191,13 @@ describe('persistAgentEventsToJobStore', () => {
     expect(failures[0]).toMatchObject({
       kind: 'overflow',
       event: { delta: 'overflow-0' },
-      occurrences: 1,
+      occurrences: 5_000,
     });
     expect(Object.isFrozen(failures[0])).toBe(true);
+
+    for (let index = 5_000; index < 10_000; index += 1) {
+      bus.emit({ type: 'text', source: 'mock', delta: `overflow-${index}` });
+    }
 
     let flushed = false;
     const flushPromise = bridge.flush().then(() => {
@@ -207,11 +211,11 @@ describe('persistAgentEventsToJobStore', () => {
     releaseObserver[0]!.resolve();
     await observerStarted[1]!.promise;
     expect(failures).toHaveLength(2);
-    expect(failures[0]?.occurrences).toBe(1);
+    expect(failures[0]?.occurrences).toBe(5_000);
     expect(failures[1]).toMatchObject({
       kind: 'overflow',
-      event: { delta: 'overflow-1' },
-      occurrences: 9_999,
+      event: { delta: 'overflow-5000' },
+      occurrences: 5_000,
     });
     expect(Object.isFrozen(failures[1])).toBe(true);
     expect(flushed).toBe(false);
