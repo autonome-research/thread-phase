@@ -31,6 +31,8 @@ export {
   type AgentCapabilities,
   type AgentEvent,
   type AgentEventBus,
+  type AgentEventHandler,
+  type AgentEventHandlerFailure,
   type AgentFinishReason,
   type AgentRun,
   type AgentRunOptions,

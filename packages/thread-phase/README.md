@@ -140,6 +140,8 @@ interface AgentRun {
 
 Canonical events: `agent_start | text | thinking | tool_call | tool_result | turn_end | agent_end | error | native`. Every event carries a `source` field (the adapter's id) so heterogeneous adapter events flow through one `AgentEventBus` without losing provenance.
 
+`AgentEventBus.emit(event)` is synchronous and always returns `void`; it starts each subscriber in registration order without awaiting returned promises, so use the bus for observation rather than sequencing. A subscriber throw or rejection does not escape `emit` or stop healthy subscribers. Register `bus.onHandlerError(({ handler, event, error }) => ...)` to observe these failures; non-`Error` values are normalized to `Error`. Error observers are also fire-and-forget, and their own failures are contained rather than recursively reported. Both `on` and `onHandlerError` return idempotent unsubscribe callbacks.
+
 Conversation state across phases lives in the `Thread` primitive — canonical events plus per-adapter resume tokens. Same-adapter chains (claude-code → claude-code) resume natively via the adapter's session; cross-adapter chains render events back to text via `threadToMessages`.
 
 Memory across runs is outsourced: `MemoryProvider` is just a TypeScript interface (`recall(scope, query?) / remember(scope, events)`). thread-phase ships no implementations; bind Honcho, Letta, Mem0, or a custom backend yourself. See [`examples/honcho-memory.ts`](./examples/honcho-memory.ts).

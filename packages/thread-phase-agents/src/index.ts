@@ -77,6 +77,8 @@ export type {
   AgentCapabilities,
   AgentEvent,
   AgentEventBus,
+  AgentEventHandler,
+  AgentEventHandlerFailure,
   AgentFinishReason,
   AgentRun,
   AgentRunOptions,

@@ -1,23 +1,10 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { createEventBus } from '../src/agents/event-bus.js';
-import type { AgentEvent, AgentEventBus } from '../src/agents/protocol.js';
-
-type EventHandler = (event: AgentEvent) => void | Promise<void>;
-
-interface HandlerFailure {
-  handler: EventHandler;
-  event: AgentEvent;
-  error: Error;
-}
-
-interface ObservableEventBus extends AgentEventBus {
-  onHandlerError(handler: (failure: HandlerFailure) => void | Promise<void>): () => void;
-}
-
-function observableBus(): ObservableEventBus {
-  // This feature specifies the additive surface before its implementation.
-  return createEventBus() as ObservableEventBus;
-}
+import type {
+  AgentEvent,
+  AgentEventHandler,
+  AgentEventHandlerFailure,
+} from '../src/agents/protocol.js';
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -142,9 +129,9 @@ describe('AgentEventBus handler-failure contract', () => {
   });
 
   it('reports the failed handler, original event, and a normalized Error', () => {
-    const bus = observableBus();
-    const failures: HandlerFailure[] = [];
-    const failedHandler: EventHandler = () => {
+    const bus = createEventBus();
+    const failures: AgentEventHandlerFailure[] = [];
+    const failedHandler: AgentEventHandler = () => {
       throw 'non-error failure';
     };
 
@@ -160,12 +147,12 @@ describe('AgentEventBus handler-failure contract', () => {
   });
 
   it('reports delayed asynchronous rejection through the same observable path', async () => {
-    const bus = observableBus();
+    const bus = createEventBus();
     const release = deferred();
     const entered = deferred();
-    const observed = deferred<HandlerFailure>();
+    const observed = deferred<AgentEventHandlerFailure>();
     const failure = new Error('delayed observable failure');
-    const failedHandler: EventHandler = async () => {
+    const failedHandler: AgentEventHandler = async () => {
       entered.resolve();
       await release.promise;
       throw failure;
@@ -182,11 +169,11 @@ describe('AgentEventBus handler-failure contract', () => {
   });
 
   it('contains error-observer failures without recursive error reporting', async () => {
-    const bus = observableBus();
+    const bus = createEventBus();
     const releaseObserver = deferred();
     const observerEntered = deferred();
-    const observed: HandlerFailure[] = [];
-    const failedHandler: EventHandler = () => {
+    const observed: AgentEventHandlerFailure[] = [];
+    const failedHandler: AgentEventHandler = () => {
       throw new Error('ordinary subscriber failure');
     };
 
