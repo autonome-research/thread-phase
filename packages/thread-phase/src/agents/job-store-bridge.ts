@@ -30,6 +30,159 @@ export interface PipeAgentEventsOptions {
   key?: string | ((event: AgentEvent) => string);
 }
 
+export type AgentEventPersistenceFailureKind = 'append' | 'overflow';
+
+/** A persistence failure reported by {@link createAgentEventPersistenceBridge}. */
+export interface AgentEventPersistenceFailure {
+  kind: AgentEventPersistenceFailureKind;
+  event: AgentEvent;
+  error: Error;
+}
+
+export type AgentEventPersistenceFailureHandler = (
+  failure: AgentEventPersistenceFailure,
+) => void | Promise<void>;
+
+export interface AgentEventPersistenceOptions extends PipeAgentEventsOptions {
+  /**
+   * Maximum number of accepted events waiting for, or currently undergoing,
+   * persistence. Must be a positive integer. Default: 1024.
+   */
+  capacity?: number;
+  /** Optional failure observer installed before the bus subscription starts. */
+  onFailure?: AgentEventPersistenceFailureHandler;
+}
+
+/** Handle for an ordered, bounded AgentEvent persistence subscription. */
+export interface AgentEventPersistenceBridge {
+  /** Wait for every event accepted before this call to settle. */
+  flush(): Promise<void>;
+  /** Stop accepting events and drain accepted work. Idempotent. */
+  close(): Promise<void>;
+  /** Observe append failures and events rejected because the queue is full. */
+  onFailure(handler: AgentEventPersistenceFailureHandler): () => void;
+}
+
+function errorFrom(value: unknown): Error {
+  if (value instanceof Error) return value;
+  try {
+    return new Error(String(value));
+  } catch {
+    return new Error('Unknown persistence failure');
+  }
+}
+
+function eventKey(
+  options: PipeAgentEventsOptions,
+): (event: AgentEvent) => string {
+  return typeof options.key === 'function'
+    ? options.key
+    : options.key !== undefined
+      ? () => options.key as string
+      : (event: AgentEvent): string => `agent:${event.source}:${event.type}`;
+}
+
+/**
+ * Persist adapter events through a finite, serial queue.
+ *
+ * Events accepted from the synchronous bus are appended in input order.
+ * Once `capacity` accepted events are outstanding, later events are rejected
+ * and reported as `overflow` failures rather than creating an unbounded
+ * promise backlog. Append failures are reported and do not stall later work.
+ * `flush` and `close` resolve after accepted appends settle, including failed
+ * appends; use `onFailure` to observe those failures.
+ */
+export function createAgentEventPersistenceBridge(
+  bus: AgentEventBus,
+  store: JobStore,
+  jobId: string,
+  options: AgentEventPersistenceOptions = {},
+): AgentEventPersistenceBridge {
+  const capacity = options.capacity ?? 1024;
+  if (!Number.isSafeInteger(capacity) || capacity <= 0) {
+    throw new RangeError('capacity must be a positive safe integer');
+  }
+
+  const dropTypes = new Set(options.dropTypes ?? []);
+  const keyFn = eventKey(options);
+  const failureHandlers = new Set<AgentEventPersistenceFailureHandler>();
+  if (options.onFailure) failureHandlers.add(options.onFailure);
+
+  let outstanding = 0;
+  let closed = false;
+  let tail: Promise<void> = Promise.resolve();
+  let closePromise: Promise<void> | undefined;
+
+  const report = (
+    kind: AgentEventPersistenceFailureKind,
+    event: AgentEvent,
+    error: unknown,
+  ): void => {
+    const failure = { kind, event, error: errorFrom(error) };
+    for (const handler of failureHandlers) {
+      try {
+        void Promise.resolve(handler(failure)).catch(() => {});
+      } catch {
+        // Failure observers are terminal sinks and must not disrupt draining.
+      }
+    }
+  };
+
+  const unsubscribe = bus.on((event) => {
+    if (closed || dropTypes.has(event.type)) return;
+    if (outstanding >= capacity) {
+      report(
+        'overflow',
+        event,
+        new Error(`AgentEvent persistence capacity ${capacity} exceeded`),
+      );
+      return;
+    }
+
+    outstanding += 1;
+    tail = tail
+      .then(async () => {
+        const pipelineEvent: PipelineEvent = {
+          type: 'data',
+          key: keyFn(event),
+          value: event,
+        };
+        await store.appendEvent(jobId, pipelineEvent);
+      })
+      .catch((error: unknown) => {
+        report('append', event, error);
+      })
+      .finally(() => {
+        outstanding -= 1;
+      });
+  });
+
+  const bridge: AgentEventPersistenceBridge = {
+    flush() {
+      return tail;
+    },
+    close() {
+      if (!closePromise) {
+        closed = true;
+        unsubscribe();
+        closePromise = tail;
+      }
+      return closePromise;
+    },
+    onFailure(handler) {
+      failureHandlers.add(handler);
+      return () => {
+        failureHandlers.delete(handler);
+      };
+    },
+  };
+
+  return bridge;
+}
+
+/** Alias emphasizing the bridge's persistence action. */
+export const persistAgentEventsToJobStore = createAgentEventPersistenceBridge;
+
 /**
  * Subscribe to a bus and append every agent event to the JobStore
  * under the given job id. Returns an unsubscribe function — call it
@@ -47,11 +200,7 @@ export function pipeAgentEventsToJobStore(
   options: PipeAgentEventsOptions = {},
 ): () => void {
   const dropTypes = new Set(options.dropTypes ?? []);
-  const keyFn = typeof options.key === 'function'
-    ? options.key
-    : options.key !== undefined
-      ? () => options.key as string
-      : (event: AgentEvent): string => `agent:${event.source}:${event.type}`;
+  const keyFn = eventKey(options);
 
   return bus.on((event) => {
     if (dropTypes.has(event.type)) return;
@@ -61,10 +210,10 @@ export function pipeAgentEventsToJobStore(
       value: event,
     };
     // Fire-and-forget: the bus signature is sync (`(event) => void`) but
-    // appendEvent is async in v3. We swallow rejections so a store
-    // failure doesn't poison the bus or surface as an unhandled
-    // rejection. Callers wanting failure visibility should subscribe
-    // a separate logging handler.
+    // appendEvent is async in v3. We swallow rejections so a store failure
+    // doesn't poison the bus or surface as an unhandled rejection. Callers
+    // needing bounded delivery, draining, or failure visibility should use
+    // createAgentEventPersistenceBridge instead.
     try {
       const result = store.appendEvent(jobId, pipelineEvent);
       if (result && typeof (result as Promise<number>).then === 'function') {

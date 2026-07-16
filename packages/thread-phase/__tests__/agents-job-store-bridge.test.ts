@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   createEventBus,
+  persistAgentEventsToJobStore,
   pipeAgentEventsToJobStore,
   type AgentEvent,
+  type AgentEventPersistenceFailure,
 } from '../src/agents/index.js';
 import { SqliteJobStore } from '../src/session/index.js';
 
@@ -10,10 +12,155 @@ function newStore(): SqliteJobStore {
   return new SqliteJobStore(':memory:');
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 // The bridge subscribes synchronously but appendEvent is now async — events
 // are persisted on the next microtask. Tests flush by awaiting a microtask
 // before reading back.
 const flush = (): Promise<void> => new Promise((r) => setImmediate(r));
+
+describe('persistAgentEventsToJobStore', () => {
+  it('serializes accepted appends in bus input order and flushes deterministically', async () => {
+    const store = newStore();
+    const jobId = await store.createJob('ordered', null);
+    const bus = createEventBus();
+    const originalAppend = store.appendEvent.bind(store);
+    const gates = [deferred(), deferred(), deferred()];
+    const starts = [deferred(), deferred(), deferred()];
+    const startedKeys: string[] = [];
+
+    store.appendEvent = async (id, event) => {
+      const index = startedKeys.length;
+      startedKeys.push(event.type === 'data' ? event.key : event.type);
+      starts[index]!.resolve();
+      await gates[index]!.promise;
+      return originalAppend(id, event);
+    };
+
+    const bridge = persistAgentEventsToJobStore(bus, store, jobId, { capacity: 3 });
+    bus.emit({ type: 'text', source: 'mock', delta: 'first' });
+    bus.emit({ type: 'thinking', source: 'mock', delta: 'second' });
+    bus.emit({ type: 'agent_end', source: 'mock', reason: 'stop' });
+    const flushed = bridge.flush();
+
+    await starts[0]!.promise;
+    expect(startedKeys).toEqual(['agent:mock:text']);
+    gates[0]!.resolve();
+    await starts[1]!.promise;
+    expect(startedKeys).toEqual(['agent:mock:text', 'agent:mock:thinking']);
+    gates[1]!.resolve();
+    await starts[2]!.promise;
+    gates[2]!.resolve();
+    await flushed;
+
+    const records = await store.getEvents(jobId);
+    expect(records.map((record) => record.data.type === 'data' && record.data.key)).toEqual([
+      'agent:mock:text',
+      'agent:mock:thinking',
+      'agent:mock:agent_end',
+    ]);
+    await bridge.close();
+    store.close();
+  });
+
+  it('rejects overflow explicitly while retaining and draining accepted work', async () => {
+    const store = newStore();
+    const jobId = await store.createJob('bounded', null);
+    const bus = createEventBus();
+    const originalAppend = store.appendEvent.bind(store);
+    const firstStarted = deferred();
+    const releaseFirst = deferred();
+    const failures: AgentEventPersistenceFailure[] = [];
+    let appendCount = 0;
+
+    store.appendEvent = async (id, event) => {
+      appendCount += 1;
+      if (appendCount === 1) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+      }
+      return originalAppend(id, event);
+    };
+
+    const bridge = persistAgentEventsToJobStore(bus, store, jobId, {
+      capacity: 2,
+      onFailure: (failure) => failures.push(failure),
+    });
+    bus.emit({ type: 'text', source: 'mock', delta: 'accepted-1' });
+    bus.emit({ type: 'text', source: 'mock', delta: 'accepted-2' });
+    bus.emit({ type: 'text', source: 'mock', delta: 'overflow' });
+
+    await firstStarted.promise;
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      kind: 'overflow',
+      event: { type: 'text', delta: 'overflow' },
+    });
+    releaseFirst.resolve();
+    await bridge.flush();
+    expect(await store.getEvents(jobId)).toHaveLength(2);
+    await bridge.close();
+    store.close();
+  });
+
+  it('observes append failures, continues draining, and closes idempotently', async () => {
+    const store = newStore();
+    const jobId = await store.createJob('failures', null);
+    const bus = createEventBus();
+    const originalAppend = store.appendEvent.bind(store);
+    const failures: AgentEventPersistenceFailure[] = [];
+    const attempted: string[] = [];
+
+    store.appendEvent = async (id, event) => {
+      const delta = event.type === 'data'
+        && typeof event.value === 'object'
+        && event.value !== null
+        && 'delta' in event.value
+        ? String(event.value.delta)
+        : '';
+      attempted.push(delta);
+      if (delta === 'bad') throw new Error('disk unavailable');
+      return originalAppend(id, event);
+    };
+
+    const bridge = persistAgentEventsToJobStore(bus, store, jobId, { capacity: 3 });
+    const unsubscribeFailure = bridge.onFailure((failure) => failures.push(failure));
+    bus.emit({ type: 'text', source: 'mock', delta: 'before' });
+    bus.emit({ type: 'text', source: 'mock', delta: 'bad' });
+    bus.emit({ type: 'text', source: 'mock', delta: 'after' });
+
+    const firstClose = bridge.close();
+    expect(bridge.close()).toBe(firstClose);
+    bus.emit({ type: 'text', source: 'mock', delta: 'after-close' });
+    await firstClose;
+
+    expect(attempted).toEqual(['before', 'bad', 'after']);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.kind).toBe('append');
+    expect(failures[0]?.error.message).toBe('disk unavailable');
+    expect(await store.getEvents(jobId)).toHaveLength(2);
+    unsubscribeFailure();
+    store.close();
+  });
+
+  it('validates finite queue capacity before subscribing', () => {
+    const bus = createEventBus();
+    const store = newStore();
+    expect(() => persistAgentEventsToJobStore(bus, store, 'job', { capacity: 0 })).toThrow(
+      /positive safe integer/,
+    );
+    expect(() => persistAgentEventsToJobStore(bus, store, 'job', { capacity: Infinity })).toThrow(
+      /positive safe integer/,
+    );
+    store.close();
+  });
+});
 
 describe('pipeAgentEventsToJobStore', () => {
   it('appends every bus event to the job store under default keys', async () => {
