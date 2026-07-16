@@ -157,8 +157,8 @@ describe('persistAgentEventsToJobStore', () => {
     const appendStarted = deferred();
     const appendFinished = deferred();
     const releaseAppend = deferred();
-    const observerStarted = [deferred(), deferred()];
-    const releaseObserver = [deferred(), deferred()];
+    const observerStarted = [deferred(), deferred(), deferred()];
+    const releaseObserver = [deferred(), deferred(), deferred()];
     const failures: AgentEventPersistenceFailure[] = [];
     const occurrencesAtDispatch: number[] = [];
     const originalAppend = store.appendEvent.bind(store);
@@ -182,20 +182,18 @@ describe('persistAgentEventsToJobStore', () => {
       },
     });
     bus.emit({ type: 'text', source: 'mock', delta: 'accepted' });
-    for (let index = 0; index < 5_000; index += 1) {
-      bus.emit({ type: 'text', source: 'mock', delta: `overflow-${index}` });
-    }
+    bus.emit({ type: 'text', source: 'mock', delta: 'overflow-0' });
 
     await observerStarted[0]!.promise;
     expect(failures).toHaveLength(1);
     expect(failures[0]).toMatchObject({
       kind: 'overflow',
       event: { delta: 'overflow-0' },
-      occurrences: 5_000,
+      occurrences: 1,
     });
     expect(Object.isFrozen(failures[0])).toBe(true);
 
-    for (let index = 5_000; index < 10_000; index += 1) {
+    for (let index = 1; index < 10_000; index += 1) {
       bus.emit({ type: 'text', source: 'mock', delta: `overflow-${index}` });
     }
 
@@ -203,28 +201,38 @@ describe('persistAgentEventsToJobStore', () => {
     const flushPromise = bridge.flush().then(() => {
       flushed = true;
     });
+    bus.emit({ type: 'text', source: 'mock', delta: 'post-flush-overflow' });
+
+    await observerStarted[1]!.promise;
+    expect(failures).toHaveLength(2);
+    expect(failures[0]?.occurrences).toBe(1);
+    expect(failures[1]).toMatchObject({
+      kind: 'overflow',
+      event: { delta: 'overflow-1' },
+      occurrences: 9_999,
+    });
+    expect(Object.isFrozen(failures[1])).toBe(true);
+
     await appendStarted.promise;
     releaseAppend.resolve();
     await appendFinished.promise;
     expect(flushed).toBe(false);
 
     releaseObserver[0]!.resolve();
-    await observerStarted[1]!.promise;
-    expect(failures).toHaveLength(2);
-    expect(failures[0]?.occurrences).toBe(5_000);
-    expect(failures[1]).toMatchObject({
-      kind: 'overflow',
-      event: { delta: 'overflow-5000' },
-      occurrences: 5_000,
-    });
-    expect(Object.isFrozen(failures[1])).toBe(true);
-    expect(flushed).toBe(false);
-
     releaseObserver[1]!.resolve();
+    await observerStarted[2]!.promise;
     await flushPromise;
     expect(flushed).toBe(true);
+    expect(failures[2]).toMatchObject({
+      kind: 'overflow',
+      event: { delta: 'post-flush-overflow' },
+      occurrences: 1,
+    });
+    expect(Object.isFrozen(failures[2])).toBe(true);
     expect(failures.map((failure) => failure.occurrences)).toEqual(occurrencesAtDispatch);
-    expect(occurrencesAtDispatch.reduce((total, count) => total + count, 0)).toBe(10_000);
+    expect(occurrencesAtDispatch.slice(0, 2).reduce((total, count) => total + count, 0)).toBe(10_000);
+
+    releaseObserver[2]!.resolve();
     await bridge.close();
     store.close();
   });
