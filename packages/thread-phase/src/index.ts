@@ -84,6 +84,7 @@ export {
   type GetJobOptions,
   type JobRunnerOptions,
   type JobRunOptions,
+  type JobRunDrain,
   type JobRunHandle,
   type LiveEvent,
 } from './session/index.js';

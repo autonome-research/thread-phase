@@ -167,6 +167,19 @@ await persistence.close(); // unsubscribe and drain; safe to call repeatedly
 
 Use `pipeAgentEventsToJobStore` only when best-effort telemetry is sufficient: it preserves the existing synchronous call shape but offers no delivery barrier or failure signal. Use `createAgentEventPersistenceBridge` when shutdown or terminal work must wait for accepted events. Its capacity counts queued and currently appending events; events emitted while full are rejected and reported as `overflow`, append failures are reported as `append`, and later accepted events continue draining in input order. `flush()` and `close()` resolve after accepted appends settle, including failed appends, so install `onFailure` when failures must be acted on.
 
+Register generic asynchronous cleanup with `JobRunOptions.drains` when accepted work must settle before the job's terminal event and state are persisted:
+
+```ts
+await runner.run(jobId, phases, ctx, finalResult, {
+  drains: [
+    () => persistence.close(),
+    () => outputWriter.flush(),
+  ],
+});
+```
+
+Drains run sequentially in registration order, and every drain is attempted. They are callbacks rather than AgentEventBus-specific objects, so `JobRunner` remains independent of adapters and event delivery. A drain failure turns an otherwise successful run into `FAILED`. If pipeline failure and drain failure coincide, the pipeline failure remains the persisted terminal reason; cancellation similarly takes precedence over both. The rejected `AggregateError` exposes all accompanying drain failures, so cleanup loss is not silent. Terminal persistence and runner hook shutdown happen only after draining finishes.
+
 Conversation state across phases lives in the `Thread` primitive — canonical events plus per-adapter resume tokens. Same-adapter chains (claude-code → claude-code) resume natively via the adapter's session; cross-adapter chains render events back to text via `threadToMessages`.
 
 Memory across runs is outsourced: `MemoryProvider` is just a TypeScript interface (`recall(scope, query?) / remember(scope, events)`). thread-phase ships no implementations; bind Honcho, Letta, Mem0, or a custom backend yourself. See [`examples/honcho-memory.ts`](./examples/honcho-memory.ts).

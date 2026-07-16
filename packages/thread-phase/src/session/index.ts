@@ -15,6 +15,7 @@ export {
   JobRunner,
   type JobRunnerOptions,
   type JobRunOptions,
+  type JobRunDrain,
   type JobRunHandle,
   type LiveEvent,
 } from './job-runner.js';

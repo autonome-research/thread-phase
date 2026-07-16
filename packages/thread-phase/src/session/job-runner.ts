@@ -28,6 +28,8 @@ export interface JobRunnerOptions {
   heartbeatMs?: number;
 }
 
+export type JobRunDrain = () => void | PromiseLike<void>;
+
 export interface JobRunOptions {
   /** Caller-supplied logical session id recorded on the JobRecord. */
   sessionId?: string;
@@ -35,6 +37,16 @@ export interface JobRunOptions {
   ownership?: JobOwnership;
   /** Host-defined source such as `pi-tool`, `cron`, or `webhook`. */
   launchSource?: string;
+  /**
+   * Asynchronous resources to drain, in registration order, before any
+   * terminal job transition and before the runner releases its local hooks.
+   *
+   * All drains are attempted even when one fails. On an otherwise successful
+   * run, drain failure makes the job FAILED. A pipeline failure or cancellation
+   * remains authoritative; accompanying drain failures are exposed on the
+   * rejected AggregateError without replacing the persisted terminal reason.
+   */
+  drains?: ReadonlyArray<JobRunDrain>;
 }
 
 /** Immediate handle returned by {@link JobRunner.start}. */
@@ -195,6 +207,25 @@ export class JobRunner extends EventEmitter {
     let eventCount = 0;
     let stopReason: string | undefined;
     let ownershipAcquired = false;
+    const registeredDrains = [...(options.drains ?? [])];
+    let drainResult: Promise<unknown[]> | undefined;
+
+    const drainResources = (): Promise<unknown[]> => {
+      if (!drainResult) {
+        drainResult = (async () => {
+          const failures: unknown[] = [];
+          for (const drain of registeredDrains) {
+            try {
+              await drain();
+            } catch (error: unknown) {
+              failures.push(error);
+            }
+          }
+          return failures;
+        })();
+      }
+      return drainResult;
+    };
 
     const ensureCancellationRequested = async (reason: string): Promise<void> => {
       if (!entry.cancellationRequested) {
@@ -262,6 +293,17 @@ export class JobRunner extends EventEmitter {
         }
       }
 
+      const drainFailures = await drainResources();
+      if (signal.aborted) {
+        const reason = signalReasonToString(signal, entry.cancelReason ?? 'cancelled');
+        const error = new Error(`cancelled: ${reason}`);
+        error.name = 'AbortError';
+        throw error;
+      }
+      if (drainFailures.length > 0) {
+        throw new LifecycleDrainAggregateError(drainFailures);
+      }
+
       const result = finalResult ? finalResult() : null;
       const doneEvent: PipelineEvent = stopReason === undefined
         ? { type: 'done' }
@@ -280,17 +322,21 @@ export class JobRunner extends EventEmitter {
         : { status: 'completed', eventCount };
     } catch (error: unknown) {
       if (!ownershipAcquired) throw error;
+      const drainFailures = await drainResources();
       if (signal.aborted) {
         const reason = signalReasonToString(signal, entry.cancelReason ?? 'cancelled');
         await persistCancellation(reason);
-        if (error instanceof Error && error.name === 'AbortError') throw error;
-        const abort = new Error(`cancelled: ${reason}`);
-        abort.name = 'AbortError';
-        throw abort;
+        const abort = error instanceof Error && error.name === 'AbortError'
+          ? error
+          : Object.assign(new Error(`cancelled: ${reason}`), { name: 'AbortError' });
+        throw combineLifecycleErrors(abort, drainFailures);
       }
+      const primaryError = error instanceof LifecycleDrainAggregateError
+        ? error
+        : combineLifecycleErrors(error, drainFailures);
       const message = error instanceof Error ? error.message : String(error);
       await persistFailure(message);
-      throw error;
+      throw primaryError;
     } finally {
       this.inflight.delete(jobId);
       this.activeContexts.delete(ctx);
@@ -327,6 +373,20 @@ export class JobRunner extends EventEmitter {
       createdAt: record.createdAt.toISOString(),
     } satisfies LiveEvent);
   }
+}
+
+class LifecycleDrainAggregateError extends AggregateError {
+  constructor(failures: ReadonlyArray<unknown>) {
+    super(failures, 'One or more lifecycle drains failed');
+  }
+}
+
+function combineLifecycleErrors(primary: unknown, drainFailures: ReadonlyArray<unknown>): unknown {
+  if (drainFailures.length === 0) return primary;
+  const message = primary instanceof Error ? primary.message : String(primary);
+  const combined = new AggregateError([primary, ...drainFailures], message);
+  if (primary instanceof Error && primary.name === 'AbortError') combined.name = 'AbortError';
+  return combined;
 }
 
 function safeReadPid(): number | undefined {

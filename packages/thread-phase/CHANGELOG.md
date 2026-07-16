@@ -16,6 +16,7 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ### Reliable run lifecycle
 
+- Added optional generic `JobRunOptions.drains`, awaited sequentially before terminal persistence and runner shutdown. All registered drains are attempted; drain-only failure marks the run failed, while pipeline failure and cancellation retain terminal precedence and accompanying drain failures remain observable through the rejected `AggregateError`.
 - Added distinct persisted `CANCELLED` and `ABANDONED` states plus atomic owner claims, owner-guarded transitions, `JobStore.setCancelled` / `setAbandoned`, and atomic terminal status+event finalization methods.
 - Added `JobRunner.start()` and `JobRunHandle` for immediate run identity, signal, cancellation, and result access.
 - `JobRunner` now composes its controller with caller `ctx.signal`, restores context hooks after execution, records cancellation request acknowledgement, and prevents late terminal writes from replacing the first terminal state.
