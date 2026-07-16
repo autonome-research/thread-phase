@@ -165,7 +165,7 @@ describe('heartbeat', () => {
   it('JobRunner with heartbeatMs fires the background timer during run()', async () => {
     const runner = new JobRunner(store, { heartbeatMs: 50 });
     const id = await runner.create('p1', null);
-    const heartbeatSpy = vi.spyOn(store, 'heartbeatOwned');
+    const heartbeatSpy = vi.spyOn(store, 'heartbeat');
     const phase: Phase<BasePipelineContext> = {
       name: 'slow',
       async *run() {
@@ -206,7 +206,7 @@ describe('heartbeat', () => {
     const id = await runner.create('p1', null);
     const phase: Phase<BasePipelineContext> = { name: 'noop', async *run() {} };
     await runner.run(id, [phase], { cache: new PipelineCache() });
-    const heartbeatSpy = vi.spyOn(store, 'heartbeatOwned');
+    const heartbeatSpy = vi.spyOn(store, 'heartbeat');
     const callsAtFinish = heartbeatSpy.mock.calls.length;
     await new Promise((r) => setTimeout(r, 200));
     expect(heartbeatSpy.mock.calls.length).toBe(callsAtFinish);

@@ -1,46 +1,61 @@
-import { describe, expect, it } from 'vitest';
-import { PipelineCache } from '../src/cache.js';
-import type { BasePipelineContext, Phase } from '../src/phase.js';
-import { JobRunner } from '../src/session/job-runner.js';
-import { V5CustomJobStore } from '../test-d/job-store-v5.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { SqliteJobStore } from '../src/session/sqlite-job-store.js';
 
-interface Ctx extends BasePipelineContext {}
+let dir: string;
+let store: SqliteJobStore;
 
-const successfulPhase: Phase<Ctx> = {
-  name: 'legacy-success',
-  async *run(ctx) {
-    await ctx.heartbeat?.();
-    yield { type: 'data', key: 'legacy', value: true };
-  },
-};
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'thread-phase-v5-api-'));
+  store = new SqliteJobStore(join(dir, 'jobs.db'));
+});
 
-describe('v5.0.0 custom JobStore compatibility', () => {
-  it('runs successfully using only the unchanged v5.0.0 interface', async () => {
-    const store = new V5CustomJobStore();
-    const runner = new JobRunner(store);
-    const jobId = await runner.create('legacy', null);
+afterEach(() => {
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
 
-    await expect(runner.run(jobId, [successfulPhase], { cache: new PipelineCache() }))
-      .resolves.toEqual({ status: 'completed', eventCount: 2 });
-    expect(await store.getJob(jobId)).toMatchObject({ status: 'COMPLETED' });
-    expect((await store.getEvents(jobId)).map((event) => event.eventType))
-      .toEqual(['data', 'done']);
+describe('documented v5.0.0 JobStore compatibility', () => {
+  it('returns boolean CAS results and guards owner-aware terminal transitions', async () => {
+    const id = await store.createJob('owned', null);
+
+    await expect(store.setRunning(id, { ownerId: 'owner-a' })).resolves.toBe(true);
+    await expect(store.setRunning(id, { ownerId: 'owner-b' })).resolves.toBe(false);
+    await expect(store.setCompleted(id, { wrong: true }, 'owner-b')).resolves.toBe(false);
+    await expect(store.setCompleted(id, { ok: true }, 'owner-a')).resolves.toBe(true);
+    await expect(store.setFailed(id, 'late', 'owner-a')).resolves.toBe(false);
+
+    expect(await store.getJob(id)).toMatchObject({
+      status: 'COMPLETED',
+      result: { ok: true },
+      error: null,
+      ownerId: 'owner-a',
+    });
   });
 
-  it('falls back to legacy failure persistence without requiring new methods', async () => {
-    const store = new V5CustomJobStore();
-    const runner = new JobRunner(store);
-    const jobId = await runner.create('legacy-failure', null);
-    const failure: Phase<Ctx> = {
-      name: 'legacy-failure',
-      async *run() {
-        throw new Error('legacy boom');
-      },
-    };
+  it('exposes required cancellation, abandonment, heartbeat, and atomic finalization methods', async () => {
+    const cancelled = await store.createJob('cancelled', null);
+    await expect(store.setRunning(cancelled, { ownerId: 'owner' })).resolves.toBe(true);
+    await expect(store.enableHeartbeat(cancelled, 'foreign')).resolves.toBe(false);
+    await expect(store.enableHeartbeat(cancelled, 'owner')).resolves.toBe(true);
+    await expect(store.setCancelled(cancelled, 'stop', 'foreign')).resolves.toBe(false);
+    await expect(store.setCancelled(cancelled, 'stop', 'owner')).resolves.toBe(true);
 
-    await expect(runner.run(jobId, [failure], { cache: new PipelineCache() }))
-      .rejects.toThrow('legacy boom');
-    expect(await store.getJob(jobId)).toMatchObject({ status: 'FAILED', error: 'legacy boom' });
-    expect((await store.getEvents(jobId)).map((event) => event.eventType)).toEqual(['error']);
+    const finalized = await store.createJob('finalized', null);
+    await store.setRunning(finalized, { ownerId: 'owner' });
+    await expect(store.finalizeJob(finalized, {
+      status: 'FAILED',
+      error: 'boom',
+      event: { type: 'error', message: 'boom' },
+      ownerId: 'owner',
+    })).resolves.toMatchObject({ eventType: 'error', jobId: finalized });
+    await expect(store.finalizeJob(finalized, {
+      status: 'COMPLETED',
+      event: { type: 'done' },
+      ownerId: 'owner',
+    })).resolves.toBeNull();
+    expect(await store.getEvents(finalized)).toHaveLength(1);
   });
 });

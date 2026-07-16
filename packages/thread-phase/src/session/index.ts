@@ -1,7 +1,5 @@
 export {
   type JobStore,
-  type OwnedJobStoreCapabilities,
-  type OwnedHeartbeatJobStoreCapabilities,
   type JobRecord,
   type EventRecord,
   type JobFinalization,

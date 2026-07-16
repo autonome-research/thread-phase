@@ -73,8 +73,6 @@ export {
 // local and network-backed stores share one consistency contract.
 export {
   type JobStore,
-  type OwnedJobStoreCapabilities,
-  type OwnedHeartbeatJobStoreCapabilities,
   SqliteJobStore,
   JobRunner,
   type JobRecord,

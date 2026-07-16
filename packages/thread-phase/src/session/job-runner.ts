@@ -12,14 +12,7 @@ import { EventEmitter } from 'events';
 import * as os from 'node:os';
 import type { BasePipelineContext, Phase, PipelineEvent } from '../phase.js';
 import { runPipeline, type PipelineSummary } from '../orchestrator.js';
-import type {
-  EventRecord,
-  JobFinalization,
-  JobOwnership,
-  JobStore,
-  OwnedHeartbeatJobStoreCapabilities,
-  OwnedJobStoreCapabilities,
-} from './job-store.js';
+import type { JobOwnership, JobStore } from './job-store.js';
 import { signalReasonToString } from '../internal/error-message.js';
 
 export interface LiveEvent {
@@ -159,14 +152,12 @@ export class JobRunner extends EventEmitter {
       if (stale.length === 0) break;
       let transitioned = 0;
       for (const job of stale) {
-        const terminal = hasOwnedLifecycle(this.store)
-          ? await this.store.finalizeAbandonedIfStale(
-            job.id,
-            staleBefore,
-            reason,
-            job.ownerId,
-          )
-          : await this.finalizeLegacyAbandoned(job.id, reason);
+        const terminal = await this.store.finalizeAbandonedIfStale(
+          job.id,
+          staleBefore,
+          reason,
+          job.ownerId,
+        );
         if (!terminal) continue;
         transitioned++;
         this.emitRecord(terminal);
@@ -254,7 +245,7 @@ export class JobRunner extends EventEmitter {
 
     const persistCancellation = async (reason: string): Promise<void> => {
       await ensureCancellationRequested(reason);
-      const terminal = await this.finalizeWithFallback(jobId, {
+      const terminal = await this.store.finalizeJob(jobId, {
         status: 'CANCELLED',
         error: reason,
         event: { type: 'cancelled', reason },
@@ -264,7 +255,7 @@ export class JobRunner extends EventEmitter {
     };
 
     const persistFailure = async (message: string): Promise<void> => {
-      const terminal = await this.finalizeWithFallback(jobId, {
+      const terminal = await this.store.finalizeJob(jobId, {
         status: 'FAILED',
         error: message,
         event: { type: 'error', message },
@@ -275,31 +266,22 @@ export class JobRunner extends EventEmitter {
 
     try {
       // Custom stores can throw before returning their declared Promise. Keep
-      // both the additive owned path and the v5.0.0 legacy path inside the
-      // protected lifecycle so those failures still drain and restore hooks.
-      entry.claim = hasOwnedLifecycle(this.store)
-        ? this.store.claimRunning(jobId, ownership)
-        : this.store.setRunning(jobId, ownership).then(() => true);
+      // acquisition inside the protected lifecycle so those failures still
+      // drain resources and restore context hooks.
+      entry.claim = this.store.setRunning(jobId, ownership);
       const claimed = await entry.claim;
       if (!claimed) throw new Error(`Job ${jobId} is already owned or terminal`);
       ownershipAcquired = true;
       ctx.heartbeat = async () => {
         // A pipeline using only manual heartbeats opts into stale detection on
         // first use, without requiring heartbeatMs at runner construction.
-        if (hasOwnedHeartbeat(this.store)) {
-          const enabled = await this.store.enableHeartbeat(jobId, ownerId);
-          if (!enabled) throw new Error(`Job ${jobId} is no longer owned by ${ownerId}`);
-        } else {
-          await this.store.heartbeat(jobId);
-        }
+        const enabled = await this.store.enableHeartbeat(jobId, ownerId);
+        if (!enabled) throw new Error(`Job ${jobId} is no longer owned by ${ownerId}`);
       };
 
       if (this.heartbeatMs !== undefined && this.heartbeatMs > 0) {
         heartbeatTimer = setInterval(() => {
-          const heartbeat = hasOwnedHeartbeat(this.store)
-            ? this.store.heartbeatOwned(jobId, ownerId)
-            : this.store.heartbeat(jobId);
-          void heartbeat.catch(() => undefined);
+          void this.store.heartbeat(jobId, ownerId).catch(() => undefined);
         }, this.heartbeatMs);
         if (typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
       }
@@ -335,7 +317,7 @@ export class JobRunner extends EventEmitter {
       const doneEvent: PipelineEvent = stopReason === undefined
         ? { type: 'done' }
         : { type: 'done', reason: stopReason };
-      const completed = await this.finalizeWithFallback(jobId, {
+      const completed = await this.store.finalizeJob(jobId, {
         status: 'COMPLETED',
         result,
         event: doneEvent,
@@ -373,44 +355,6 @@ export class JobRunner extends EventEmitter {
       ctx.signal = previousSignal;
       ctx.heartbeat = previousHeartbeat;
     }
-  }
-
-  private async finalizeWithFallback(
-    jobId: string,
-    finalization: JobFinalization,
-  ): Promise<EventRecord | null> {
-    if (hasOwnedLifecycle(this.store)) {
-      return this.store.finalizeJob(jobId, finalization);
-    }
-
-    // v5.0.0 stores predate atomic finalization and distinct cancellation.
-    // Preserve their lifecycle contract while still emitting the new terminal
-    // event: cancellation falls back to FAILED, as it did in v5.0.0.
-    if (finalization.status === 'COMPLETED') {
-      await this.store.setCompleted(jobId, finalization.result ?? null);
-    } else {
-      const message = finalization.status === 'CANCELLED'
-        ? `cancelled: ${finalization.error ?? 'cancelled'}`
-        : finalization.error ?? finalization.status.toLowerCase();
-      await this.store.setFailed(jobId, message);
-    }
-    return this.appendRecord(jobId, finalization.event);
-  }
-
-  private async finalizeLegacyAbandoned(jobId: string, reason: string): Promise<EventRecord> {
-    await this.store.setFailed(jobId, reason);
-    return this.appendRecord(jobId, { type: 'abandoned', reason });
-  }
-
-  private async appendRecord(jobId: string, event: PipelineEvent): Promise<EventRecord> {
-    const id = await this.store.appendEvent(jobId, event);
-    return {
-      id,
-      jobId,
-      eventType: event.type,
-      data: event,
-      createdAt: new Date(),
-    };
   }
 
   private assertLocalAvailability(jobId: string, ctx: BasePipelineContext): void {
@@ -454,19 +398,6 @@ function combineLifecycleErrors(primary: unknown, drainFailures: ReadonlyArray<u
   const combined = new AggregateError([primary, ...drainFailures], message);
   if (primary instanceof Error && primary.name === 'AbortError') combined.name = 'AbortError';
   return combined;
-}
-
-function hasOwnedLifecycle(store: JobStore): store is JobStore & OwnedJobStoreCapabilities {
-  const candidate = store as Partial<OwnedJobStoreCapabilities>;
-  return typeof candidate.claimRunning === 'function'
-    && typeof candidate.finalizeJob === 'function'
-    && typeof candidate.finalizeAbandonedIfStale === 'function';
-}
-
-function hasOwnedHeartbeat(store: JobStore): store is JobStore & OwnedHeartbeatJobStoreCapabilities {
-  const candidate = store as Partial<OwnedHeartbeatJobStoreCapabilities>;
-  return typeof candidate.heartbeatOwned === 'function'
-    && typeof candidate.enableHeartbeat === 'function';
 }
 
 function safeReadPid(): number | undefined {

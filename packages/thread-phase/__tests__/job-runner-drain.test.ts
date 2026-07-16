@@ -125,7 +125,7 @@ describe('JobRunner lifecycle drains', () => {
     const acquisitionError = new Error('ownership backend unavailable');
     const rejectingStore = new Proxy(store, {
       get(target, property) {
-        if (property === 'claimRunning') return async () => { throw acquisitionError; };
+        if (property === 'setRunning') return async () => { throw acquisitionError; };
         const value = Reflect.get(target, property, target) as unknown;
         return typeof value === 'function' ? value.bind(target) : value;
       },
@@ -159,7 +159,7 @@ describe('JobRunner lifecycle drains', () => {
       kind: 'owned',
       makeStore: (target: SqliteJobStore, acquisitionError: Error): JobStore => new Proxy(target, {
         get(storeTarget, property) {
-          if (property === 'claimRunning') return () => { throw acquisitionError; };
+          if (property === 'setRunning') return () => { throw acquisitionError; };
           const value = Reflect.get(storeTarget, property, storeTarget) as unknown;
           return typeof value === 'function' ? value.bind(storeTarget) : value;
         },
