@@ -7,6 +7,7 @@ import type { BasePipelineContext, Phase } from '../src/phase.js';
 import { JobRunner } from '../src/session/job-runner.js';
 import type { JobStore } from '../src/session/job-store.js';
 import { SqliteJobStore } from '../src/session/sqlite-job-store.js';
+import { V5CustomJobStore } from '../test-d/job-store-v5.js';
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -156,33 +157,25 @@ describe('JobRunner lifecycle drains', () => {
 
   it.each([
     {
-      kind: 'owned',
-      makeStore: (target: SqliteJobStore, acquisitionError: Error): JobStore => new Proxy(target, {
-        get(storeTarget, property) {
-          if (property === 'setRunning') return () => { throw acquisitionError; };
-          const value = Reflect.get(storeTarget, property, storeTarget) as unknown;
-          return typeof value === 'function' ? value.bind(storeTarget) : value;
-        },
-      }) as JobStore,
+      kind: 'bundled SQLite',
+      makeStore: (): JobStore => store,
     },
     {
-      kind: 'legacy',
-      makeStore: (target: SqliteJobStore, acquisitionError: Error): JobStore => new Proxy(target, {
-        get(storeTarget, property) {
-          if (
-            property === 'claimRunning'
-            || property === 'finalizeJob'
-            || property === 'finalizeAbandonedIfStale'
-          ) return undefined;
-          if (property === 'setRunning') return () => { throw acquisitionError; };
-          const value = Reflect.get(storeTarget, property, storeTarget) as unknown;
-          return typeof value === 'function' ? value.bind(storeTarget) : value;
-        },
-      }) as JobStore,
+      kind: 'v5 structural custom-store',
+      makeStore: (): JobStore => new V5CustomJobStore(),
     },
   ])('drains and restores runner state after synchronous $kind acquisition throws', async ({ kind, makeStore }) => {
     const acquisitionError = new Error(`${kind} acquisition threw synchronously`);
-    const throwingRunner = new JobRunner(makeStore(store, acquisitionError));
+    const acquisition = vi.fn((): Promise<boolean> => { throw acquisitionError; });
+    const target = makeStore();
+    const throwingStore = new Proxy(target, {
+      get(storeTarget, property) {
+        if (property === 'setRunning') return acquisition;
+        const value = Reflect.get(storeTarget, property, storeTarget) as unknown;
+        return typeof value === 'function' ? value.bind(storeTarget) : value;
+      },
+    }) as JobStore;
+    const throwingRunner = new JobRunner(throwingStore);
     const previousController = new AbortController();
     const previousHeartbeat = vi.fn(async () => undefined);
     const ctx: Ctx = {
@@ -203,6 +196,7 @@ describe('JobRunner lifecycle drains', () => {
       ],
     }).catch((caught: unknown) => caught);
 
+    expect(acquisition).toHaveBeenCalledOnce();
     expect(error).toBeInstanceOf(AggregateError);
     expect(error).toMatchObject({ message: acquisitionError.message });
     expect((error as AggregateError).errors).toEqual([acquisitionError, drainFailure]);
