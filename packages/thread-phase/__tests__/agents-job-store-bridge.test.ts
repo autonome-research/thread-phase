@@ -255,19 +255,24 @@ describe('persistAgentEventsToJobStore', () => {
 
     bus.emit({ type: 'text', source: 'mock', delta: 'accepted' });
     bus.emit({ type: 'text', source: 'mock', delta: 'pre-barrier-overflow' });
-    await appendStarted.promise;
-    await observerStarted[0]!.promise;
     const flushed = bridge.flush();
 
+    // The post-barrier failure is emitted before the normally scheduled
+    // delivery microtask, so only an invocation-time snapshot can separate it.
     bus.emit({ type: 'text', source: 'mock', delta: 'post-barrier-overflow' });
+    await appendStarted.promise;
+    await observerStarted[0]!.promise;
     releaseAppend.resolve();
     releaseObserver[0]!.resolve();
     await observerStarted[1]!.promise;
     await flushed;
 
-    expect(observed.map((failure) => failure.event)).toMatchObject([
-      { delta: 'pre-barrier-overflow' },
-      { delta: 'post-barrier-overflow' },
+    expect(observed.map((failure) => ({
+      event: failure.event,
+      occurrences: failure.occurrences,
+    }))).toMatchObject([
+      { event: { delta: 'pre-barrier-overflow' }, occurrences: 1 },
+      { event: { delta: 'post-barrier-overflow' }, occurrences: 1 },
     ]);
     releaseObserver[1]!.resolve();
     await bridge.close();

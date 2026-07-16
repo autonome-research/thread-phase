@@ -137,10 +137,8 @@ export function createAgentEventPersistenceBridge(
     accumulator: FailureAccumulator;
   }
   interface FailureState {
-    active?: FailureBatch;
+    readonly active: Set<FailureBatch>;
     pending?: PendingFailureBatch;
-    /** Settlement of the newest batch containing a failure reported so far. */
-    barrier: Promise<void>;
   }
   const failureStates = new Map<AgentEventPersistenceFailureKind, FailureState>();
 
@@ -158,7 +156,7 @@ export function createAgentEventPersistenceBridge(
     accumulator: FailureAccumulator,
     batch: FailureBatch,
   ): void => {
-    state.active = batch;
+    state.active.add(batch);
     const failure = Object.freeze({
       kind,
       event: accumulator.event,
@@ -180,22 +178,19 @@ export function createAgentEventPersistenceBridge(
       }
     }
     void Promise.all(observations).then(() => {
-      if (state.active === batch) state.active = undefined;
+      state.active.delete(batch);
       batch.settle();
 
-      const pending = state.pending;
-      if (pending) {
-        state.pending = undefined;
-        deliver(kind, state, pending.accumulator, pending);
-      }
+      if (state.active.size === 0) deliverPending(kind, state);
     });
   };
 
   const deliverPending = (
     kind: AgentEventPersistenceFailureKind,
     state: FailureState,
+    force = false,
   ): void => {
-    if (state.active) return;
+    if (!force && state.active.size > 0) return;
     const pending = state.pending;
     if (!pending) return;
     state.pending = undefined;
@@ -209,7 +204,7 @@ export function createAgentEventPersistenceBridge(
   ): Promise<void> => {
     let state = failureStates.get(kind);
     if (!state) {
-      state = { barrier: Promise.resolve() };
+      state = { active: new Set() };
       failureStates.set(kind, state);
     }
 
@@ -230,8 +225,7 @@ export function createAgentEventPersistenceBridge(
       ...batch,
       accumulator: { event, error: errorFrom(error), occurrences: 1 },
     };
-    state.barrier = batch.settled;
-    if (!state.active) {
+    if (state.active.size === 0) {
       // Defer initial delivery so a synchronous failure burst is aggregated
       // before its immutable public notification is materialized.
       queueMicrotask(() => deliverPending(kind, state));
@@ -241,7 +235,15 @@ export function createAgentEventPersistenceBridge(
 
   const drainAtInvocation = (): Promise<void> => {
     const accepted = [...pendingAcceptedSettlements];
-    const observed = [...failureStates.values()].map((state) => state.barrier);
+    for (const [kind, state] of failureStates) {
+      // Seal each pre-barrier aggregate before taking the snapshot. A later
+      // failure must enter a new pending batch rather than changing which
+      // observer work this invocation waits for.
+      deliverPending(kind, state, true);
+    }
+    const observed = [...failureStates.values()].flatMap((state) =>
+      [...state.active].map((batch) => batch.settled),
+    );
     return Promise.all([...accepted, ...observed]).then(() => {});
   };
 
