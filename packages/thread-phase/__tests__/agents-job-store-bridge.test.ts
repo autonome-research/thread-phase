@@ -229,6 +229,95 @@ describe('persistAgentEventsToJobStore', () => {
     store.close();
   });
 
+  it('does not extend an overflow flush barrier with post-invocation failures', async () => {
+    const store = newStore();
+    const bus = createEventBus();
+    const appendStarted = deferred();
+    const releaseAppend = deferred();
+    const observerStarted = [deferred(), deferred()];
+    const releaseObserver = [deferred(), deferred()];
+    const observed: AgentEventPersistenceFailure[] = [];
+
+    store.appendEvent = async () => {
+      appendStarted.resolve();
+      await releaseAppend.promise;
+      return 1;
+    };
+    const bridge = persistAgentEventsToJobStore(bus, store, 'overflow-barrier', {
+      capacity: 1,
+      onFailure: async (failure) => {
+        const index = observed.length;
+        observed.push(failure);
+        observerStarted[index]!.resolve();
+        await releaseObserver[index]!.promise;
+      },
+    });
+
+    bus.emit({ type: 'text', source: 'mock', delta: 'accepted' });
+    bus.emit({ type: 'text', source: 'mock', delta: 'pre-barrier-overflow' });
+    await appendStarted.promise;
+    await observerStarted[0]!.promise;
+    const flushed = bridge.flush();
+
+    bus.emit({ type: 'text', source: 'mock', delta: 'post-barrier-overflow' });
+    releaseAppend.resolve();
+    releaseObserver[0]!.resolve();
+    await observerStarted[1]!.promise;
+    await flushed;
+
+    expect(observed.map((failure) => failure.event)).toMatchObject([
+      { delta: 'pre-barrier-overflow' },
+      { delta: 'post-barrier-overflow' },
+    ]);
+    releaseObserver[1]!.resolve();
+    await bridge.close();
+    store.close();
+  });
+
+  it('does not extend an append-failure flush barrier with post-invocation work', async () => {
+    const store = newStore();
+    const bus = createEventBus();
+    const attempts = [deferred(), deferred()];
+    const observerStarted = [deferred(), deferred()];
+    const releaseObserver = [deferred(), deferred()];
+    const observed: AgentEventPersistenceFailure[] = [];
+    let attempt = 0;
+
+    store.appendEvent = async () => {
+      const index = attempt++;
+      attempts[index]!.resolve();
+      throw new Error(`write ${index} failed`);
+    };
+    const bridge = persistAgentEventsToJobStore(bus, store, 'append-barrier', {
+      capacity: 2,
+      onFailure: async (failure) => {
+        const index = observed.length;
+        observed.push(failure);
+        observerStarted[index]!.resolve();
+        await releaseObserver[index]!.promise;
+      },
+    });
+
+    bus.emit({ type: 'text', source: 'mock', delta: 'pre-barrier-append' });
+    const flushed = bridge.flush();
+    bus.emit({ type: 'text', source: 'mock', delta: 'post-barrier-append' });
+
+    await attempts[0]!.promise;
+    await observerStarted[0]!.promise;
+    await attempts[1]!.promise;
+    releaseObserver[0]!.resolve();
+    await observerStarted[1]!.promise;
+    await flushed;
+
+    expect(observed.map((failure) => failure.error.message)).toEqual([
+      'write 0 failed',
+      'write 1 failed',
+    ]);
+    releaseObserver[1]!.resolve();
+    await bridge.close();
+    store.close();
+  });
+
   it('waits for append-failure observation when closing', async () => {
     const store = newStore();
     const bus = createEventBus();

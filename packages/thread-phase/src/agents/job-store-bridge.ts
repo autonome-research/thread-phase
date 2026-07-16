@@ -95,8 +95,9 @@ function eventKey(
  * Once `capacity` accepted events are outstanding, later events are rejected
  * and reported as `overflow` failures rather than creating an unbounded
  * promise backlog. Append failures are reported and do not stall later work.
- * `flush` and `close` resolve after accepted appends and their failure
- * notifications settle, including failed appends. While an asynchronous
+ * `flush` and `close` snapshot their barrier at invocation and resolve after
+ * covered appends and failure notifications settle, including failed appends;
+ * unrelated later events do not extend an existing barrier. While an asynchronous
  * failure observer is pending, same-kind failures are accumulated into one
  * immutable pending batch so observer delivery is finitely bounded and an
  * already delivered notification never changes.
@@ -121,6 +122,7 @@ export function createAgentEventPersistenceBridge(
   let closed = false;
   let tail: Promise<void> = Promise.resolve();
   let closePromise: Promise<void> | undefined;
+  const pendingAcceptedSettlements = new Set<Promise<void>>();
 
   interface FailureAccumulator {
     readonly event: AgentEvent;
@@ -204,7 +206,7 @@ export function createAgentEventPersistenceBridge(
     kind: AgentEventPersistenceFailureKind,
     event: AgentEvent,
     error: unknown,
-  ): void => {
+  ): Promise<void> => {
     let state = failureStates.get(kind);
     if (!state) {
       state = { barrier: Promise.resolve() };
@@ -220,7 +222,7 @@ export function createAgentEventPersistenceBridge(
           occurrences: pending.accumulator.occurrences + 1,
         },
       };
-      return;
+      return pending.settled;
     }
 
     const batch = newBatch();
@@ -234,15 +236,14 @@ export function createAgentEventPersistenceBridge(
       // before its immutable public notification is materialized.
       queueMicrotask(() => deliverPending(kind, state));
     }
+    return batch.settled;
   };
 
-  const failureBarrier = (): Promise<void> =>
-    Promise.all([...failureStates.values()].map((state) => state.barrier)).then(
-      () => {},
-    );
-
-  const drainAccepted = (acceptedTail: Promise<void>): Promise<void> =>
-    acceptedTail.then(failureBarrier);
+  const drainAtInvocation = (): Promise<void> => {
+    const accepted = [...pendingAcceptedSettlements];
+    const observed = [...failureStates.values()].map((state) => state.barrier);
+    return Promise.all([...accepted, ...observed]).then(() => {});
+  };
 
   const unsubscribe = bus.on((event) => {
     if (closed || dropTypes.has(event.type)) return;
@@ -256,32 +257,39 @@ export function createAgentEventPersistenceBridge(
     }
 
     outstanding += 1;
-    tail = tail
-      .then(async () => {
-        const pipelineEvent: PipelineEvent = {
-          type: 'data',
-          key: keyFn(event),
-          value: event,
-        };
-        await store.appendEvent(jobId, pipelineEvent);
-      })
-      .catch((error: unknown) => {
-        report('append', event, error);
-      })
+    const appendAttempt = tail.then(async () => {
+      const pipelineEvent: PipelineEvent = {
+        type: 'data',
+        key: keyFn(event),
+        value: event,
+      };
+      await store.appendEvent(jobId, pipelineEvent);
+    });
+    tail = appendAttempt
+      .catch(() => {})
       .finally(() => {
         outstanding -= 1;
       });
+
+    const settlement = appendAttempt.catch((error: unknown) =>
+      report('append', event, error),
+    );
+    pendingAcceptedSettlements.add(settlement);
+    void appendAttempt.then(
+      () => pendingAcceptedSettlements.delete(settlement),
+      () => pendingAcceptedSettlements.delete(settlement),
+    );
   });
 
   const bridge: AgentEventPersistenceBridge = {
     flush() {
-      return drainAccepted(tail);
+      return drainAtInvocation();
     },
     close() {
       if (!closePromise) {
         closed = true;
         unsubscribe();
-        closePromise = drainAccepted(tail);
+        closePromise = drainAtInvocation();
       }
       return closePromise;
     },
