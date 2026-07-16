@@ -38,11 +38,11 @@ export interface AgentEventPersistenceFailure {
   event: AgentEvent;
   error: Error;
   /**
-   * Number of same-kind failures represented by this notification. When an
-   * asynchronous observer is still settling, later failures are coalesced
-   * into its notification instead of accumulating an unbounded backlog.
+   * Number of same-kind failures represented by this immutable notification.
+   * Failures arriving during its delivery are accumulated into at most one
+   * pending notification rather than mutating this object after delivery.
    */
-  occurrences: number;
+  readonly occurrences: number;
 }
 
 export type AgentEventPersistenceFailureHandler = (
@@ -97,8 +97,9 @@ function eventKey(
  * promise backlog. Append failures are reported and do not stall later work.
  * `flush` and `close` resolve after accepted appends and their failure
  * notifications settle, including failed appends. While an asynchronous
- * failure observer is pending, same-kind failures are coalesced into its
- * `occurrences` count so observer delivery is finitely bounded.
+ * failure observer is pending, same-kind failures are accumulated into one
+ * immutable pending batch so observer delivery is finitely bounded and an
+ * already delivered notification never changes.
  */
 export function createAgentEventPersistenceBridge(
   bus: AgentEventBus,
@@ -121,40 +122,47 @@ export function createAgentEventPersistenceBridge(
   let tail: Promise<void> = Promise.resolve();
   let closePromise: Promise<void> | undefined;
 
-  interface FailureBatch {
-    failure: AgentEventPersistenceFailure;
-    settled: Promise<void>;
+  interface FailureAccumulator {
+    readonly event: AgentEvent;
+    readonly error: Error;
+    readonly occurrences: number;
   }
-  const activeFailureBatches = new Map<
-    AgentEventPersistenceFailureKind,
-    FailureBatch
-  >();
+  interface FailureBatch {
+    readonly settled: Promise<void>;
+    readonly settle: () => void;
+  }
+  interface PendingFailureBatch extends FailureBatch {
+    accumulator: FailureAccumulator;
+  }
+  interface FailureState {
+    active?: FailureBatch;
+    pending?: PendingFailureBatch;
+    /** Settlement of the newest batch containing a failure reported so far. */
+    barrier: Promise<void>;
+  }
+  const failureStates = new Map<AgentEventPersistenceFailureKind, FailureState>();
 
-  const report = (
-    kind: AgentEventPersistenceFailureKind,
-    event: AgentEvent,
-    error: unknown,
-  ): void => {
-    const active = activeFailureBatches.get(kind);
-    if (active) {
-      active.failure.occurrences += 1;
-      return;
-    }
-
-    const failure: AgentEventPersistenceFailure = {
-      kind,
-      event,
-      error: errorFrom(error),
-      occurrences: 1,
-    };
+  const newBatch = (): FailureBatch => {
     let settle!: () => void;
-    const batch: FailureBatch = {
-      failure,
-      settled: new Promise<void>((resolve) => {
-        settle = resolve;
-      }),
-    };
-    activeFailureBatches.set(kind, batch);
+    const settled = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    return { settled, settle };
+  };
+
+  const deliver = (
+    kind: AgentEventPersistenceFailureKind,
+    state: FailureState,
+    accumulator: FailureAccumulator,
+    batch: FailureBatch,
+  ): void => {
+    state.active = batch;
+    const failure = Object.freeze({
+      kind,
+      event: accumulator.event,
+      error: accumulator.error,
+      occurrences: accumulator.occurrences,
+    }) satisfies AgentEventPersistenceFailure;
 
     const observations: Promise<void>[] = [];
     for (const handler of failureHandlers) {
@@ -170,17 +178,63 @@ export function createAgentEventPersistenceBridge(
       }
     }
     void Promise.all(observations).then(() => {
-      if (activeFailureBatches.get(kind) === batch) {
-        activeFailureBatches.delete(kind);
+      if (state.active === batch) state.active = undefined;
+      batch.settle();
+
+      const pending = state.pending;
+      if (pending) {
+        state.pending = undefined;
+        deliver(kind, state, pending.accumulator, pending);
       }
-      settle();
     });
   };
 
+  const report = (
+    kind: AgentEventPersistenceFailureKind,
+    event: AgentEvent,
+    error: unknown,
+  ): void => {
+    let state = failureStates.get(kind);
+    if (!state) {
+      state = { barrier: Promise.resolve() };
+      failureStates.set(kind, state);
+    }
+
+    if (state.active) {
+      if (state.pending) {
+        const pending = state.pending;
+        state.pending = {
+          ...pending,
+          accumulator: {
+            ...pending.accumulator,
+            occurrences: pending.accumulator.occurrences + 1,
+          },
+        };
+      } else {
+        const batch = newBatch();
+        state.pending = {
+          ...batch,
+          accumulator: { event, error: errorFrom(error), occurrences: 1 },
+        };
+        state.barrier = batch.settled;
+      }
+      return;
+    }
+
+    const batch = newBatch();
+    state.barrier = batch.settled;
+    deliver(
+      kind,
+      state,
+      { event, error: errorFrom(error), occurrences: 1 },
+      batch,
+    );
+  };
+
   const failureBarrier = (): Promise<void> =>
-    Promise.all(
-      [...activeFailureBatches.values()].map((batch) => batch.settled),
-    ).then(() => {});
+    Promise.all([...failureStates.values()].map((state) => state.barrier)).then(
+      () => {},
+    );
 
   const drainAccepted = (acceptedTail: Promise<void>): Promise<void> =>
     acceptedTail.then(failureBarrier);

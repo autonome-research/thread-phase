@@ -11,7 +11,7 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ### Agent event persistence
 
-- Added an opt-in, finitely bounded persistence bridge that serializes accepted adapter events, reports append and overflow failures, and provides deterministic `flush()` and idempotent draining `close()` barriers. Asynchronous failure observation is also bounded: same-kind failures coalesce into an `occurrences` count while an observer is pending, and flush/close wait for covered notifications to settle.
+- Added an opt-in, finitely bounded persistence bridge that serializes accepted adapter events, reports append and overflow failures, and provides deterministic `flush()` and idempotent draining `close()` barriers. Asynchronous failure observation is also bounded: same-kind failures coalesce into at most one immutable pending notification while an observer is active, append and overflow batches remain separate, and flush/close wait for every covered batch to settle.
 - Preserved `pipeAgentEventsToJobStore(bus, store, jobId, options?)` unchanged as the best-effort alternative: it still returns an unsubscribe callback, performs fire-and-forget appends, and isolates both synchronous store throws and asynchronous append rejections.
 
 ### Reliable run lifecycle
