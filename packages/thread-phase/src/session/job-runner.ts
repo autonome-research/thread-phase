@@ -206,12 +206,14 @@ export class JobRunner extends EventEmitter {
       heartbeatEnabled: options.ownership?.heartbeatEnabled ?? (this.heartbeatMs !== undefined && this.heartbeatMs > 0),
     };
     const ownerId = ownership.ownerId!;
+    const registeredDrains = [...(options.drains ?? [])];
     const entry: InflightRun = {
       controller,
       signal,
-      claim: hasOwnedLifecycle(this.store)
-        ? this.store.claimRunning(jobId, ownership)
-        : this.store.setRunning(jobId, ownership).then(() => true),
+      // Replaced by the real acquisition promise before run() first yields.
+      // The placeholder keeps cancellation safe while lifecycle setup remains
+      // entirely synchronous.
+      claim: Promise.resolve(false),
     };
     this.inflight.set(jobId, entry);
     ctx.signal = signal;
@@ -220,7 +222,6 @@ export class JobRunner extends EventEmitter {
     let eventCount = 0;
     let stopReason: string | undefined;
     let ownershipAcquired = false;
-    const registeredDrains = [...(options.drains ?? [])];
     let drainResult: Promise<unknown[]> | undefined;
 
     const drainResources = (): Promise<unknown[]> => {
@@ -273,6 +274,12 @@ export class JobRunner extends EventEmitter {
     };
 
     try {
+      // Custom stores can throw before returning their declared Promise. Keep
+      // both the additive owned path and the v5.0.0 legacy path inside the
+      // protected lifecycle so those failures still drain and restore hooks.
+      entry.claim = hasOwnedLifecycle(this.store)
+        ? this.store.claimRunning(jobId, ownership)
+        : this.store.setRunning(jobId, ownership).then(() => true);
       const claimed = await entry.claim;
       if (!claimed) throw new Error(`Job ${jobId} is already owned or terminal`);
       ownershipAcquired = true;

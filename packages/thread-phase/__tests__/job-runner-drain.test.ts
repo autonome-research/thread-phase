@@ -154,6 +154,71 @@ describe('JobRunner lifecycle drains', () => {
     expect(rejectingRunner.signalFor('claim-rejected')).toBeUndefined();
   });
 
+  it.each([
+    {
+      kind: 'owned',
+      makeStore: (target: SqliteJobStore, acquisitionError: Error): JobStore => new Proxy(target, {
+        get(storeTarget, property) {
+          if (property === 'claimRunning') return () => { throw acquisitionError; };
+          const value = Reflect.get(storeTarget, property, storeTarget) as unknown;
+          return typeof value === 'function' ? value.bind(storeTarget) : value;
+        },
+      }) as JobStore,
+    },
+    {
+      kind: 'legacy',
+      makeStore: (target: SqliteJobStore, acquisitionError: Error): JobStore => new Proxy(target, {
+        get(storeTarget, property) {
+          if (
+            property === 'claimRunning'
+            || property === 'finalizeJob'
+            || property === 'finalizeAbandonedIfStale'
+          ) return undefined;
+          if (property === 'setRunning') return () => { throw acquisitionError; };
+          const value = Reflect.get(storeTarget, property, storeTarget) as unknown;
+          return typeof value === 'function' ? value.bind(storeTarget) : value;
+        },
+      }) as JobStore,
+    },
+  ])('drains and restores runner state after synchronous $kind acquisition throws', async ({ kind, makeStore }) => {
+    const acquisitionError = new Error(`${kind} acquisition threw synchronously`);
+    const throwingRunner = new JobRunner(makeStore(store, acquisitionError));
+    const previousController = new AbortController();
+    const previousHeartbeat = vi.fn(async () => undefined);
+    const ctx: Ctx = {
+      cache: new PipelineCache(),
+      signal: previousController.signal,
+      heartbeat: previousHeartbeat,
+    };
+    const drainFailure = new Error('drain failed too');
+    const drainOrder: string[] = [];
+
+    const error = await throwingRunner.run('sync-claim-throw', [successfulPhase], ctx, undefined, {
+      drains: [
+        () => { drainOrder.push('first'); },
+        () => {
+          drainOrder.push('second');
+          throw drainFailure;
+        },
+      ],
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error).toMatchObject({ message: acquisitionError.message });
+    expect((error as AggregateError).errors).toEqual([acquisitionError, drainFailure]);
+    expect(drainOrder).toEqual(['first', 'second']);
+    expect(ctx.signal).toBe(previousController.signal);
+    expect(ctx.heartbeat).toBe(previousHeartbeat);
+    expect(throwingRunner.signalFor('sync-claim-throw')).toBeUndefined();
+
+    // A leaked active-context registration would reject this otherwise valid
+    // follow-up run before it reaches the store.
+    const retryJobId = await runner.create(`after-${kind}-sync-throw`, null);
+    await expect(runner.run(retryJobId, [successfulPhase], ctx)).resolves.toMatchObject({
+      status: 'completed',
+    });
+  });
+
   it('attempts every drain and turns otherwise successful work into an observed failure', async () => {
     const laterDrain = vi.fn();
     const jobId = await runner.create('failed-drain', null);
