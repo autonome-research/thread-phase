@@ -96,9 +96,9 @@ function eventKey(
  * and reported as `overflow` failures rather than creating an unbounded
  * promise backlog. Append failures are reported and do not stall later work.
  * `flush` and `close` snapshot their barrier at invocation and resolve after
- * covered appends and failure notifications settle, including failed appends;
- * unrelated later events do not extend an existing barrier. While an asynchronous
- * failure observer is pending, same-kind failures are accumulated into one
+ * covered appends and failure notifications settle, including failed appends.
+ * Later failures cannot add another observer delivery to an existing barrier.
+ * While an asynchronous failure observer is pending, same-kind failures accumulate into one
  * immutable pending batch so observer delivery is finitely bounded and an
  * already delivered notification never changes.
  */
@@ -137,7 +137,7 @@ export function createAgentEventPersistenceBridge(
     accumulator: FailureAccumulator;
   }
   interface FailureState {
-    readonly active: Set<FailureBatch>;
+    active?: FailureBatch;
     pending?: PendingFailureBatch;
   }
   const failureStates = new Map<AgentEventPersistenceFailureKind, FailureState>();
@@ -156,7 +156,7 @@ export function createAgentEventPersistenceBridge(
     accumulator: FailureAccumulator,
     batch: FailureBatch,
   ): void => {
-    state.active.add(batch);
+    state.active = batch;
     const failure = Object.freeze({
       kind,
       event: accumulator.event,
@@ -178,19 +178,17 @@ export function createAgentEventPersistenceBridge(
       }
     }
     void Promise.all(observations).then(() => {
-      state.active.delete(batch);
+      if (state.active === batch) state.active = undefined;
       batch.settle();
-
-      if (state.active.size === 0) deliverPending(kind, state);
+      deliverPending(kind, state);
     });
   };
 
   const deliverPending = (
     kind: AgentEventPersistenceFailureKind,
     state: FailureState,
-    force = false,
   ): void => {
-    if (!force && state.active.size > 0) return;
+    if (state.active) return;
     const pending = state.pending;
     if (!pending) return;
     state.pending = undefined;
@@ -204,7 +202,7 @@ export function createAgentEventPersistenceBridge(
   ): Promise<void> => {
     let state = failureStates.get(kind);
     if (!state) {
-      state = { active: new Set() };
+      state = {};
       failureStates.set(kind, state);
     }
 
@@ -225,7 +223,7 @@ export function createAgentEventPersistenceBridge(
       ...batch,
       accumulator: { event, error: errorFrom(error), occurrences: 1 },
     };
-    if (state.active.size === 0) {
+    if (!state.active) {
       // Defer initial delivery so a synchronous failure burst is aggregated
       // before its immutable public notification is materialized.
       queueMicrotask(() => deliverPending(kind, state));
@@ -235,15 +233,15 @@ export function createAgentEventPersistenceBridge(
 
   const drainAtInvocation = (): Promise<void> => {
     const accepted = [...pendingAcceptedSettlements];
-    for (const [kind, state] of failureStates) {
-      // Seal each pre-barrier aggregate before taking the snapshot. A later
-      // failure must enter a new pending batch rather than changing which
-      // observer work this invocation waits for.
-      deliverPending(kind, state, true);
-    }
-    const observed = [...failureStates.values()].flatMap((state) =>
-      [...state.active].map((batch) => batch.settled),
-    );
+    const observed = [...failureStates.values()].flatMap((state) => {
+      // Snapshot both generations without starting a second same-kind
+      // delivery. Later failures may join the already-required pending batch,
+      // but cannot add another observer generation to this barrier.
+      const batches = [state.active, state.pending].filter(
+        (batch): batch is FailureBatch => batch !== undefined,
+      );
+      return batches.map((batch) => batch.settled);
+    });
     return Promise.all([...accepted, ...observed]).then(() => {});
   };
 
