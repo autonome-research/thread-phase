@@ -4,6 +4,7 @@ import {
   persistAgentEventsToJobStore,
   pipeAgentEventsToJobStore,
   type AgentEvent,
+  type AgentEventBus,
   type AgentEventPersistenceFailure,
 } from '../src/agents/index.js';
 import { SqliteJobStore } from '../src/session/index.js';
@@ -163,6 +164,41 @@ describe('persistAgentEventsToJobStore', () => {
 });
 
 describe('pipeAgentEventsToJobStore', () => {
+  it('keeps the legacy signature and isolates sync throws and async rejections', async () => {
+    const handlers = new Set<(event: AgentEvent) => void>();
+    const bus: AgentEventBus = {
+      emit(event) {
+        for (const handler of handlers) handler(event);
+      },
+      on(handler) {
+        handlers.add(handler);
+        return () => handlers.delete(handler);
+      },
+    };
+    const store = newStore();
+    let appendAttempts = 0;
+    store.appendEvent = ((() => {
+      appendAttempts += 1;
+      if (appendAttempts === 1) throw new Error('synchronous store failure');
+      return Promise.reject(new Error('asynchronous store failure'));
+    }) as typeof store.appendEvent);
+    const siblingEvents: AgentEvent[] = [];
+
+    const unsubscribe: () => void = pipeAgentEventsToJobStore(bus, store, 'legacy-job');
+    bus.on((event) => siblingEvents.push(event));
+
+    expect(bus.emit({ type: 'text', source: 'legacy', delta: 'one' })).toBeUndefined();
+    expect(bus.emit({ type: 'text', source: 'legacy', delta: 'two' })).toBeUndefined();
+    await flush();
+
+    expect(appendAttempts).toBe(2);
+    expect(siblingEvents.map((event) => event.type)).toEqual(['text', 'text']);
+    unsubscribe();
+    bus.emit({ type: 'agent_end', source: 'legacy', reason: 'stop' });
+    expect(appendAttempts).toBe(2);
+    store.close();
+  });
+
   it('appends every bus event to the job store under default keys', async () => {
     const store = newStore();
     const jobId = await store.createJob('test', null);

@@ -9,6 +9,11 @@ All notable changes to thread-phase will be documented here. The format is based
 - `AgentEventBus` now isolates both subscriber throws and returned-promise rejections while preserving synchronous, non-blocking `emit` fan-out.
 - Factory-created buses expose additive `ObservableAgentEventBus.onHandlerError` for non-recursive observation of the failed handler, original event, and normalized `Error`; the emit/on-only `AgentEventBus` contract remains structurally compatible with legacy implementations.
 
+### Agent event persistence
+
+- Added an opt-in, finitely bounded persistence bridge that serializes accepted adapter events, reports append and overflow failures, and provides deterministic `flush()` and idempotent draining `close()` barriers.
+- Preserved `pipeAgentEventsToJobStore(bus, store, jobId, options?)` unchanged as the best-effort alternative: it still returns an unsubscribe callback, performs fire-and-forget appends, and isolates both synchronous store throws and asynchronous append rejections.
+
 ### Reliable run lifecycle
 
 - Added distinct persisted `CANCELLED` and `ABANDONED` states plus atomic owner claims, owner-guarded transitions, `JobStore.setCancelled` / `setAbandoned`, and atomic terminal status+event finalization methods.

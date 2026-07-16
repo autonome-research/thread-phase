@@ -142,6 +142,31 @@ Canonical events: `agent_start | text | thinking | tool_call | tool_result | tur
 
 `AgentEventBus.emit(event)` is synchronous and always returns `void`; it starts each subscriber in registration order without awaiting returned promises, so use the bus for observation rather than sequencing. A subscriber throw or rejection does not escape `emit` or stop healthy subscribers. The stable `AgentEventBus` contract remains emit/on-only so legacy implementations stay structurally compatible; `createEventBus()` returns the additive `ObservableAgentEventBus` subtype. Register `bus.onHandlerError(({ handler, event, error }) => ...)` on that factory-created bus to observe failures; non-`Error` values are normalized to `Error`. Error observers are also fire-and-forget, and their own failures are contained rather than recursively reported. Both `on` and `onHandlerError` return idempotent unsubscribe callbacks.
 
+Adapter-event persistence has two deliberately different bridges:
+
+```ts
+import {
+  createAgentEventPersistenceBridge,
+  pipeAgentEventsToJobStore,
+} from '@autonome-research/thread-phase/agents';
+
+// Existing best-effort API: unchanged signature and unsubscribe return value.
+// Appends are fire-and-forget; sync throws and rejected appends are swallowed.
+const unsubscribe = pipeAgentEventsToJobStore(bus, store, jobId, {
+  dropTypes: ['text'],
+});
+
+// Durable opt-in: finite ordered queue, deterministic drain, and failures.
+const persistence = createAgentEventPersistenceBridge(bus, store, jobId, {
+  capacity: 256,
+  onFailure: ({ kind, event, error }) => logPersistenceFailure(kind, event, error),
+});
+await persistence.flush(); // all events accepted before this call have settled
+await persistence.close(); // unsubscribe and drain; safe to call repeatedly
+```
+
+Use `pipeAgentEventsToJobStore` only when best-effort telemetry is sufficient: it preserves the existing synchronous call shape but offers no delivery barrier or failure signal. Use `createAgentEventPersistenceBridge` when shutdown or terminal work must wait for accepted events. Its capacity counts queued and currently appending events; events emitted while full are rejected and reported as `overflow`, append failures are reported as `append`, and later accepted events continue draining in input order. `flush()` and `close()` resolve after accepted appends settle, including failed appends, so install `onFailure` when failures must be acted on.
+
 Conversation state across phases lives in the `Thread` primitive — canonical events plus per-adapter resume tokens. Same-adapter chains (claude-code → claude-code) resume natively via the adapter's session; cross-adapter chains render events back to text via `threadToMessages`.
 
 Memory across runs is outsourced: `MemoryProvider` is just a TypeScript interface (`recall(scope, query?) / remember(scope, events)`). thread-phase ships no implementations; bind Honcho, Letta, Mem0, or a custom backend yourself. See [`examples/honcho-memory.ts`](./examples/honcho-memory.ts).
