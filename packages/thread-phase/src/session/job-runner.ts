@@ -40,6 +40,7 @@ export interface JobRunOptions {
   /**
    * Asynchronous resources to drain, in registration order, before any
    * terminal job transition and before the runner releases its local hooks.
+   * Drains also run when ownership acquisition loses or rejects.
    *
    * All drains are attempted even when one fails. On an otherwise successful
    * run, drain failure makes the job FAILED. A pipeline failure or cancellation
@@ -321,8 +322,10 @@ export class JobRunner extends EventEmitter {
         ? { status: 'stopped', reason: stopReason, eventCount }
         : { status: 'completed', eventCount };
     } catch (error: unknown) {
-      if (!ownershipAcquired) throw error;
       const drainFailures = await drainResources();
+      if (!ownershipAcquired) {
+        throw combineLifecycleErrors(error, drainFailures);
+      }
       if (signal.aborted) {
         const reason = signalReasonToString(signal, entry.cancelReason ?? 'cancelled');
         await persistCancellation(reason);

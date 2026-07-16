@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { PipelineCache } from '../src/cache.js';
 import type { BasePipelineContext, Phase } from '../src/phase.js';
 import { JobRunner } from '../src/session/job-runner.js';
+import type { JobStore } from '../src/session/job-store.js';
 import { SqliteJobStore } from '../src/session/sqlite-job-store.js';
 
 interface Deferred<T> {
@@ -76,6 +77,81 @@ describe('JobRunner lifecycle drains', () => {
     await expect(running).resolves.toEqual({ status: 'completed', eventCount: 2 });
     expect(order).toEqual(['first-start', 'first-end', 'second']);
     expect((await store.getEvents(jobId)).map((event) => event.eventType)).toEqual(['phase', 'done']);
+  });
+
+  it('drains exactly once before restoring hooks when ownership acquisition returns false', async () => {
+    const jobId = await runner.create('owned-elsewhere', null);
+    await store.setRunning(jobId, { ownerId: 'winner' });
+    const previousController = new AbortController();
+    const previousHeartbeat = vi.fn(async () => undefined);
+    const ctx: Ctx = {
+      cache: new PipelineCache(),
+      signal: previousController.signal,
+      heartbeat: previousHeartbeat,
+    };
+    const drainStarted = deferred<void>();
+    const releaseDrain = deferred<void>();
+    const order: string[] = [];
+
+    const running = runner.run(jobId, [successfulPhase], ctx, undefined, {
+      ownership: { ownerId: 'loser' },
+      drains: [
+        async () => {
+          order.push('first-start');
+          expect(ctx.signal).not.toBe(previousController.signal);
+          expect(ctx.heartbeat).toBe(previousHeartbeat);
+          expect(runner.signalFor(jobId)).toBeDefined();
+          drainStarted.resolve();
+          await releaseDrain.promise;
+          order.push('first-end');
+        },
+        () => { order.push('second'); },
+      ],
+    });
+
+    await drainStarted.promise;
+    expect(order).toEqual(['first-start']);
+    expect(ctx.signal).not.toBe(previousController.signal);
+    releaseDrain.resolve();
+
+    await expect(running).rejects.toThrow(`Job ${jobId} is already owned or terminal`);
+    expect(order).toEqual(['first-start', 'first-end', 'second']);
+    expect(ctx.signal).toBe(previousController.signal);
+    expect(ctx.heartbeat).toBe(previousHeartbeat);
+    expect(runner.signalFor(jobId)).toBeUndefined();
+  });
+
+  it('attempts every drain after acquisition rejection and keeps that error primary', async () => {
+    const acquisitionError = new Error('ownership backend unavailable');
+    const rejectingStore = new Proxy(store, {
+      get(target, property) {
+        if (property === 'setRunning') return async () => { throw acquisitionError; };
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as JobStore;
+    const rejectingRunner = new JobRunner(rejectingStore);
+    const firstDrainError = new Error('first drain failed');
+    const secondDrain = vi.fn(async () => { throw new Error('second drain failed'); });
+    const ctx: Ctx = { cache: new PipelineCache() };
+
+    const error = await rejectingRunner.run('claim-rejected', [successfulPhase], ctx, undefined, {
+      drains: [
+        async () => { throw firstDrainError; },
+        secondDrain,
+      ],
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error).toMatchObject({ message: acquisitionError.message });
+    expect((error as AggregateError).errors).toEqual([
+      acquisitionError,
+      firstDrainError,
+      expect.objectContaining({ message: 'second drain failed' }),
+    ]);
+    expect(secondDrain).toHaveBeenCalledOnce();
+    expect(ctx.signal).toBeUndefined();
+    expect(rejectingRunner.signalFor('claim-rejected')).toBeUndefined();
   });
 
   it('attempts every drain and turns otherwise successful work into an observed failure', async () => {

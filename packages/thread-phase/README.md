@@ -179,7 +179,7 @@ await runner.run(jobId, phases, ctx, finalResult, {
 });
 ```
 
-Drains run sequentially in registration order, and every drain is attempted. They are callbacks rather than AgentEventBus-specific objects, so `JobRunner` remains independent of adapters and event delivery. A drain failure turns an otherwise successful run into `FAILED`. If pipeline failure and drain failure coincide, the pipeline failure remains the persisted terminal reason; cancellation similarly takes precedence over both. The rejected `AggregateError` exposes all accompanying drain failures, so cleanup loss is not silent. Terminal persistence and runner hook shutdown happen only after draining finishes.
+Drains run sequentially in registration order, and every drain is attempted, including when ownership acquisition returns false or rejects. They are callbacks rather than AgentEventBus-specific objects, so `JobRunner` remains independent of adapters and event delivery. A drain failure turns an otherwise successful run into `FAILED`. If pipeline or ownership-acquisition failure and drain failure coincide, the original failure remains primary; cancellation similarly takes precedence over drain failures. The rejected `AggregateError` exposes all accompanying drain failures, so cleanup loss is not silent. Terminal persistence and runner hook shutdown happen only after draining finishes.
 
 Conversation state across phases lives in the `Thread` primitive — canonical events plus per-adapter resume tokens. Same-adapter chains (claude-code → claude-code) resume natively via the adapter's session; cross-adapter chains render events back to text via `threadToMessages`.
 
