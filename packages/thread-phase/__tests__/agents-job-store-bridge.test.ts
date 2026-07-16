@@ -157,8 +157,8 @@ describe('persistAgentEventsToJobStore', () => {
     const appendStarted = deferred();
     const appendFinished = deferred();
     const releaseAppend = deferred();
-    const observerStarted = [deferred(), deferred()];
-    const releaseObserver = [deferred(), deferred()];
+    const observerStarted = [deferred(), deferred(), deferred()];
+    const releaseObserver = [deferred(), deferred(), deferred()];
     const failures: AgentEventPersistenceFailure[] = [];
     const occurrencesAtDispatch: number[] = [];
     const originalAppend = store.appendEvent.bind(store);
@@ -216,27 +216,34 @@ describe('persistAgentEventsToJobStore', () => {
     expect(failures[1]).toMatchObject({
       kind: 'overflow',
       event: { delta: 'overflow-1' },
-      occurrences: 10_000,
+      occurrences: 9_999,
     });
     expect(Object.isFrozen(failures[1])).toBe(true);
     expect(flushed).toBe(false);
 
     releaseObserver[1]!.resolve();
+    await observerStarted[2]!.promise;
     await flushPromise;
     expect(flushed).toBe(true);
+    expect(failures[2]).toMatchObject({
+      kind: 'overflow',
+      event: { delta: 'post-flush-overflow' },
+      occurrences: 1,
+    });
     expect(failures.map((failure) => failure.occurrences)).toEqual(occurrencesAtDispatch);
     expect(occurrencesAtDispatch.reduce((total, count) => total + count, 0)).toBe(10_001);
 
+    releaseObserver[2]!.resolve();
     await bridge.close();
     store.close();
   });
 
-  it('keeps repeated flush barriers from starting concurrent same-kind observers', async () => {
+  it('seals repeated flush barriers while keeping same-kind observer state bounded and serial', async () => {
     const store = newStore();
     const bus = createEventBus();
     const releaseAppend = deferred();
-    const observerStarted = [deferred(), deferred()];
-    const releaseObserver = [deferred(), deferred()];
+    const observerStarted = [deferred(), deferred(), deferred()];
+    const releaseObserver = [deferred(), deferred(), deferred()];
     const occurrences: number[] = [];
     let activeObservers = 0;
     let maximumActiveObservers = 0;
@@ -263,9 +270,14 @@ describe('persistAgentEventsToJobStore', () => {
     await observerStarted[0]!.promise;
 
     const barriers: Promise<void>[] = [];
+    const resolved = Array.from({ length: 1_000 }, () => false);
     for (let index = 0; index < 1_000; index += 1) {
       bus.emit({ type: 'text', source: 'mock', delta: `pending-${index}` });
-      barriers.push(bridge.flush());
+      barriers.push(
+        bridge.flush().then(() => {
+          resolved[index] = true;
+        }),
+      );
     }
     await Promise.resolve();
     expect(occurrences).toEqual([1]);
@@ -274,23 +286,33 @@ describe('persistAgentEventsToJobStore', () => {
     releaseAppend.resolve();
     releaseObserver[0]!.resolve();
     await observerStarted[1]!.promise;
-    expect(occurrences).toEqual([1, 1_000]);
+    expect(occurrences).toEqual([1, 1]);
     expect(maximumActiveObservers).toBe(1);
+    expect(resolved.every((value) => !value)).toBe(true);
 
     releaseObserver[1]!.resolve();
+    await observerStarted[2]!.promise;
+    await barriers[0];
+    expect(resolved[0]).toBe(true);
+    expect(resolved.slice(1).every((value) => !value)).toBe(true);
+    expect(occurrences).toEqual([1, 1, 999]);
+    expect(maximumActiveObservers).toBe(1);
+
+    releaseObserver[2]!.resolve();
     await Promise.all(barriers);
+    expect(resolved.every(Boolean)).toBe(true);
     expect(maximumActiveObservers).toBe(1);
     await bridge.close();
     store.close();
   });
 
-  it('coalesces post-invocation overflow into an already-required pending delivery', async () => {
+  it('seals pre-invocation overflow without waiting for later failure observation', async () => {
     const store = newStore();
     const bus = createEventBus();
     const appendStarted = deferred();
     const releaseAppend = deferred();
-    const observerStarted = deferred();
-    const releaseObserver = deferred();
+    const observerStarted = [deferred(), deferred()];
+    const releaseObserver = [deferred(), deferred()];
     const observed: AgentEventPersistenceFailure[] = [];
 
     store.appendEvent = async () => {
@@ -301,9 +323,10 @@ describe('persistAgentEventsToJobStore', () => {
     const bridge = persistAgentEventsToJobStore(bus, store, 'overflow-barrier', {
       capacity: 1,
       onFailure: async (failure) => {
+        const index = observed.length;
         observed.push(failure);
-        observerStarted.resolve();
-        await releaseObserver.promise;
+        observerStarted[index]!.resolve();
+        await releaseObserver[index]!.promise;
       },
     });
 
@@ -311,18 +334,24 @@ describe('persistAgentEventsToJobStore', () => {
     bus.emit({ type: 'text', source: 'mock', delta: 'pre-barrier-overflow' });
     const flushed = bridge.flush();
 
-    // The post-barrier failure arrives before the pending batch is delivered,
-    // so it can coalesce without adding observer work to the flush barrier.
+    // The invocation seals the covered notification. A later failure gets a
+    // separate serial delivery and cannot extend this flush barrier.
     bus.emit({ type: 'text', source: 'mock', delta: 'post-barrier-overflow' });
     await appendStarted.promise;
-    await observerStarted.promise;
+    await observerStarted[0]!.promise;
     releaseAppend.resolve();
     expect(observed).toMatchObject([
-      { kind: 'overflow', event: { delta: 'pre-barrier-overflow' }, occurrences: 2 },
+      { kind: 'overflow', event: { delta: 'pre-barrier-overflow' }, occurrences: 1 },
     ]);
-    releaseObserver.resolve();
+    releaseObserver[0]!.resolve();
+    await observerStarted[1]!.promise;
     await flushed;
+    expect(observed).toMatchObject([
+      { kind: 'overflow', event: { delta: 'pre-barrier-overflow' }, occurrences: 1 },
+      { kind: 'overflow', event: { delta: 'post-barrier-overflow' }, occurrences: 1 },
+    ]);
 
+    releaseObserver[1]!.resolve();
     await bridge.close();
     store.close();
   });

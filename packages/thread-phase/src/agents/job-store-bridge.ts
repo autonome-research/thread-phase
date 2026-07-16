@@ -98,9 +98,10 @@ function eventKey(
  * `flush` and `close` snapshot their barrier at invocation and resolve after
  * covered appends and failure notifications settle, including failed appends.
  * Later failures cannot add another observer delivery to an existing barrier.
- * While an asynchronous failure observer is pending, same-kind failures accumulate into one
- * immutable pending batch so observer delivery is finitely bounded and an
- * already delivered notification never changes.
+ * While an asynchronous failure observer is pending, a barrier may seal one
+ * immutable serial successor while later same-kind failures accumulate into
+ * one remaining pending batch. Observer delivery and retained state stay
+ * finitely bounded, and an already delivered notification never changes.
  */
 export function createAgentEventPersistenceBridge(
   bus: AgentEventBus,
@@ -138,6 +139,9 @@ export function createAgentEventPersistenceBridge(
   }
   interface FailureState {
     active?: FailureBatch;
+    /** Immutable-at-barrier batch waiting behind the active observer. */
+    sealed?: PendingFailureBatch;
+    /** Mutable aggregate for failures not yet assigned a serial delivery slot. */
     pending?: PendingFailureBatch;
   }
   const failureStates = new Map<AgentEventPersistenceFailureKind, FailureState>();
@@ -189,10 +193,21 @@ export function createAgentEventPersistenceBridge(
     state: FailureState,
   ): void => {
     if (state.active) return;
-    const pending = state.pending;
-    if (!pending) return;
-    state.pending = undefined;
-    deliver(kind, state, pending.accumulator, pending);
+    const next = state.sealed ?? state.pending;
+    if (!next) return;
+    if (state.sealed) state.sealed = undefined;
+    else state.pending = undefined;
+    deliver(kind, state, next.accumulator, next);
+  };
+
+  const sealPending = (state: FailureState): void => {
+    // Keep one serial slot behind the active observer. Once occupied, later
+    // barriers share the remaining pending aggregate instead of retaining an
+    // unbounded queue of sealed generations.
+    if (!state.sealed && state.pending) {
+      state.sealed = state.pending;
+      state.pending = undefined;
+    }
   };
 
   const report = (
@@ -234,10 +249,11 @@ export function createAgentEventPersistenceBridge(
   const drainAtInvocation = (): Promise<void> => {
     const accepted = [...pendingAcceptedSettlements];
     const observed = [...failureStates.values()].flatMap((state) => {
-      // Snapshot both generations without starting a second same-kind
-      // delivery. Later failures may join the already-required pending batch,
-      // but cannot add another observer generation to this barrier.
-      const batches = [state.active, state.pending].filter(
+      // Seal an available serial slot without dispatching it beside an active
+      // observer. The barrier snapshots only batches that existed now; later
+      // failures accumulate in the one remaining bounded pending slot.
+      sealPending(state);
+      const batches = [state.active, state.sealed, state.pending].filter(
         (batch): batch is FailureBatch => batch !== undefined,
       );
       return batches.map((batch) => batch.settled);
