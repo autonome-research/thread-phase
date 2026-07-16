@@ -124,6 +124,8 @@ await runner.run(jobId, [phaseA, phaseB], ctx);
 
 `JobStore` is asynchronous so SQLite, Postgres, Redis, and network-backed implementations share one consistency contract. The bundled `SqliteJobStore` keeps better-sqlite3's synchronous hot path internally and exposes it through the same Promise-based interface.
 
+The v5.0.0 `JobStore` shape remains sufficient for custom stores. Owned atomic claims/finalization and owner-scoped heartbeat opt-in are additive capabilities (`OwnedJobStoreCapabilities` and `OwnedHeartbeatJobStoreCapabilities`), not new required methods. `JobRunner` uses them when present; otherwise it falls back to the v5.0.0 lifecycle methods. The fallback preserves legacy behavior but cannot manufacture atomic state/event writes or owner-scoped compare-and-set semantics in a backend that does not provide them.
+
 ### `AgentAdapter` — the extension surface
 
 `AgentAdapter` is the protocol every ready-agent integration speaks. The in-tree `inferenceAgent` wraps `runAgentWithTools`; sibling implementations in [`@autonome-research/thread-phase-agents`](../thread-phase-agents) wrap `hermes`, `openclaw`, `claude`, the OpenAI Responses API (Codex), and the Anthropic SDK directly.

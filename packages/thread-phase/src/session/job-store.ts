@@ -150,6 +150,28 @@ export interface JobOwnership {
   heartbeatEnabled?: boolean;
 }
 
+/**
+ * Additive owned-lifecycle operations used by JobRunner when a store supports
+ * atomic claims and terminal state/event persistence. Kept separate so custom
+ * v5.0.0 JobStore implementations remain structurally valid unchanged.
+ */
+export interface OwnedJobStoreCapabilities {
+  claimRunning(jobId: string, ownership?: JobOwnership): Promise<boolean>;
+  finalizeJob(jobId: string, finalization: JobFinalization): Promise<EventRecord | null>;
+  finalizeAbandonedIfStale(
+    jobId: string,
+    staleBefore: Date,
+    reason: string,
+    expectedOwnerId?: string,
+  ): Promise<EventRecord | null>;
+}
+
+/** Additive owner-scoped heartbeat operations for stores that support them. */
+export interface OwnedHeartbeatJobStoreCapabilities {
+  heartbeatOwned(jobId: string, ownerId: string): Promise<void>;
+  enableHeartbeat(jobId: string, ownerId: string): Promise<boolean>;
+}
+
 export interface JobStore {
   /** Insert a PENDING job row, return its id. */
   createJob(name: string, input: unknown): Promise<string>;
@@ -173,47 +195,15 @@ export interface JobStore {
    * ownership metadata (sessionId, pid, ppid, cwd, hostname) so
    * downstream operators can answer "which process owns this job."
    */
-  /** Atomically claim PENDING/unowned work. False means another owner won. */
-  setRunning(jobId: string, ownership?: JobOwnership): Promise<boolean>;
-  /**
-   * Terminal transitions are atomic first-writer-wins operations. They return
-   * true only when this call changed a PENDING/RUNNING row; custom stores must
-   * not overwrite an existing terminal status.
-   */
-  setCompleted(jobId: string, result: unknown, ownerId?: string): Promise<boolean>;
-  setFailed(jobId: string, error: string, ownerId?: string): Promise<boolean>;
-  /** Persist a cooperative or forced user/system cancellation. */
-  setCancelled(jobId: string, reason: string, ownerId?: string): Promise<boolean>;
-  /** Persist an explicit owner-loss decision for a RUNNING job. */
-  setAbandoned(jobId: string, reason: string): Promise<boolean>;
-  /**
-   * Atomically abandon a job only if it is still RUNNING, still owned by the
-   * expected owner (when supplied), and its heartbeat remains older than the
-   * cutoff. Prevents a stale-list/read race from abandoning a recovered job.
-   */
-  setAbandonedIfStale(
-    jobId: string,
-    staleBefore: Date,
-    reason: string,
-    expectedOwnerId?: string,
-  ): Promise<boolean>;
-  /** Atomically persist one terminal transition and its terminal event. */
-  finalizeJob(jobId: string, finalization: JobFinalization): Promise<EventRecord | null>;
-  /** Atomic stale-check + ABANDONED transition + event append. */
-  finalizeAbandonedIfStale(
-    jobId: string,
-    staleBefore: Date,
-    reason: string,
-    expectedOwnerId?: string,
-  ): Promise<EventRecord | null>;
+  setRunning(jobId: string, ownership?: JobOwnership): Promise<void>;
+  setCompleted(jobId: string, result: unknown): Promise<void>;
+  setFailed(jobId: string, error: string): Promise<void>;
   /**
    * Update `heartbeatAt` to "now." Called by JobRunner on its
    * heartbeatMs interval and via `ctx.heartbeat?.()` from phase bodies.
    * No-op if the job is not in RUNNING state.
    */
-  heartbeat(jobId: string, ownerId?: string): Promise<void>;
-  /** Atomically opt an owned run into stale detection and refresh heartbeat. */
-  enableHeartbeat(jobId: string, ownerId: string): Promise<boolean>;
+  heartbeat(jobId: string): Promise<void>;
 
   getJob(jobId: string, options?: GetJobOptions): Promise<JobRecord | null>;
   listJobs(options?: ListJobsOptions): Promise<JobRecord[]>;

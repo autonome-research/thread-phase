@@ -125,7 +125,7 @@ describe('JobRunner lifecycle drains', () => {
     const acquisitionError = new Error('ownership backend unavailable');
     const rejectingStore = new Proxy(store, {
       get(target, property) {
-        if (property === 'setRunning') return async () => { throw acquisitionError; };
+        if (property === 'claimRunning') return async () => { throw acquisitionError; };
         const value = Reflect.get(target, property, target) as unknown;
         return typeof value === 'function' ? value.bind(target) : value;
       },

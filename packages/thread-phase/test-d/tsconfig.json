@@ -4,8 +4,9 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
+      "@autonome-research/thread-phase": ["../src/index.ts"],
       "@autonome-research/thread-phase/agents": ["../src/agents/index.ts"]
     }
   },
-  "include": ["agent-event-bus.ts"]
+  "include": ["*.ts"]
 }
