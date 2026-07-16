@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import { createEventBus } from '../src/agents/event-bus.js';
 import type {
   AgentEvent,
+  AgentEventBus,
   AgentEventHandler,
   AgentEventHandlerFailure,
 } from '../src/agents/protocol.js';
@@ -42,7 +43,34 @@ const event: AgentEvent = {
   payload: { sequence: 1 },
 };
 
+class V5StructuralEventBus implements AgentEventBus {
+  private readonly handlers = new Set<AgentEventHandler>();
+
+  emit(emitted: AgentEvent): void {
+    for (const handler of this.handlers) handler(emitted);
+  }
+
+  on(handler: AgentEventHandler): () => void {
+    this.handlers.add(handler);
+    return () => {
+      this.handlers.delete(handler);
+    };
+  }
+}
+
 describe('AgentEventBus handler-failure contract', () => {
+  it('runs an unchanged emit/on-only v5 structural bus fixture', () => {
+    const legacyBus: AgentEventBus = new V5StructuralEventBus();
+    const seen: AgentEvent[] = [];
+    const unsubscribe = legacyBus.on((emitted) => seen.push(emitted));
+
+    legacyBus.emit(event);
+    unsubscribe();
+    legacyBus.emit(event);
+
+    expect(seen).toEqual([event]);
+  });
+
   it('keeps emit synchronous and non-blocking for asynchronous handlers', async () => {
     const bus = createEventBus();
     const release = deferred();
@@ -126,6 +154,23 @@ describe('AgentEventBus handler-failure contract', () => {
     bus.emit(event);
 
     expect(seen).toEqual(['first', 'second', 'second']);
+  });
+
+  it('removes only the requested error observer and removal is idempotent', () => {
+    const bus = createEventBus();
+    const observed: string[] = [];
+    const removeFirst = bus.onHandlerError(() => observed.push('first'));
+    bus.onHandlerError(() => observed.push('second'));
+    bus.on(() => {
+      throw new Error('subscriber failure');
+    });
+
+    bus.emit(event);
+    removeFirst();
+    removeFirst();
+    bus.emit(event);
+
+    expect(observed).toEqual(['first', 'second', 'second']);
   });
 
   it('reports the failed handler, original event, and a normalized Error', () => {
