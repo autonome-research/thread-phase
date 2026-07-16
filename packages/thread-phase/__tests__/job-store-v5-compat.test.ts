@@ -1,12 +1,40 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { PipelineCache } from '../src/cache.js';
 import type { BasePipelineContext, Phase } from '../src/phase.js';
 import { JobRunner } from '../src/session/job-runner.js';
+import { SqliteJobStore } from '../src/session/sqlite-job-store.js';
 import { V5CustomJobStore } from '../test-d/job-store-v5.js';
 
 interface Ctx extends BasePipelineContext {}
 
 describe('exact v5.0.0 custom JobStore compatibility', () => {
+  it('preserves SqliteJobStore boolean CAS outcomes and owner guards for direct callers', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thread-phase-v5-sqlite-'));
+    const store = new SqliteJobStore(join(dir, 'jobs.db'));
+    try {
+      const id = await store.createJob('owned-sqlite', null);
+      await expect(store.setRunning(id, { ownerId: 'owner-a' })).resolves.toBe(true);
+      await expect(store.setRunning(id, { ownerId: 'owner-b' })).resolves.toBe(false);
+      await expect(store.enableHeartbeat(id, 'owner-b')).resolves.toBe(false);
+      await expect(store.enableHeartbeat(id, 'owner-a')).resolves.toBe(true);
+      await expect(store.setCompleted(id, { wrong: true }, 'owner-b')).resolves.toBe(false);
+      await expect(store.setCompleted(id, { ok: true }, 'owner-a')).resolves.toBe(true);
+      await expect(store.setFailed(id, 'late', 'owner-a')).resolves.toBe(false);
+      expect(await store.getJob(id)).toMatchObject({
+        status: 'COMPLETED',
+        result: { ok: true },
+        ownerId: 'owner-a',
+        heartbeatEnabled: true,
+      });
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('preserves released CAS returns and owner-aware direct-store signatures', async () => {
     const store = new V5CustomJobStore();
     const id = await store.createJob('owned', null);

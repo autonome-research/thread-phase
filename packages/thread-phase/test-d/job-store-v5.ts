@@ -10,8 +10,142 @@ import type {
   PipelineEvent,
 } from '@autonome-research/thread-phase';
 
+/**
+ * Verbatim structural copy of the JobStore declarations released in v5.0.0.
+ * Keep this independent of the current declarations: exact type assertions
+ * below make any parameter or return-value drift fail the test-d typecheck.
+ */
+type ReleasedV5JobStatus =
+  | 'PENDING'
+  | 'RUNNING'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'ABANDONED'
+  | 'STALE';
+
+interface ReleasedV5JobRecord {
+  id: string;
+  name: string;
+  input: unknown;
+  status: ReleasedV5JobStatus;
+  result: unknown | null;
+  error: string | null;
+  eventCount: number;
+  createdAt: Date;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  sessionId?: string;
+  pid?: number;
+  ppid?: number;
+  cwd?: string;
+  hostname?: string;
+  ownerId?: string;
+  launchSource?: string;
+  heartbeatEnabled?: boolean;
+  heartbeatAt?: Date;
+}
+
+interface ReleasedV5EventRecord {
+  id: number;
+  jobId: string;
+  eventType: string;
+  data: PipelineEvent;
+  createdAt: Date;
+}
+
+interface ReleasedV5JobOwnership {
+  sessionId?: string;
+  pid?: number;
+  ppid?: number;
+  cwd?: string;
+  hostname?: string;
+  ownerId?: string;
+  launchSource?: string;
+  heartbeatEnabled?: boolean;
+}
+
+interface ReleasedV5JobFinalization {
+  status: 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'ABANDONED';
+  result?: unknown;
+  error?: string;
+  event: PipelineEvent;
+  ownerId?: string;
+}
+
+interface ReleasedV5ListJobsOptions {
+  name?: string;
+  limit?: number;
+  status?: ReleasedV5JobStatus;
+  staleAfterMs?: number;
+}
+
+interface ReleasedV5GetJobOptions {
+  staleAfterMs?: number;
+}
+
+interface ReleasedV5JobStore {
+  createJob(name: string, input: unknown): Promise<string>;
+  acquireExclusive(name: string, input: unknown): Promise<string | null>;
+  setRunning(jobId: string, ownership?: ReleasedV5JobOwnership): Promise<boolean>;
+  setCompleted(jobId: string, result: unknown, ownerId?: string): Promise<boolean>;
+  setFailed(jobId: string, error: string, ownerId?: string): Promise<boolean>;
+  setCancelled(jobId: string, reason: string, ownerId?: string): Promise<boolean>;
+  setAbandoned(jobId: string, reason: string): Promise<boolean>;
+  setAbandonedIfStale(
+    jobId: string,
+    staleBefore: Date,
+    reason: string,
+    expectedOwnerId?: string,
+  ): Promise<boolean>;
+  finalizeJob(
+    jobId: string,
+    finalization: ReleasedV5JobFinalization,
+  ): Promise<ReleasedV5EventRecord | null>;
+  finalizeAbandonedIfStale(
+    jobId: string,
+    staleBefore: Date,
+    reason: string,
+    expectedOwnerId?: string,
+  ): Promise<ReleasedV5EventRecord | null>;
+  heartbeat(jobId: string, ownerId?: string): Promise<void>;
+  enableHeartbeat(jobId: string, ownerId: string): Promise<boolean>;
+  getJob(jobId: string, options?: ReleasedV5GetJobOptions): Promise<ReleasedV5JobRecord | null>;
+  listJobs(options?: ReleasedV5ListJobsOptions): Promise<ReleasedV5JobRecord[]>;
+  appendEvent(jobId: string, event: PipelineEvent): Promise<number>;
+  getEvents(jobId: string, afterId?: number): Promise<ReleasedV5EventRecord[]>;
+  close(): void | Promise<void>;
+}
+
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2)
+    ? (<T>() => T extends B ? 1 : 2) extends (<T>() => T extends A ? 1 : 2)
+      ? true
+      : false
+    : false;
+type Assert<T extends true> = T;
+
+type _StatusIsExact = Assert<Equal<JobStatus, ReleasedV5JobStatus>>;
+type _RecordIsExact = Assert<Equal<JobRecord, ReleasedV5JobRecord>>;
+type _EventRecordIsExact = Assert<Equal<EventRecord, ReleasedV5EventRecord>>;
+type _OwnershipIsExact = Assert<Equal<JobOwnership, ReleasedV5JobOwnership>>;
+type _FinalizationIsExact = Assert<Equal<JobFinalization, ReleasedV5JobFinalization>>;
+type _ListOptionsAreExact = Assert<Equal<ListJobsOptions, ReleasedV5ListJobsOptions>>;
+type _GetOptionsAreExact = Assert<Equal<GetJobOptions, ReleasedV5GetJobOptions>>;
+type _StoreIsExact = Assert<Equal<JobStore, ReleasedV5JobStore>>;
+type _ClaimReturnIsBoolean = Assert<Equal<ReturnType<JobStore['setRunning']>, Promise<boolean>>>;
+type _HeartbeatIsOwnerAware = Assert<
+  Equal<JobStore['heartbeat'], (jobId: string, ownerId?: string) => Promise<void>>
+>;
+type _TerminalCasIsBoolean = Assert<
+  Equal<ReturnType<JobStore['setCompleted']>, Promise<boolean>>
+>;
+type _AtomicFinalizationReturnIsExact = Assert<
+  Equal<ReturnType<JobStore['finalizeJob']>, Promise<EventRecord | null>>
+>;
+
 /** In-memory custom implementation of the exact released v5.0.0 contract. */
-export class V5CustomJobStore implements JobStore {
+export class V5CustomJobStore implements ReleasedV5JobStore {
   private nextJobId = 1;
   private nextEventId = 1;
   private readonly jobs = new Map<string, JobRecord>();
