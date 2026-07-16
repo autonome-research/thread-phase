@@ -164,7 +164,7 @@ describe('JobRunner lifecycle drains', () => {
       kind: 'v5 structural custom-store',
       makeStore: (): JobStore => new V5CustomJobStore(),
     },
-  ])('drains and restores runner state after synchronous $kind acquisition throws', async ({ kind, makeStore }) => {
+  ])('defers synchronous $kind acquisition throws until start returns and cleans up', async ({ kind, makeStore }) => {
     const acquisitionError = new Error(`${kind} acquisition threw synchronously`);
     const acquisition = vi.fn((): Promise<boolean> => { throw acquisitionError; });
     const target = makeStore();
@@ -183,34 +183,46 @@ describe('JobRunner lifecycle drains', () => {
       signal: previousController.signal,
       heartbeat: previousHeartbeat,
     };
-    const drainFailure = new Error('drain failed too');
-    const drainOrder: string[] = [];
-
-    const error = await throwingRunner.run('sync-claim-throw', [successfulPhase], ctx, undefined, {
-      drains: [
-        () => { drainOrder.push('first'); },
-        () => {
-          drainOrder.push('second');
-          throw drainFailure;
-        },
-      ],
-    }).catch((caught: unknown) => caught);
-
-    expect(acquisition).toHaveBeenCalledOnce();
-    expect(error).toBeInstanceOf(AggregateError);
-    expect(error).toMatchObject({ message: acquisitionError.message });
-    expect((error as AggregateError).errors).toEqual([acquisitionError, drainFailure]);
-    expect(drainOrder).toEqual(['first', 'second']);
-    expect(ctx.signal).toBe(previousController.signal);
-    expect(ctx.heartbeat).toBe(previousHeartbeat);
-    expect(throwingRunner.signalFor('sync-claim-throw')).toBeUndefined();
-
-    // A leaked active-context registration would reject this otherwise valid
-    // follow-up run before it reaches the store.
-    const retryJobId = await runner.create(`after-${kind}-sync-throw`, null);
-    await expect(runner.run(retryJobId, [successfulPhase], ctx)).resolves.toMatchObject({
-      status: 'completed',
+    const firstDrain = vi.fn(() => {
+      expect(ctx.signal).not.toBe(previousController.signal);
+      expect(ctx.heartbeat).toBe(previousHeartbeat);
+      expect(throwingRunner.signalFor('sync-claim-throw')).toBeDefined();
     });
+    const secondDrain = vi.fn();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      const handle = throwingRunner.start('sync-claim-throw', [successfulPhase], ctx, undefined, {
+        drains: [firstDrain, secondDrain],
+      });
+
+      // Acquisition itself is deferred, so start can expose a fully initialized
+      // handle before a non-async structural store has a chance to throw.
+      expect(acquisition).not.toHaveBeenCalled();
+      expect(handle.signal).toBe(ctx.signal);
+      const error = await handle.result.catch((caught: unknown) => caught);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(acquisition).toHaveBeenCalledOnce();
+      expect(error).toBe(acquisitionError);
+      expect(firstDrain).toHaveBeenCalledOnce();
+      expect(secondDrain).toHaveBeenCalledOnce();
+      expect(unhandled).toEqual([]);
+      expect(ctx.signal).toBe(previousController.signal);
+      expect(ctx.heartbeat).toBe(previousHeartbeat);
+      expect(throwingRunner.signalFor('sync-claim-throw')).toBeUndefined();
+
+      // A leaked active-context registration would reject this otherwise valid
+      // follow-up run before it reaches the store.
+      const retryJobId = await runner.create(`after-${kind}-sync-throw`, null);
+      await expect(runner.run(retryJobId, [successfulPhase], ctx)).resolves.toMatchObject({
+        status: 'completed',
+      });
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 
   it('attempts every drain and turns otherwise successful work into an observed failure', async () => {

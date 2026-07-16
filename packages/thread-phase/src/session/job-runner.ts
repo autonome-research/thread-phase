@@ -198,13 +198,14 @@ export class JobRunner extends EventEmitter {
     };
     const ownerId = ownership.ownerId!;
     const registeredDrains = [...(options.drains ?? [])];
+    // Defer the store call itself, not just its result. Structural stores may
+    // throw before returning a Promise; running it in a microtask guarantees
+    // local state and context hooks are installed before acquisition starts.
+    const claim = Promise.resolve().then(() => this.store.setRunning(jobId, ownership));
     const entry: InflightRun = {
       controller,
       signal,
-      // Replaced by the real acquisition promise before run() first yields.
-      // The placeholder keeps cancellation safe while lifecycle setup remains
-      // entirely synchronous.
-      claim: Promise.resolve(false),
+      claim,
     };
     this.inflight.set(jobId, entry);
     ctx.signal = signal;
@@ -265,10 +266,6 @@ export class JobRunner extends EventEmitter {
     };
 
     try {
-      // Custom stores can throw before returning their declared Promise. Keep
-      // acquisition inside the protected lifecycle so those failures still
-      // drain resources and restore context hooks.
-      entry.claim = this.store.setRunning(jobId, ownership);
       const claimed = await entry.claim;
       if (!claimed) throw new Error(`Job ${jobId} is already owned or terminal`);
       ownershipAcquired = true;
