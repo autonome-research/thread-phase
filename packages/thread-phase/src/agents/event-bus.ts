@@ -11,9 +11,9 @@
 
 import type {
   AgentEvent,
-  AgentEventBus,
   AgentEventHandler,
   AgentEventHandlerFailure,
+  ObservableAgentEventBus,
 } from './protocol.js';
 
 function normalizeError(value: unknown): Error {
@@ -30,7 +30,7 @@ function normalizeError(value: unknown): Error {
  * `AgentRunOptions.eventBus` mirrors its event stream into it.
  *
  */
-export function createEventBus(): AgentEventBus {
+export function createEventBus(): ObservableAgentEventBus {
   const handlers = new Set<AgentEventHandler>();
   const errorHandlers = new Set<
     (failure: AgentEventHandlerFailure) => void | Promise<void>

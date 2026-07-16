@@ -7,7 +7,7 @@ All notable changes to thread-phase will be documented here. The format is based
 ### Agent event dispatch
 
 - `AgentEventBus` now isolates both subscriber throws and returned-promise rejections while preserving synchronous, non-blocking `emit` fan-out.
-- Added `onHandlerError` for non-recursive observation of the failed handler, original event, and normalized `Error`.
+- Factory-created buses expose additive `ObservableAgentEventBus.onHandlerError` for non-recursive observation of the failed handler, original event, and normalized `Error`; the emit/on-only `AgentEventBus` contract remains structurally compatible with legacy implementations.
 
 ### Reliable run lifecycle
 

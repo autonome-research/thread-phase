@@ -38,7 +38,7 @@ The AgentAdapter protocol surface is split across two subpaths with different st
 Consumer-facing types and decorators that have stabilized across multiple minor cycles.
 
 **Protocol types (from `protocol.ts`):**
-`AgentAdapter`, `AgentAdapterMeta`, `AgentCapabilities`, `AgentEvent`, `AgentEventBus`, `AgentEventHandler`, `AgentEventHandlerFailure`, `AgentFinishReason`, `AgentRun`, `AgentRunOptions`, `AgentRunResult`, `ResumeToken`, `SerializableError`, `SteerableAgentRun`, `defineAgentAdapter`, `isSteerable`
+`AgentAdapter`, `AgentAdapterMeta`, `AgentCapabilities`, `AgentEvent`, `AgentEventBus`, `ObservableAgentEventBus`, `AgentEventHandler`, `AgentEventHandlerFailure`, `AgentFinishReason`, `AgentRun`, `AgentRunOptions`, `AgentRunResult`, `ResumeToken`, `SerializableError`, `SteerableAgentRun`, `defineAgentAdapter`, `isSteerable`
 
 **Composition primitives:**
 `createEventBus`, `pipeAgentEventsToJobStore`, `PipeAgentEventsOptions`

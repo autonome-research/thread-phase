@@ -1,0 +1,11 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@autonome-research/thread-phase/agents": ["../src/agents/index.ts"]
+    }
+  },
+  "include": ["agent-event-bus.ts"]
+}

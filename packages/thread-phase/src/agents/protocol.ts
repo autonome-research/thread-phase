@@ -192,6 +192,15 @@ export interface AgentEventBus {
    */
   emit(event: AgentEvent): void;
   on(handler: AgentEventHandler): () => void;
+}
+
+/**
+ * Additive event-bus surface returned by {@link createEventBus}.
+ *
+ * `AgentEventBus` intentionally remains the emit/on-only protocol so legacy
+ * and third-party bus implementations stay structurally assignable.
+ */
+export interface ObservableAgentEventBus extends AgentEventBus {
   /**
    * Observe failures from ordinary event subscribers.
    *
