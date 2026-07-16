@@ -160,6 +160,7 @@ describe('persistAgentEventsToJobStore', () => {
     const observerStarted = [deferred(), deferred()];
     const releaseObserver = [deferred(), deferred()];
     const failures: AgentEventPersistenceFailure[] = [];
+    const occurrencesAtDispatch: number[] = [];
     const originalAppend = store.appendEvent.bind(store);
 
     store.appendEvent = async (id, event) => {
@@ -175,6 +176,7 @@ describe('persistAgentEventsToJobStore', () => {
       onFailure: async (failure) => {
         const index = failures.length;
         failures.push(failure);
+        occurrencesAtDispatch.push(failure.occurrences);
         observerStarted[index]!.resolve();
         await releaseObserver[index]!.promise;
       },
@@ -217,6 +219,8 @@ describe('persistAgentEventsToJobStore', () => {
     releaseObserver[1]!.resolve();
     await flushPromise;
     expect(flushed).toBe(true);
+    expect(failures.map((failure) => failure.occurrences)).toEqual(occurrencesAtDispatch);
+    expect(occurrencesAtDispatch.reduce((total, count) => total + count, 0)).toBe(10_000);
     await bridge.close();
     store.close();
   });
