@@ -159,13 +159,14 @@ const unsubscribe = pipeAgentEventsToJobStore(bus, store, jobId, {
 // Durable opt-in: finite ordered queue, deterministic drain, and failures.
 const persistence = createAgentEventPersistenceBridge(bus, store, jobId, {
   capacity: 256,
-  onFailure: ({ kind, event, error }) => logPersistenceFailure(kind, event, error),
+  onFailure: ({ kind, event, error, occurrences }) =>
+    logPersistenceFailure(kind, event, error, occurrences),
 });
 await persistence.flush(); // all events accepted before this call have settled
 await persistence.close(); // unsubscribe and drain; safe to call repeatedly
 ```
 
-Use `pipeAgentEventsToJobStore` only when best-effort telemetry is sufficient: it preserves the existing synchronous call shape but offers no delivery barrier or failure signal. Use `createAgentEventPersistenceBridge` when shutdown or terminal work must wait for accepted events. Its capacity counts queued and currently appending events; events emitted while full are rejected and reported as `overflow`, append failures are reported as `append`, and later accepted events continue draining in input order. `flush()` and `close()` resolve after accepted appends settle, including failed appends, so install `onFailure` when failures must be acted on.
+Use `pipeAgentEventsToJobStore` only when best-effort telemetry is sufficient: it preserves the existing synchronous call shape but offers no delivery barrier or failure signal. Use `createAgentEventPersistenceBridge` when shutdown or terminal work must wait for accepted events. Its capacity counts queued and currently appending events; events emitted while full are rejected and reported as `overflow`, append failures are reported as `append`, and later accepted events continue draining in input order. Failure observers are included in `flush()` and `close()` barriers. If an asynchronous observer remains pending, further failures of the same kind are coalesced into that notification's `occurrences` count, keeping observer work finitely bounded even during an overflow storm. Install `onFailure` when failures must be acted on.
 
 Register generic asynchronous cleanup with `JobRunOptions.drains` when accepted work must settle before the job's terminal event and state are persisted:
 

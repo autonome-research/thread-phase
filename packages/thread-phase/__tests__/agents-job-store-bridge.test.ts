@@ -150,6 +150,92 @@ describe('persistAgentEventsToJobStore', () => {
     store.close();
   });
 
+  it('coalesces an overflow storm behind a blocked observer and includes it in flush', async () => {
+    const store = newStore();
+    const jobId = await store.createJob('observer-backpressure', null);
+    const bus = createEventBus();
+    const appendStarted = deferred();
+    const appendFinished = deferred();
+    const releaseAppend = deferred();
+    const releaseObserver = deferred();
+    const failures: AgentEventPersistenceFailure[] = [];
+    const originalAppend = store.appendEvent.bind(store);
+
+    store.appendEvent = async (id, event) => {
+      appendStarted.resolve();
+      await releaseAppend.promise;
+      const result = await originalAppend(id, event);
+      appendFinished.resolve();
+      return result;
+    };
+
+    const bridge = persistAgentEventsToJobStore(bus, store, jobId, {
+      capacity: 1,
+      onFailure: async (failure) => {
+        failures.push(failure);
+        await releaseObserver.promise;
+      },
+    });
+    bus.emit({ type: 'text', source: 'mock', delta: 'accepted' });
+    for (let index = 0; index < 10_000; index += 1) {
+      bus.emit({ type: 'text', source: 'mock', delta: `overflow-${index}` });
+    }
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ kind: 'overflow', occurrences: 10_000 });
+
+    let flushed = false;
+    const flushPromise = bridge.flush().then(() => {
+      flushed = true;
+    });
+    await appendStarted.promise;
+    releaseAppend.resolve();
+    await appendFinished.promise;
+    expect(flushed).toBe(false);
+
+    releaseObserver.resolve();
+    await flushPromise;
+    expect(flushed).toBe(true);
+    await bridge.close();
+    store.close();
+  });
+
+  it('waits for append-failure observation when closing', async () => {
+    const store = newStore();
+    const bus = createEventBus();
+    const appendAttempted = deferred();
+    const observerStarted = deferred();
+    const releaseObserver = deferred();
+    let observed: AgentEventPersistenceFailure | undefined;
+
+    store.appendEvent = async () => {
+      appendAttempted.resolve();
+      throw new Error('write failed');
+    };
+    const bridge = persistAgentEventsToJobStore(bus, store, 'failed-job', {
+      onFailure: async (failure) => {
+        observed = failure;
+        observerStarted.resolve();
+        await releaseObserver.promise;
+      },
+    });
+    bus.emit({ type: 'text', source: 'mock', delta: 'failure' });
+
+    let closed = false;
+    const closePromise = bridge.close().then(() => {
+      closed = true;
+    });
+    await appendAttempted.promise;
+    await observerStarted.promise;
+    expect(observed).toMatchObject({ kind: 'append', occurrences: 1 });
+    expect(closed).toBe(false);
+
+    releaseObserver.resolve();
+    await closePromise;
+    expect(closed).toBe(true);
+    store.close();
+  });
+
   it('validates finite queue capacity before subscribing', () => {
     const bus = createEventBus();
     const store = newStore();
