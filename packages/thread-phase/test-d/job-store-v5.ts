@@ -7,7 +7,7 @@ import type {
   JobStatus,
   JobStore,
   ListJobsOptions,
-  PipelineEvent,
+  PipelineEvent as CurrentPipelineEvent,
 } from '@autonome-research/thread-phase';
 
 /**
@@ -15,6 +15,20 @@ import type {
  * Keep this independent of the current declarations: exact type assertions
  * below make any parameter or return-value drift fail the test-d typecheck.
  */
+type ReleasedV5PipelineEvent =
+  | { type: 'phase'; phase: string; detail?: string; counts?: Record<string, number> }
+  | { type: 'content'; content: string }
+  | { type: 'agent_activity'; agent: string; action: string; detail?: string }
+  | { type: 'tool_call'; toolName: string; toolUseId: string; args: Record<string, unknown> }
+  | { type: 'tool_result'; toolUseId: string; content: string }
+  | { type: 'data'; key: string; value: unknown }
+  | { type: 'phase_complete'; phase: string; checkpointKey: string }
+  | { type: 'done'; reason?: string }
+  | { type: 'cancellation_requested'; reason: string }
+  | { type: 'cancelled'; reason: string }
+  | { type: 'abandoned'; reason: string }
+  | { type: 'error'; message: string };
+
 type ReleasedV5JobStatus =
   | 'PENDING'
   | 'RUNNING'
@@ -50,7 +64,7 @@ interface ReleasedV5EventRecord {
   id: number;
   jobId: string;
   eventType: string;
-  data: PipelineEvent;
+  data: ReleasedV5PipelineEvent;
   createdAt: Date;
 }
 
@@ -69,7 +83,7 @@ interface ReleasedV5JobFinalization {
   status: 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'ABANDONED';
   result?: unknown;
   error?: string;
-  event: PipelineEvent;
+  event: ReleasedV5PipelineEvent;
   ownerId?: string;
 }
 
@@ -112,7 +126,7 @@ interface ReleasedV5JobStore {
   enableHeartbeat(jobId: string, ownerId: string): Promise<boolean>;
   getJob(jobId: string, options?: ReleasedV5GetJobOptions): Promise<ReleasedV5JobRecord | null>;
   listJobs(options?: ReleasedV5ListJobsOptions): Promise<ReleasedV5JobRecord[]>;
-  appendEvent(jobId: string, event: PipelineEvent): Promise<number>;
+  appendEvent(jobId: string, event: ReleasedV5PipelineEvent): Promise<number>;
   getEvents(jobId: string, afterId?: number): Promise<ReleasedV5EventRecord[]>;
   close(): void | Promise<void>;
 }
@@ -125,6 +139,7 @@ type Equal<A, B> =
     : false;
 type Assert<T extends true> = T;
 
+type _PipelineEventIsExact = Assert<Equal<CurrentPipelineEvent, ReleasedV5PipelineEvent>>;
 type _StatusIsExact = Assert<Equal<JobStatus, ReleasedV5JobStatus>>;
 type _RecordIsExact = Assert<Equal<JobRecord, ReleasedV5JobRecord>>;
 type _EventRecordIsExact = Assert<Equal<EventRecord, ReleasedV5EventRecord>>;
@@ -273,7 +288,7 @@ export class V5CustomJobStore implements ReleasedV5JobStore {
       .slice(0, options.limit ?? 50);
   }
 
-  async appendEvent(jobId: string, event: PipelineEvent): Promise<number> {
+  async appendEvent(jobId: string, event: CurrentPipelineEvent): Promise<number> {
     return this.appendRecord(jobId, event).id;
   }
 
@@ -342,7 +357,7 @@ export class V5CustomJobStore implements ReleasedV5JobStore {
     return true;
   }
 
-  private appendRecord(jobId: string, event: PipelineEvent): EventRecord {
+  private appendRecord(jobId: string, event: CurrentPipelineEvent): EventRecord {
     const job = this.requireJob(jobId);
     const record: EventRecord = {
       id: this.nextEventId++,
