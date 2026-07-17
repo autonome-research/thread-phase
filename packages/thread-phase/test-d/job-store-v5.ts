@@ -1,4 +1,7 @@
-import type { JobStore as CurrentJobStore } from '@autonome-research/thread-phase';
+import type {
+  JobStore as CurrentJobStore,
+  PipelineEvent as CurrentPipelineEvent,
+} from '@autonome-research/thread-phase';
 import type {
   EventRecord,
   GetJobOptions,
@@ -7,7 +10,7 @@ import type {
   JobStore as ReleasedV5JobStore,
   ListJobsOptions,
 } from './fixtures/v5.0.0/job-store.js';
-import type { PipelineEvent } from './fixtures/v5.0.0/phase.js';
+import type { PipelineEvent as ReleasedV5PipelineEvent } from './fixtures/v5.0.0/phase.js';
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2)
@@ -22,6 +25,7 @@ type Assert<T extends true> = T;
 type _CurrentAcceptsReleased = Assert<ReleasedV5JobStore extends CurrentJobStore ? true : false>;
 type _ReleasedAcceptsCurrent = Assert<CurrentJobStore extends ReleasedV5JobStore ? true : false>;
 type _ExactStoreShape = Assert<Equal<CurrentJobStore, ReleasedV5JobStore>>;
+type _ExactPipelineEventShape = Assert<Equal<CurrentPipelineEvent, ReleasedV5PipelineEvent>>;
 type _VoidLifecycleReturn = Assert<Equal<
   ReturnType<ReleasedV5JobStore['setCompleted']>,
   Promise<void>
@@ -107,7 +111,7 @@ export class V5CustomJobStore implements ReleasedV5JobStore {
       .slice(0, options.limit ?? 50);
   }
 
-  async appendEvent(jobId: string, event: PipelineEvent): Promise<number> {
+  async appendEvent(jobId: string, event: ReleasedV5PipelineEvent): Promise<number> {
     const job = this.requireJob(jobId);
     const id = this.nextEventId++;
     this.events.push({ id, jobId, eventType: event.type, data: event, createdAt: new Date() });
