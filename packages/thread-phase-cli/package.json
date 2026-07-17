@@ -1,6 +1,6 @@
 {
   "name": "@autonome-research/thread-phase-cli",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "description": "CLI and auto-loader for thread-phase — discovers extensions under .thread-phase/ and runs registered pipelines. Installing this gets the full runtime (core + adapters).",
   "license": "MIT",
   "type": "module",
