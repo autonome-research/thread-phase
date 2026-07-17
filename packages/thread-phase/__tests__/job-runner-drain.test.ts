@@ -166,8 +166,15 @@ describe('JobRunner lifecycle drains', () => {
     },
   ])('defers synchronous $kind acquisition throws until start returns and cleans up', async ({ kind, makeStore }) => {
     const acquisitionError = new Error(`${kind} acquisition threw synchronously`);
-    const acquisition = vi.fn((): Promise<boolean> => { throw acquisitionError; });
     const target = makeStore();
+    let injectAcquisitionFailure = true;
+    const acquisition = vi.fn((...args: Parameters<JobStore['setRunning']>): Promise<boolean> => {
+      if (injectAcquisitionFailure) {
+        injectAcquisitionFailure = false;
+        throw acquisitionError;
+      }
+      return target.setRunning(...args);
+    });
     const throwingStore = new Proxy(target, {
       get(storeTarget, property) {
         if (property === 'setRunning') return acquisition;
@@ -214,12 +221,13 @@ describe('JobRunner lifecycle drains', () => {
       expect(ctx.heartbeat).toBe(previousHeartbeat);
       expect(throwingRunner.signalFor('sync-claim-throw')).toBeUndefined();
 
-      // A leaked active-context registration would reject this otherwise valid
-      // follow-up run before it reaches the store.
-      const retryJobId = await runner.create(`after-${kind}-sync-throw`, null);
-      await expect(runner.run(retryJobId, [successfulPhase], ctx)).resolves.toMatchObject({
+      // Reuse both the runner and context that saw the synchronous throw. A
+      // leaked inflight or active-context registration would reject this retry.
+      const retryJobId = await throwingRunner.create(`after-${kind}-sync-throw`, null);
+      await expect(throwingRunner.run(retryJobId, [successfulPhase], ctx)).resolves.toMatchObject({
         status: 'completed',
       });
+      expect(acquisition).toHaveBeenCalledTimes(2);
     } finally {
       process.off('unhandledRejection', onUnhandled);
     }
