@@ -59,6 +59,20 @@ export interface ItemDoneEvent<TItem, TResult> {
   result: TResult;
 }
 
+export interface ItemSkippedEvent<TItem> {
+  item: TItem;
+  index: number;
+}
+
+/**
+ * Slot marker for items excluded by the `skip` predicate. Position-stable
+ * with the input array, like every other collect-mode slot. Narrow with
+ * `'skipped' in slot` (or `'ok' in slot` for ran items).
+ */
+export interface SkippedResult {
+  readonly skipped: true;
+}
+
 export interface ItemErrorEvent<TItem> {
   item: TItem;
   index: number;
@@ -102,9 +116,63 @@ export interface BoundedFanOutOptions<TItem, TResult> {
    * rejects with the abort reason.
    */
   signal?: AbortSignal;
+  /**
+   * Resume predicate: return true to skip an item without running it.
+   *
+   * Shape captured: artifact-based resume for re-runnable batches — "skip
+   * items whose output already exists" — so re-invoking a fanout after a
+   * crash or partial failure only does the missing work.
+   *
+   * When to use: batch jobs whose per-item outputs are durable (files,
+   * rows) and idempotent to check.
+   *
+   * When NOT to use: as a filter for items that should never be in `items`
+   * at all — filter the array instead. Skips still occupy a result slot
+   * (`{ skipped: true }`), so position-stability is preserved.
+   *
+   * Requires `mode: 'collect'` (a skipped slot has no TResult to put in a
+   * reject-mode array). Evaluated at dispatch, in order. A throwing
+   * predicate is a mechanical failure and rejects in both modes.
+   */
+  skip?: (item: TItem, index: number) => boolean | Promise<boolean>;
+  /** Fires once per item excluded by `skip`, at dispatch. */
+  onItemSkipped?: (event: ItemSkippedEvent<TItem>) => void;
+  /**
+   * Remediation hook: on runner failure, optionally retry the same slot.
+   *
+   * Shape captured: retry-with-transform — degrade to a proxy input, wait
+   * out an endpoint restart, tighten a parameter — where the *item itself*
+   * (or its environment) must change before a retry can succeed.
+   *
+   * When to use: known, recoverable per-item failure modes (transcode a
+   * too-large media file, wait-for-healthy after a backend crash).
+   *
+   * When NOT to use: for uniform transient-error retries with backoff —
+   * wrap the runner instead; this hook exists for retries that need to
+   * transform the item or sequence recovery work between attempts.
+   *
+   * Called with the failing item, the error, and a 0-based attempt count.
+   * Return a (possibly transformed) item to re-run the slot with it; return
+   * null/undefined to record the failure normally (onItemError then fires
+   * exactly once, for the final failure). Abort-driven failures are never
+   * offered for retry. A throwing hook is a mechanical failure and rejects
+   * in both modes.
+   */
+  retryItem?: (
+    item: TItem,
+    error: Error,
+    attempt: number,
+  ) => TItem | null | undefined | Promise<TItem | null | undefined>;
 }
 
-// Function overloads so the return type discriminates on `mode`.
+// Function overloads so the return type discriminates on `mode` (and on
+// `skip`, whose slots widen the collect-mode result union).
+export function boundedFanout<TItem, TResult>(
+  options: BoundedFanOutOptions<TItem, TResult> & {
+    mode: 'collect';
+    skip: NonNullable<BoundedFanOutOptions<TItem, TResult>['skip']>;
+  },
+): Promise<Array<FanOutResult<TResult> | SkippedResult>>;
 export function boundedFanout<TItem, TResult>(
   options: BoundedFanOutOptions<TItem, TResult> & { mode: 'collect' },
 ): Promise<FanOutResult<TResult>[]>;
@@ -113,12 +181,15 @@ export function boundedFanout<TItem, TResult>(
 ): Promise<TResult[]>;
 export async function boundedFanout<TItem, TResult>(
   options: BoundedFanOutOptions<TItem, TResult>,
-): Promise<TResult[] | FanOutResult<TResult>[]> {
+): Promise<TResult[] | FanOutResult<TResult>[] | Array<FanOutResult<TResult> | SkippedResult>> {
   if (
     options.maxItems !== undefined &&
     (!Number.isSafeInteger(options.maxItems) || options.maxItems < 0)
   ) {
     throw new RangeError('boundedFanout maxItems must be a non-negative safe integer');
+  }
+  if (options.skip && options.mode !== 'collect') {
+    throw new RangeError("boundedFanout skip requires mode: 'collect'");
   }
   const requestedConcurrency = options.concurrency ?? 4;
   if (!Number.isSafeInteger(requestedConcurrency) || requestedConcurrency < 1) {
@@ -131,7 +202,9 @@ export async function boundedFanout<TItem, TResult>(
 
   const concurrency = Math.min(requestedConcurrency, items.length);
   const collect = options.mode === 'collect';
-  const results: Array<TResult | FanOutResult<TResult> | undefined> = new Array(items.length);
+  const results: Array<TResult | FanOutResult<TResult> | SkippedResult | undefined> = new Array(
+    items.length,
+  );
   let cursor = 0;
   let firstError: Error | undefined;
   const failFastController = new AbortController();
@@ -145,35 +218,59 @@ export async function boundedFanout<TItem, TResult>(
   }
 
   const worker = async (): Promise<void> => {
-    while (true) {
+    itemLoop: while (true) {
       if (signal.aborted || firstError) return;
       const i = cursor++;
       if (i >= items.length) return;
-      const item = items[i]!;
-      try {
-        const result = await options.runner(item, i, signal);
-        if (signal.aborted || firstError) return;
-        if (collect) results[i] = { ok: true, value: result };
-        else results[i] = result;
-        options.onItemDone?.({ item, index: i, result });
-      } catch (rawErr) {
-        const error = toError(rawErr);
-        if (collect) results[i] = { ok: false, error };
-        if (!collect && !firstError && !options.signal?.aborted) {
-          firstError = error;
-          failFastController.abort(error);
-        }
+      // Mutable: retryItem may substitute a transformed item for later
+      // attempts at the same slot. A throwing skip/onItemSkipped/retryItem
+      // rejects the worker promise, which the allSettled net below treats
+      // as a mechanical failure — same supervision as onItemDone.
+      let item = items[i]!;
+
+      if (options.skip && (await options.skip(item, i))) {
+        results[i] = { skipped: true };
+        options.onItemSkipped?.({ item, index: i });
+        continue;
+      }
+
+      let attempt = 0;
+      while (true) {
         try {
-          options.onItemError?.({ item, index: i, error });
-        } catch (hookError) {
-          if (!firstError && !options.signal?.aborted) {
-            firstError = toError(hookError);
-            failFastController.abort(firstError);
+          const result = await options.runner(item, i, signal);
+          if (signal.aborted || firstError) return;
+          if (collect) results[i] = { ok: true, value: result };
+          else results[i] = result;
+          options.onItemDone?.({ item, index: i, result });
+          continue itemLoop;
+        } catch (rawErr) {
+          const error = toError(rawErr);
+          // Abort-driven failures are terminal; never offered for retry.
+          if (options.retryItem && !signal.aborted && !firstError) {
+            const next = await options.retryItem(item, error, attempt);
+            if (next !== null && next !== undefined) {
+              item = next;
+              attempt++;
+              continue;
+            }
           }
+          if (collect) results[i] = { ok: false, error };
+          if (!collect && !firstError && !options.signal?.aborted) {
+            firstError = error;
+            failFastController.abort(error);
+          }
+          try {
+            options.onItemError?.({ item, index: i, error });
+          } catch (hookError) {
+            if (!firstError && !options.signal?.aborted) {
+              firstError = toError(hookError);
+              failFastController.abort(firstError);
+            }
+            return;
+          }
+          if (collect) continue itemLoop;
           return;
         }
-        if (collect) continue;
-        return;
       }
     }
   };
@@ -196,7 +293,7 @@ export async function boundedFanout<TItem, TResult>(
   if (options.signal?.aborted) {
     if (collect) {
       return fillAbortedSlots(
-        results as Array<FanOutResult<TResult> | undefined>,
+        results as Array<FanOutResult<TResult> | SkippedResult | undefined>,
         items.length,
         options.signal,
       );
@@ -206,7 +303,7 @@ export async function boundedFanout<TItem, TResult>(
 
   if (firstError) throw firstError;
 
-  return results as TResult[] | FanOutResult<TResult>[];
+  return results as TResult[] | FanOutResult<TResult>[] | Array<FanOutResult<TResult> | SkippedResult>;
 }
 
 /**
@@ -220,12 +317,12 @@ export async function boundedFanout<TItem, TResult>(
  * the in-loop signal check before writing — get a synthetic slot.
  */
 function fillAbortedSlots<TResult>(
-  partial: Array<FanOutResult<TResult> | undefined>,
+  partial: Array<FanOutResult<TResult> | SkippedResult | undefined>,
   total: number,
   signal: AbortSignal,
-): FanOutResult<TResult>[] {
+): Array<FanOutResult<TResult> | SkippedResult> {
   const abortErr = signalAbortError(signal);
-  const out: FanOutResult<TResult>[] = new Array(total);
+  const out: Array<FanOutResult<TResult> | SkippedResult> = new Array(total);
   for (let i = 0; i < total; i++) {
     out[i] = partial[i] ?? { ok: false, error: abortErr };
   }

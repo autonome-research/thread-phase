@@ -420,3 +420,134 @@ describe("boundedFanout — soft-cancel in 'collect' mode", () => {
     ).rejects.toThrow('hard-cancel');
   });
 });
+
+describe('boundedFanout skip (resume predicate)', () => {
+  it('skips items, records SkippedResult slots, fires onItemSkipped', async () => {
+    const ran: number[] = [];
+    const skipped: number[] = [];
+    const out = await boundedFanout({
+      items: [1, 2, 3, 4],
+      mode: 'collect',
+      skip: (n) => n % 2 === 0,
+      onItemSkipped: ({ item }) => skipped.push(item as number),
+      runner: async (n) => {
+        ran.push(n);
+        return n * 10;
+      },
+    });
+    expect(ran.sort()).toEqual([1, 3]);
+    expect(skipped.sort()).toEqual([2, 4]);
+    expect(out).toHaveLength(4);
+    expect(out[0]).toEqual({ ok: true, value: 10 });
+    expect(out[1]).toEqual({ skipped: true });
+    expect(out[2]).toEqual({ ok: true, value: 30 });
+    expect(out[3]).toEqual({ skipped: true });
+  });
+
+  it('supports async skip predicates', async () => {
+    const out = await boundedFanout({
+      items: [1, 2],
+      mode: 'collect',
+      skip: async (n) => n === 1,
+      runner: async (n) => n,
+    });
+    expect(out[0]).toEqual({ skipped: true });
+    expect(out[1]).toEqual({ ok: true, value: 2 });
+  });
+
+  it("throws RangeError when skip is used without mode: 'collect'", async () => {
+    await expect(
+      boundedFanout({
+        items: [1],
+        skip: () => true,
+        runner: async (n) => n,
+      } as never),
+    ).rejects.toThrow(RangeError);
+  });
+
+  it('a throwing skip predicate is a mechanical failure and rejects', async () => {
+    await expect(
+      boundedFanout({
+        items: [1, 2],
+        mode: 'collect',
+        skip: () => {
+          throw new Error('predicate exploded');
+        },
+        runner: async (n) => n,
+      }),
+    ).rejects.toThrow('predicate exploded');
+  });
+});
+
+describe('boundedFanout retryItem (remediation hook)', () => {
+  it('retries the same slot with the transformed item', async () => {
+    const attemptsSeen: Array<[unknown, number]> = [];
+    const out = await boundedFanout({
+      items: ['raw.mp4'],
+      mode: 'collect',
+      retryItem: (item, _error, attempt) => {
+        attemptsSeen.push([item, attempt]);
+        return attempt === 0 ? 'proxy.mp4' : null;
+      },
+      runner: async (name) => {
+        if (name === 'raw.mp4') throw new Error('encoder died');
+        return `described:${name}`;
+      },
+    });
+    expect(out).toEqual([{ ok: true, value: 'described:proxy.mp4' }]);
+    expect(attemptsSeen).toEqual([['raw.mp4', 0]]);
+  });
+
+  it('records the failure normally when the hook declines (returns null)', async () => {
+    const errored: number[] = [];
+    const out = await boundedFanout({
+      items: [7],
+      mode: 'collect',
+      retryItem: () => null,
+      onItemError: ({ index }) => errored.push(index),
+      runner: async () => {
+        throw new Error('unrecoverable');
+      },
+    });
+    expect(out[0]).toMatchObject({ ok: false });
+    expect(errored).toEqual([0]); // onItemError fires once, for the final failure
+  });
+
+  it('reject mode fail-fast only triggers after the hook declines', async () => {
+    let attempts = 0;
+    const result = await boundedFanout({
+      items: [1],
+      retryItem: (_i, _e, attempt) => (attempt < 2 ? 1 : null),
+      runner: async () => {
+        attempts++;
+        if (attempts < 3) throw new Error(`attempt ${attempts} failed`);
+        return 'recovered';
+      },
+    });
+    expect(result).toEqual(['recovered']);
+    expect(attempts).toBe(3);
+  });
+
+  it('abort-driven failures are never offered for retry', async () => {
+    const controller = new AbortController();
+    const hookCalls: number[] = [];
+    const out = await boundedFanout({
+      items: [1],
+      mode: 'collect',
+      signal: controller.signal,
+      retryItem: (_i, _e, attempt) => {
+        hookCalls.push(attempt);
+        return 1;
+      },
+      runner: async (_n, _i, signal) => {
+        controller.abort('stop');
+        return new Promise((_res, rej) => {
+          signal?.addEventListener('abort', () => rej(new Error('aborted')));
+          if (signal?.aborted) rej(new Error('aborted'));
+        });
+      },
+    });
+    expect(hookCalls).toEqual([]);
+    expect(out[0]).toMatchObject({ ok: false });
+  });
+});

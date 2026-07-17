@@ -32,7 +32,9 @@ export {
   type BoundedFanOutOptions,
   type ItemDoneEvent,
   type ItemErrorEvent,
+  type ItemSkippedEvent,
   type FanOutResult,
+  type SkippedResult,
 } from './bounded-fanout.js';
 
 export { boundedFanoutOf, BoundedFanoutOfError } from './bounded-fanout-of.js';
