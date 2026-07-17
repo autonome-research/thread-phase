@@ -17,7 +17,7 @@ All notable changes to thread-phase will be documented here. The format is based
 ### Reliable run lifecycle
 
 - Added optional generic `JobRunOptions.drains`, awaited sequentially before terminal persistence and runner shutdown, including ownership-acquisition exits. All registered drains are attempted; drain-only failure marks the run failed, while acquisition failure, pipeline failure, and cancellation retain precedence and accompanying drain failures remain observable through the rejected `AggregateError`.
-- Added distinct persisted `CANCELLED` and `ABANDONED` states plus atomic owner claims, owner-guarded transitions, `JobStore.setCancelled` / `setAbandoned`, and atomic terminal status+event finalization methods.
+- Added distinct persisted `CANCELLED` and `ABANDONED` states. The bundled SQLite store exposes additive atomic owner-claim, owner-guarded transition, stale-finalization, and terminal status+event capabilities that `JobRunner` uses when available.
 - Added `JobRunner.start()` and `JobRunHandle` for immediate run identity, signal, cancellation, and result access.
 - `JobRunner` now composes its controller with caller `ctx.signal`, restores context hooks after execution, records cancellation request acknowledgement, and prevents late terminal writes from replacing the first terminal state.
 - Added owner IDs, launch-source metadata, and stale-run reconciliation through `JobRunner.reconcileAbandoned()`.
@@ -25,7 +25,7 @@ All notable changes to thread-phase will be documented here. The format is based
 - Upgraded `better-sqlite3` to the Node 26-compatible 12.x line.
 - Upgraded the OpenAI runtime dependency to 6.x and the development test stack to Vitest 4.
 
-These changes extend the `JobStore` interface and are breaking for custom store implementations. Implementations must adopt boolean first-writer-wins terminal transitions, owner-aware claiming/heartbeat, and atomic `finalizeJob` / `finalizeAbandonedIfStale` methods.
+The released v5.0.0 `JobStore` interface and its void-returning lifecycle signatures remain unchanged. Atomic ownership/finalization and owner-scoped heartbeat are additive capability interfaces detected by `JobRunner`; existing structural custom stores continue through the legacy fallback without implementing unreleased methods.
 
 ## [3.2.2] — 2026-05-21
 
