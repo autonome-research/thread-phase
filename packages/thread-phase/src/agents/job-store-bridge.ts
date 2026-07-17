@@ -123,7 +123,11 @@ export function createAgentEventPersistenceBridge(
   let closed = false;
   let tail: Promise<void> = Promise.resolve();
   let closePromise: Promise<void> | undefined;
-  const pendingAcceptedSettlements = new Set<Promise<void>>();
+  interface AcceptedSettlement {
+    readonly settled: Promise<void>;
+    failureSettlement?: Promise<void>;
+  }
+  const pendingAcceptedSettlements = new Set<AcceptedSettlement>();
 
   interface FailureAccumulator {
     readonly event: AgentEvent;
@@ -258,7 +262,21 @@ export function createAgentEventPersistenceBridge(
       );
       return batches.map((batch) => batch.settled);
     });
-    return Promise.all([...accepted, ...observed]).then(() => {});
+    return Promise.all([
+      ...accepted.map((settlement) => settlement.settled),
+      ...observed,
+    ]).then(async () => {
+      // Accepted records capture their failure batch by reference. Deduping
+      // here means a recycled failure storm adds no per-event reaction to a
+      // blocked observer promise; only invocation-time records (at most the
+      // queue capacity) survive, and coalesced records share one reaction.
+      const appendFailures = new Set(
+        accepted.flatMap((settlement) =>
+          settlement.failureSettlement ? [settlement.failureSettlement] : []
+        ),
+      );
+      await Promise.all(appendFailures);
+    });
   };
 
   const unsubscribe = bus.on((event) => {
@@ -287,14 +305,16 @@ export function createAgentEventPersistenceBridge(
         outstanding -= 1;
       });
 
-    const settlement = appendAttempt.catch((error: unknown) =>
-      report('append', event, error),
+    let settlement!: AcceptedSettlement;
+    const settled = appendAttempt.then(
+      () => {},
+      (error: unknown) => {
+        settlement.failureSettlement = report('append', event, error);
+      },
     );
+    settlement = { settled };
     pendingAcceptedSettlements.add(settlement);
-    void appendAttempt.then(
-      () => pendingAcceptedSettlements.delete(settlement),
-      () => pendingAcceptedSettlements.delete(settlement),
-    );
+    void settled.then(() => pendingAcceptedSettlements.delete(settlement));
   });
 
   const bridge: AgentEventPersistenceBridge = {

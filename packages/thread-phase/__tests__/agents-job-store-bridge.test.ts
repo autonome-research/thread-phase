@@ -400,6 +400,68 @@ describe('persistAgentEventsToJobStore', () => {
     store.close();
   });
 
+  it('recycles capacity across an append-failure storm without retaining per-event observation work', async () => {
+    const store = newStore();
+    const bus = createEventBus();
+    const observerStarted = [deferred(), deferred()];
+    const releaseObserver = [deferred(), deferred()];
+    const observed: AgentEventPersistenceFailure[] = [];
+    const capacity = 32;
+    const batchCount = 100;
+    let attempts = 0;
+
+    store.appendEvent = async () => {
+      attempts += 1;
+      throw new Error('write failed');
+    };
+    const bridge = persistAgentEventsToJobStore(bus, store, 'recycled-failures', {
+      capacity,
+      onFailure: async (failure) => {
+        expect(failure.kind).toBe('append');
+        const index = observed.length;
+        observed.push(failure);
+        observerStarted[index]!.resolve();
+        await releaseObserver[index]!.promise;
+      },
+    });
+
+    for (let batch = 0; batch < batchCount; batch += 1) {
+      for (let index = 0; index < capacity; index += 1) {
+        bus.emit({ type: 'text', source: 'mock', delta: `${batch}:${index}` });
+      }
+      // The store has no asynchronous work, so one event-loop turn is a
+      // deterministic barrier for the bridge's serialized promise queue.
+      await flush();
+    }
+    await observerStarted[0]!.promise;
+    expect(attempts).toBe(capacity * batchCount);
+    expect(observed).toHaveLength(1);
+
+    let flushed = false;
+    const flushPromise = bridge.flush().then(() => {
+      flushed = true;
+    });
+    const closePromise = bridge.close();
+    expect(bridge.close()).toBe(closePromise);
+    bus.emit({ type: 'text', source: 'mock', delta: 'after-close' });
+    await flush();
+    expect(attempts).toBe(capacity * batchCount);
+    expect(flushed).toBe(false);
+
+    releaseObserver[0]!.resolve();
+    await observerStarted[1]!.promise;
+    expect(observed.reduce((sum, failure) => sum + failure.occurrences, 0)).toBe(
+      capacity * batchCount,
+    );
+    expect(flushed).toBe(false);
+
+    releaseObserver[1]!.resolve();
+    await Promise.all([flushPromise, closePromise]);
+    expect(flushed).toBe(true);
+    expect(observed).toHaveLength(2);
+    store.close();
+  });
+
   it('waits for append-failure observation when closing', async () => {
     const store = newStore();
     const bus = createEventBus();
