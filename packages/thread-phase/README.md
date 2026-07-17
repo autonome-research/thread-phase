@@ -124,7 +124,7 @@ await runner.run(jobId, [phaseA, phaseB], ctx);
 
 `JobStore` is asynchronous so SQLite, Postgres, Redis, and network-backed implementations share one consistency contract. The bundled `SqliteJobStore` keeps better-sqlite3's synchronous hot path internally and exposes it through the same Promise-based interface.
 
-The v5.0.0 `JobStore` contract includes boolean first-writer-wins lifecycle transitions, owner-aware claiming and heartbeat, and atomic terminal state/event finalization. Custom stores must implement the documented interface exactly so `JobRunner` can preserve ownership and terminal atomicity across every backend.
+The v5.0.0 `JobStore` contract remains unchanged: custom stores only need its original lifecycle methods and signatures. Atomic owner-aware claiming/finalization and owner-scoped heartbeat are additive capability interfaces; `JobRunner` detects them when available and safely falls back to the released behavior for legacy stores. The bundled `SqliteJobStore` implements the enhanced capabilities.
 
 ### `AgentAdapter` — the extension surface
 

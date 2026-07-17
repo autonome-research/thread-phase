@@ -126,7 +126,7 @@ describe('JobRunner lifecycle drains', () => {
     const acquisitionError = new Error('ownership backend unavailable');
     const rejectingStore = new Proxy(store, {
       get(target, property) {
-        if (property === 'setRunning') return async () => { throw acquisitionError; };
+        if (property === 'claimRunning') return async () => { throw acquisitionError; };
         const value = Reflect.get(target, property, target) as unknown;
         return typeof value === 'function' ? value.bind(target) : value;
       },
@@ -168,16 +168,24 @@ describe('JobRunner lifecycle drains', () => {
     const acquisitionError = new Error(`${kind} acquisition threw synchronously`);
     const target = makeStore();
     let injectAcquisitionFailure = true;
-    const acquisition = vi.fn((...args: Parameters<JobStore['setRunning']>): Promise<boolean> => {
+    const capabilityTarget = target as JobStore & {
+      claimRunning?: (jobId: string, ownership?: Parameters<JobStore['setRunning']>[1]) => Promise<boolean>;
+    };
+    const acquisitionMethod = typeof capabilityTarget.claimRunning === 'function'
+      ? 'claimRunning'
+      : 'setRunning';
+    const acquisition = vi.fn((...args: Parameters<JobStore['setRunning']>): Promise<boolean | void> => {
       if (injectAcquisitionFailure) {
         injectAcquisitionFailure = false;
         throw acquisitionError;
       }
-      return target.setRunning(...args);
+      return acquisitionMethod === 'claimRunning'
+        ? capabilityTarget.claimRunning!(...args)
+        : target.setRunning(...args);
     });
     const throwingStore = new Proxy(target, {
       get(storeTarget, property) {
-        if (property === 'setRunning') return acquisition;
+        if (property === acquisitionMethod) return acquisition;
         const value = Reflect.get(storeTarget, property, storeTarget) as unknown;
         return typeof value === 'function' ? value.bind(storeTarget) : value;
       },
