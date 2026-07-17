@@ -112,6 +112,25 @@ describe('oneShot', () => {
     expect(spec.trigger).toBeUndefined();
   });
 
+  it('forwards the dispatch input to the handler', async () => {
+    const api = new MockAPI();
+    let received: unknown = 'sentinel-never-set';
+    const register = oneShot(
+      async (input) => {
+        received = input;
+        return input;
+      },
+      { name: 'echo' },
+    );
+    register(api);
+
+    const spec = api.getPipeline('echo')!;
+    const { phases, ctx } = materialize(spec, { docsDir: 'case-docs', n: 7 });
+    for await (const _ of runPipeline(phases, ctx)) void _;
+
+    expect(received).toEqual({ docsDir: 'case-docs', n: 7 });
+  });
+
   it('captures the handler return value as a data event', async () => {
     const api = new MockAPI();
     const register = oneShot(async () => ({ answer: 42 }), {

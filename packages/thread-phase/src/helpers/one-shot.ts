@@ -4,12 +4,14 @@
  * Compresses the common "I have a one-off task I want to invoke via
  * `thread-phase run <name>`" case to a single function call. The handler
  * runs as a one-phase pipeline; its return value is captured as a `data`
- * event with key `${name}.result`.
+ * event with key `${name}.result`. The parsed `--input` value (or the
+ * dispatching trigger's payload) arrives as the handler's first argument —
+ * `undefined` when the caller passed none.
  *
  * Example:
  *
- *   export default oneShot(async (ctx) => {
- *     await fireAndForget();
+ *   export default oneShot(async (input, ctx) => {
+ *     await fireAndForget(input);
  *     return { ok: true };
  *   });
  *
@@ -39,20 +41,23 @@ export function oneShot<TResult = unknown>(
 ): ExtensionRegisterFn {
   const name = options.name ?? deriveNameFromCaller('oneShot');
 
-  const phase: Phase<BasePipelineContext> = {
+  // Factory form, not a static array: the dispatcher resolves
+  // `spec.phases(input, event)` per run, which is the only way the
+  // `--input` value can reach the handler.
+  const makePhase = (input: unknown): Phase<BasePipelineContext> => ({
     name,
     async *run(ctx) {
-      const result = await handler(undefined, ctx);
+      const result = await handler(input, ctx);
       yield {
         type: 'data',
         key: `${name}.result`,
         value: result,
       };
     },
-  };
+  });
 
   const spec: PipelineSpec<BasePipelineContext, unknown> = {
-    phases: [phase],
+    phases: (input) => [makePhase(input)],
     ctx: () => ({ cache: new PipelineCache() }),
     description: options.description,
   };

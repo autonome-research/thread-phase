@@ -15,7 +15,8 @@
     "./agents": "./dist/agents/index.js",
     "./agents/authoring": "./dist/agents/authoring/index.js",
     "./agents/test-utils": "./dist/agents/test-utils/index.js",
-    "./triggers": "./dist/triggers/index.js"
+    "./triggers": "./dist/triggers/index.js",
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
