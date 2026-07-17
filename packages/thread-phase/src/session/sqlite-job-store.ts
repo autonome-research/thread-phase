@@ -5,15 +5,15 @@
  * concurrency, foreign keys enforced.
  *
  * The interface (`JobStore`) is async-by-default in v3.0.0; this
- * implementation wraps its sync better-sqlite3 calls in `async` methods.
- * better-sqlite3 stays sync internally — the only overhead is one
- * microtask per call, which is negligible against sqlite's already
+ * implementation wraps its sync `node:sqlite` calls (via SqliteDriver) in
+ * `async` methods. The driver stays sync internally — the only overhead is
+ * one microtask per call, which is negligible against sqlite's already
  * sub-millisecond write cost. We pay this cost to keep one unified
  * interface across all backends (Postgres, Redis, network stores)
  * instead of two parallel sync + async hierarchies.
  */
 
-import Database, { type Database as DB } from 'better-sqlite3';
+import { SqliteDriver } from './sqlite-driver.js';
 import { randomUUID } from 'crypto';
 import type { PipelineEvent } from '../phase.js';
 import type {
@@ -150,10 +150,10 @@ function parseDate(s: string | null): Date | null {
 }
 
 export class SqliteJobStore implements JobStore {
-  private db: DB;
+  private db: SqliteDriver;
 
   constructor(dbPath: string = defaultDbPath()) {
-    this.db = new Database(dbPath);
+    this.db = new SqliteDriver(dbPath);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
     this.runMigrations();
@@ -172,8 +172,8 @@ export class SqliteJobStore implements JobStore {
       if (m.version <= current) continue;
       this.db.transaction(() => {
         this.db.exec(m.up);
-        // user_version is an integer pragma; better-sqlite3 doesn't support
-        // parameter binding for pragmas, so interpolate the integer directly.
+        // user_version is an integer pragma; pragmas don't support parameter
+        // binding, so interpolate the integer directly.
         this.db.pragma(`user_version = ${m.version}`);
       })();
     }
@@ -192,10 +192,10 @@ export class SqliteJobStore implements JobStore {
   }
 
   async acquireExclusive(name: string, input: unknown): Promise<string | null> {
-    // better-sqlite3's `db.transaction(fn)` wraps the callback in BEGIN…COMMIT
-    // (defaults to deferred, but the runtime upgrades to a write lock the
-    // moment we INSERT, which serializes concurrent acquireExclusive calls
-    // on the same DB file). The check + insert therefore happens atomically:
+    // SqliteDriver's `transaction(fn)` wraps the callback in BEGIN…COMMIT
+    // (deferred, but sqlite upgrades to a write lock the moment we INSERT,
+    // which serializes concurrent acquireExclusive calls on the same DB
+    // file). The check + insert therefore happens atomically:
     // a second caller racing on the same name will see the row we just
     // inserted (status='RUNNING') and return null.
     const tx = this.db.transaction((n: string, i: unknown): string | null => {
@@ -366,7 +366,7 @@ export class SqliteJobStore implements JobStore {
         .run(jobId, finalization.event.type, JSON.stringify(finalization.event));
       return this.db
         .prepare(`SELECT id, job_id, event_type, data, created_at FROM event WHERE id = ?`)
-        .get(Number(inserted.lastInsertRowid)) as EventRow;
+        .get(Number(inserted.lastInsertRowid)) as unknown as EventRow;
     });
     const row = transaction();
     return row ? this.toEventRecord(row) : null;
@@ -394,7 +394,7 @@ export class SqliteJobStore implements JobStore {
         .run(jobId, event.type, JSON.stringify(event));
       return this.db
         .prepare(`SELECT id, job_id, event_type, data, created_at FROM event WHERE id = ?`)
-        .get(Number(inserted.lastInsertRowid)) as EventRow;
+        .get(Number(inserted.lastInsertRowid)) as unknown as EventRow;
     });
     const row = transaction();
     return row ? this.toEventRecord(row) : null;
@@ -452,7 +452,7 @@ export class SqliteJobStore implements JobStore {
         status,
         status,
         limit,
-      ) as JobRow[];
+      ) as unknown as JobRow[];
     return rows.map((r) => this.toJobRecord(r, staleAfterMs));
   }
 
@@ -513,7 +513,7 @@ export class SqliteJobStore implements JobStore {
         `SELECT id, job_id, event_type, data, created_at
          FROM event WHERE job_id = ? AND id > ? ORDER BY id ASC`,
       )
-      .all(jobId, afterId) as EventRow[];
+      .all(jobId, afterId) as unknown as EventRow[];
     return rows.map((row) => this.toEventRecord(row));
   }
 

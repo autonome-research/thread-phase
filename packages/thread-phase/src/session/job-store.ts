@@ -15,7 +15,7 @@
  * interface level unblocks those backends without forcing them to fake
  * a sync boundary via in-process queues.
  *
- * Performance note for SqliteJobStore: better-sqlite3 stays sync
+ * Performance note for SqliteJobStore: the sqlite driver stays sync
  * internally; the bundled implementation just wraps its prepared-
  * statement calls in `async` methods. The added cost is one microtask
  * per call — sub-microsecond, swamped by the actual I/O on every other
