@@ -1,13 +1,13 @@
+import type { JobStore as CurrentJobStore } from '@autonome-research/thread-phase';
 import type {
   EventRecord,
   GetJobOptions,
   JobOwnership,
   JobRecord,
-  JobStatus,
-  JobStore,
+  JobStore as ReleasedV5JobStore,
   ListJobsOptions,
-  PipelineEvent,
-} from '@autonome-research/thread-phase';
+} from './fixtures/v5.0.0/job-store.js';
+import type { PipelineEvent } from './fixtures/v5.0.0/phase.js';
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2)
@@ -17,47 +17,36 @@ type Equal<A, B> =
     : false;
 type Assert<T extends true> = T;
 
-// Exact released v5.0.0 method signatures. These fail if enhanced lifecycle
-// operations are made required or legacy parameter/return types drift.
-type _SetRunning = Assert<Equal<
-  JobStore['setRunning'],
-  (jobId: string, ownership?: JobOwnership) => Promise<void>
+// Bidirectional checks use the independently sourced declaration artifact.
+// Either assignment fails if required methods, parameters, or returns drift.
+type _CurrentAcceptsReleased = Assert<ReleasedV5JobStore extends CurrentJobStore ? true : false>;
+type _ReleasedAcceptsCurrent = Assert<CurrentJobStore extends ReleasedV5JobStore ? true : false>;
+type _ExactStoreShape = Assert<Equal<CurrentJobStore, ReleasedV5JobStore>>;
+type _VoidLifecycleReturn = Assert<Equal<
+  ReturnType<ReleasedV5JobStore['setCompleted']>,
+  Promise<void>
 >>;
-type _SetCompleted = Assert<Equal<
-  JobStore['setCompleted'],
-  (jobId: string, result: unknown) => Promise<void>
->>;
-type _SetFailed = Assert<Equal<
-  JobStore['setFailed'],
-  (jobId: string, error: string) => Promise<void>
->>;
-type _Heartbeat = Assert<Equal<
-  JobStore['heartbeat'],
-  (jobId: string) => Promise<void>
->>;
-type _RequiredKeys = Assert<Equal<keyof JobStore,
-  | 'createJob'
-  | 'acquireExclusive'
-  | 'setRunning'
-  | 'setCompleted'
-  | 'setFailed'
-  | 'heartbeat'
-  | 'getJob'
-  | 'listJobs'
-  | 'appendEvent'
-  | 'getEvents'
-  | 'close'
+type _NoOwnedLifecycleMethods = Assert<Equal<
+  Extract<
+    keyof ReleasedV5JobStore,
+    | 'claimRunning'
+    | 'finalizeJob'
+    | 'finalizeAbandonedIfStale'
+    | 'heartbeatOwned'
+    | 'enableHeartbeat'
+  >,
+  never
 >>;
 
-/** A v5.0.0-style custom store: no post-5.0 lifecycle capabilities. */
-export class V5CustomJobStore implements JobStore {
+/** Minimal structural store implementing only the compatibility artifact. */
+export class V5CustomJobStore implements ReleasedV5JobStore {
   private nextJobId = 1;
   private nextEventId = 1;
   private readonly jobs = new Map<string, JobRecord>();
   private readonly events: EventRecord[] = [];
 
   async createJob(name: string, input: unknown): Promise<string> {
-    const id = `legacy-${this.nextJobId++}`;
+    const id = `v5-${this.nextJobId++}`;
     this.jobs.set(id, {
       id,
       name,
@@ -139,7 +128,6 @@ export class V5CustomJobStore implements JobStore {
   }
 }
 
-const unchangedV5Store: JobStore = new V5CustomJobStore();
-const status: JobStatus = 'RUNNING';
-void unchangedV5Store;
-void status;
+const currentFromReleased: CurrentJobStore = new V5CustomJobStore();
+const releasedFromCurrent: ReleasedV5JobStore = currentFromReleased;
+void releasedFromCurrent;

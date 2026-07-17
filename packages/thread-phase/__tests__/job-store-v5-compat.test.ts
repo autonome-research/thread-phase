@@ -15,6 +15,21 @@ const successfulPhase: Phase<Ctx> = {
 };
 
 describe('v5.0.0 custom JobStore compatibility', () => {
+  it('has void lifecycle returns and no unreleased ownership methods', async () => {
+    const store = new V5CustomJobStore();
+    const jobId = await store.createJob('minimal-v5', null);
+
+    await expect(store.setRunning(jobId)).resolves.toBeUndefined();
+    await expect(store.heartbeat(jobId)).resolves.toBeUndefined();
+    await expect(store.setCompleted(jobId, null)).resolves.toBeUndefined();
+    expect(store.close()).toBeUndefined();
+    expect('claimRunning' in store).toBe(false);
+    expect('finalizeJob' in store).toBe(false);
+    expect('finalizeAbandonedIfStale' in store).toBe(false);
+    expect('heartbeatOwned' in store).toBe(false);
+    expect('enableHeartbeat' in store).toBe(false);
+  });
+
   it('runs successfully using only the unchanged v5.0.0 interface', async () => {
     const store = new V5CustomJobStore();
     const runner = new JobRunner(store);
