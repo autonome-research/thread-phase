@@ -400,14 +400,13 @@ describe('persistAgentEventsToJobStore', () => {
     store.close();
   });
 
-  it('recycles capacity across an append-failure storm without retaining per-event observation work', async () => {
+  it('keeps capacity-1 append-failure settlement state bounded while flush and close drain it', async () => {
     const store = newStore();
     const bus = createEventBus();
     const observerStarted = [deferred(), deferred()];
     const releaseObserver = [deferred(), deferred()];
     const observed: AgentEventPersistenceFailure[] = [];
-    const capacity = 32;
-    const batchCount = 100;
+    const failureCount = 3_200;
     let attempts = 0;
 
     store.appendEvent = async () => {
@@ -415,7 +414,7 @@ describe('persistAgentEventsToJobStore', () => {
       throw new Error('write failed');
     };
     const bridge = persistAgentEventsToJobStore(bus, store, 'recycled-failures', {
-      capacity,
+      capacity: 1,
       onFailure: async (failure) => {
         expect(failure.kind).toBe('append');
         const index = observed.length;
@@ -425,17 +424,19 @@ describe('persistAgentEventsToJobStore', () => {
       },
     });
 
-    for (let batch = 0; batch < batchCount; batch += 1) {
-      for (let index = 0; index < capacity; index += 1) {
-        bus.emit({ type: 'text', source: 'mock', delta: `${batch}:${index}` });
-      }
-      // The store has no asynchronous work, so one event-loop turn is a
-      // deterministic barrier for the bridge's serialized promise queue.
+    for (let index = 0; index < failureCount; index += 1) {
+      bus.emit({ type: 'text', source: 'mock', delta: String(index) });
+      // The failing store has no asynchronous work. The event-loop boundary
+      // deterministically settles this one accepted append and recycles the
+      // sole capacity slot before the next event is emitted.
       await flush();
     }
     await observerStarted[0]!.promise;
-    expect(attempts).toBe(capacity * batchCount);
+    expect(attempts).toBe(failureCount);
+    // One immutable active notification and one coalesced pending generation
+    // represent the whole storm; no callback-time object is retained per event.
     expect(observed).toHaveLength(1);
+    expect(observed[0]?.occurrences).toBe(1);
 
     let flushed = false;
     const flushPromise = bridge.flush().then(() => {
@@ -445,20 +446,21 @@ describe('persistAgentEventsToJobStore', () => {
     expect(bridge.close()).toBe(closePromise);
     bus.emit({ type: 'text', source: 'mock', delta: 'after-close' });
     await flush();
-    expect(attempts).toBe(capacity * batchCount);
+    expect(attempts).toBe(failureCount);
     expect(flushed).toBe(false);
 
     releaseObserver[0]!.resolve();
     await observerStarted[1]!.promise;
+    expect(observed).toHaveLength(2);
+    expect(observed[1]?.occurrences).toBe(failureCount - 1);
     expect(observed.reduce((sum, failure) => sum + failure.occurrences, 0)).toBe(
-      capacity * batchCount,
+      failureCount,
     );
     expect(flushed).toBe(false);
 
     releaseObserver[1]!.resolve();
     await Promise.all([flushPromise, closePromise]);
     expect(flushed).toBe(true);
-    expect(observed).toHaveLength(2);
     store.close();
   });
 
