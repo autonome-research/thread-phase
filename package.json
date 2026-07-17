@@ -9,9 +9,11 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "pretest": "npm run build",
     "test": "npm run test --workspaces --if-present",
+    "pretypecheck": "npm run build",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules"
+    "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo packages/*/node_modules node_modules"
   },
   "engines": {
     "node": "20.x || 22.x || 23.x || 24.x || 25.x || 26.x"

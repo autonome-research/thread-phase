@@ -25,6 +25,10 @@ For **anything larger** (new pattern, new public API, behavior change, dependenc
 
 - `npm run typecheck` — TypeScript compiles cleanly
 - `npm test` — full vitest suite passes
+
+Both run `npm run build` first automatically (pre-hooks): the cli and agents
+workspaces import the core package's `dist`, so a fresh clone fails typecheck
+until the core has been built once.
 - New public API has tests covering the documented behavior
 - New patterns include a "when not to use" docstring (existing patterns are good models)
 
