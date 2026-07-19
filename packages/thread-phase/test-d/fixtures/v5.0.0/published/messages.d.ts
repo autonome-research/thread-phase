@@ -1,0 +1,74 @@
+/**
+ * Internal message representation.
+ *
+ * thread-phase uses its own Message shape so the framework isn't coupled to
+ * either Anthropic's content-block model or OpenAI's tool-call model.
+ * Translation to/from the wire format happens at the inference boundary
+ * (see agent-runner.ts).
+ *
+ * Shape choice: closer to OpenAI than Anthropic, because:
+ * - tool_calls live on the assistant message as a separate field, not as
+ *   embedded content blocks.
+ * - tool results are their own role:'tool' messages with a tool_call_id link.
+ * This matches vLLM / Ollama / llama.cpp / OpenAI all natively, and the
+ * Anthropic SDK can be adapted at the boundary if ever needed.
+ */
+export interface ToolCall {
+    /** Unique id for this call. Used to match tool result messages back to the call. */
+    id: string;
+    /** Tool name from the registered ToolDefinition. */
+    name: string;
+    /** Parsed arguments. The framework parses JSON from the wire and passes structured args. */
+    input: Record<string, unknown>;
+}
+export interface SystemMessage {
+    role: 'system';
+    content: string;
+}
+export interface UserMessage {
+    role: 'user';
+    content: string;
+}
+export interface AssistantMessage {
+    role: 'assistant';
+    /** May be empty string when the assistant only emitted tool calls. */
+    content: string;
+    /** Empty array when no tool calls were made. */
+    toolCalls: ToolCall[];
+}
+export interface ToolResultMessage {
+    role: 'tool';
+    /** Must match a ToolCall.id from a prior assistant message. */
+    toolCallId: string;
+    content: string;
+}
+export type Message = SystemMessage | UserMessage | AssistantMessage | ToolResultMessage;
+export interface ToolDefinition {
+    name: string;
+    description: string;
+    /** JSON Schema (object). Translated to OpenAI's `function.parameters` at the boundary. */
+    inputSchema: {
+        type: 'object';
+        properties: Record<string, unknown>;
+        required?: string[];
+        additionalProperties?: boolean;
+    };
+}
+export interface ToolResult {
+    toolCallId: string;
+    content: string;
+}
+export interface ToolExecutor {
+    /**
+     * Dispatch a tool call. `signal` is the agent runner's AbortSignal — when
+     * the run is cancelled, long-running tools (HTTP calls, shell commands,
+     * file I/O) can observe this to bail cooperatively rather than running
+     * to completion before the next agent round checks for cancellation.
+     *
+     * Implementations may ignore `signal` for synchronous or fast tools;
+     * the parameter is optional for backwards compatibility with executors
+     * authored before v3.4.0.
+     */
+    execute(name: string, toolCallId: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult>;
+}
+//# sourceMappingURL=messages.d.ts.map

@@ -1,0 +1,36 @@
+{
+  "schema": "thread-phase-published-api-provenance/v1",
+  "retrievedAt": "2026-07-19T20:51:03Z",
+  "package": "@autonome-research/thread-phase",
+  "version": "5.0.0",
+  "registry": "https://registry.npmjs.org/",
+  "tarball": "https://registry.npmjs.org/@autonome-research/thread-phase/-/thread-phase-5.0.0.tgz",
+  "registryShasumSha1": "b65bef53d5d36726cb37b98b575108305aff9a4d",
+  "registryIntegrity": "sha512-Utn4dMqH1GWZRAQQDbVy730M6jWHBpXl6YvmMXEASdZvoNPm7MZ+agGbLVa1xQwl3ombJ+8znpxgfg06B2bFdA==",
+  "tarballSha256": "d559ebd7eb68f25781a4ad46ed02d484870093d07832ec4ad85aad0eb92cee90",
+  "tarballSha512Hex": "52d9f874ca87d465994404100db572ef7d0cea35870695e5e98be631710049d66fa0d3e6ecc67e6a019b2d56b5c50c25de899b27ef339e9c607e0d3a0766c574",
+  "npmPack": {
+    "size": 172465,
+    "unpackedSize": 625471,
+    "fileCount": 263
+  },
+  "publishedDeclarationFileCount": 130,
+  "publishedDeclarationManifest": "published-declarations.sha256",
+  "publishedDeclarationManifestSha256": "41ac63a76b5fd8e71ae6c093053eff3e642ccad307528ff2fe781272076a28cb",
+  "files": {
+    "package.json": "4fca9a750d843cde616aba14b2c01e0dc1f16d697293599bfd13444013ff4e44",
+    "published/cache.d.ts": "ed769410a03dd124adb5d19f5bb0cf2f14063778b87107ea8ba2506f664ac0c3",
+    "published/cache.d.ts.map": "90fe2602edb79547600ab73731fa65f881c22a822769ad44307f09ef4a5206f2",
+    "published/phase.d.ts": "f6192fe243d40393e9e7c8e497f7f98e7f3ba382c0c60965829fd15f35bc36a3",
+    "published/phase.d.ts.map": "d00d932bcc0b6ce839779f3d5bc74352014d2bb3a5f5f41203b07f13a4bebbe0",
+    "published/session/job-store.d.ts": "e58d76283c2abb050ba69bd7b9e24f9e46df083010692156cd74a938d6ea8a62",
+    "published/session/job-store.d.ts.map": "c9fb299be4cc88100500aeea02e02379bec75379590956d2e7e90b7bdebd0b8d"
+  },
+  "retrievalCommands": [
+    "npm view @autonome-research/thread-phase@5.0.0 --json",
+    "npm pack @autonome-research/thread-phase@5.0.0 --json --ignore-scripts",
+    "sha256sum autonome-research-thread-phase-5.0.0.tgz",
+    "sha512sum autonome-research-thread-phase-5.0.0.tgz",
+    "tar -xzf autonome-research-thread-phase-5.0.0.tgz"
+  ]
+}

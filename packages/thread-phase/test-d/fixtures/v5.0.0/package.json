@@ -1,0 +1,65 @@
+{
+  "name": "@autonome-research/thread-phase",
+  "version": "5.0.0",
+  "description": "TypeScript substrate for building automation workflows that coordinate AI agents. Phase ordering, typed shared state, persistence, fanout, event flow.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./patterns": "./dist/patterns/index.js",
+    "./context": "./dist/context/index.js",
+    "./session": "./dist/session/index.js",
+    "./tools": "./dist/tools/index.js",
+    "./agents": "./dist/agents/index.js",
+    "./agents/authoring": "./dist/agents/authoring/index.js",
+    "./agents/test-utils": "./dist/agents/test-utils/index.js",
+    "./triggers": "./dist/triggers/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "smoke": "tsx examples/smoke.ts"
+  },
+  "dependencies": {
+    "ajv": "^8.17.0",
+    "better-sqlite3": "^12.11.1",
+    "openai": "^6.46.0"
+  },
+  "devDependencies": {
+    "@honcho-ai/sdk": "^2.1.1",
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.10"
+  },
+  "peerDependencies": {
+    "cron-parser": "^4.0.0 || ^5.0.0",
+    "vitest": "^2.1.0 || ^3.0.0 || ^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "cron-parser": {
+      "optional": true
+    },
+    "vitest": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": "20.x || 22.x || 23.x || 24.x || 25.x || 26.x"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/autonome-research/thread-phase.git",
+    "directory": "packages/thread-phase"
+  }
+}

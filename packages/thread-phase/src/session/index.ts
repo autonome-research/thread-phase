@@ -3,8 +3,6 @@ export {
   type JobRecord,
   type EventRecord,
   type JobFinalization,
-  type OwnedJobStoreCapabilities,
-  type OwnedHeartbeatJobStoreCapabilities,
   type JobStatus,
   type JobOwnership,
   type ListJobsOptions,

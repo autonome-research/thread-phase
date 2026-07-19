@@ -126,7 +126,7 @@ describe('JobRunner lifecycle drains', () => {
     const acquisitionError = new Error('ownership backend unavailable');
     const rejectingStore = new Proxy(store, {
       get(target, property) {
-        if (property === 'claimRunning') return async () => { throw acquisitionError; };
+        if (property === 'setRunning') return async () => { throw acquisitionError; };
         const value = Reflect.get(target, property, target) as unknown;
         return typeof value === 'function' ? value.bind(target) : value;
       },
@@ -167,17 +167,9 @@ describe('JobRunner lifecycle drains', () => {
   ])('defers synchronous $kind acquisition throws until start returns and cleans up', async ({ kind, makeStore }) => {
     const acquisitionError = new Error(`${kind} acquisition threw synchronously`);
     const target = makeStore();
-    const capabilityTarget = target as JobStore & {
-      claimRunning?: (jobId: string, ownership?: Parameters<JobStore['setRunning']>[1]) => Promise<boolean>;
-    };
-    const acquisitionMethod = typeof capabilityTarget.claimRunning === 'function'
-      ? 'claimRunning'
-      : 'setRunning';
-    const acquisition = vi.fn((..._args: Parameters<JobStore['setRunning']>): Promise<boolean | void> => {
-      acquisition.mockImplementation(async (...args: Parameters<JobStore['setRunning']>) => {
-        await target.setRunning(...args);
-        return acquisitionMethod === 'claimRunning' ? true : undefined;
-      });
+    const acquisitionMethod = 'setRunning';
+    const acquisition = vi.fn((..._args: Parameters<JobStore['setRunning']>): Promise<boolean> => {
+      acquisition.mockImplementation((...args: Parameters<JobStore['setRunning']>) => target.setRunning(...args));
       throw acquisitionError;
     });
     const throwingStore = new Proxy(target, {

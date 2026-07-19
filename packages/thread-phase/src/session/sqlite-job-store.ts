@@ -215,15 +215,7 @@ export class SqliteJobStore implements JobStore {
     return tx(name, input);
   }
 
-  async setRunning(jobId: string, ownership?: JobOwnership): Promise<void> {
-    this.updateRunning(jobId, ownership);
-  }
-
-  async claimRunning(jobId: string, ownership?: JobOwnership): Promise<boolean> {
-    return this.updateRunning(jobId, ownership);
-  }
-
-  private updateRunning(jobId: string, ownership?: JobOwnership): boolean {
+  async setRunning(jobId: string, ownership?: JobOwnership): Promise<boolean> {
     // COALESCE on started_at: idempotent w.r.t. acquireExclusive, which
     // already sets status='RUNNING' and started_at at claim time.
     // Ownership fields use COALESCE so a re-call without ownership doesn't
@@ -261,23 +253,16 @@ export class SqliteJobStore implements JobStore {
     return result.changes === 1;
   }
 
-  async heartbeat(jobId: string): Promise<void> {
-    // Released unscoped operation retained as the explicit operator override.
+  async heartbeat(jobId: string, ownerId?: string): Promise<void> {
+    // Owner-aware when called by JobRunner; unguarded calls remain available
+    // for operators and backwards-compatible direct store integrations.
     this.db
       .prepare(
         `UPDATE job SET heartbeat_at = datetime('now')
-         WHERE id = ? AND status = 'RUNNING'`,
+         WHERE id = ? AND status = 'RUNNING'
+           AND (? IS NULL OR owner_id = ?)`,
       )
-      .run(jobId);
-  }
-
-  async heartbeatOwned(jobId: string, ownerId: string): Promise<void> {
-    this.db
-      .prepare(
-        `UPDATE job SET heartbeat_at = datetime('now')
-         WHERE id = ? AND status = 'RUNNING' AND owner_id = ?`,
-      )
-      .run(jobId, ownerId);
+      .run(jobId, ownerId ?? null, ownerId ?? null);
   }
 
   async enableHeartbeat(jobId: string, ownerId: string): Promise<boolean> {
@@ -290,25 +275,27 @@ export class SqliteJobStore implements JobStore {
     return result.changes === 1;
   }
 
-  async setCompleted(jobId: string, result: unknown): Promise<void> {
-    this.db
+  async setCompleted(jobId: string, result: unknown, ownerId?: string): Promise<boolean> {
+    const resultRow = this.db
       .prepare(
         `UPDATE job SET status = 'COMPLETED', result = ?, error = NULL,
                         completed_at = datetime('now')
          WHERE id = ? AND status IN ('PENDING', 'RUNNING')
            AND (? IS NULL OR owner_id = ?)`,
       )
-      .run(JSON.stringify(result ?? null), jobId, null, null);
+      .run(JSON.stringify(result ?? null), jobId, ownerId ?? null, ownerId ?? null);
+    return resultRow.changes === 1;
   }
 
-  async setFailed(jobId: string, error: string): Promise<void> {
-    this.db
+  async setFailed(jobId: string, error: string, ownerId?: string): Promise<boolean> {
+    const resultRow = this.db
       .prepare(
         `UPDATE job SET status = 'FAILED', error = ?, completed_at = datetime('now')
          WHERE id = ? AND status IN ('PENDING', 'RUNNING')
            AND (? IS NULL OR owner_id = ?)`,
       )
-      .run(error, jobId, null, null);
+      .run(error, jobId, ownerId ?? null, ownerId ?? null);
+    return resultRow.changes === 1;
   }
 
   async setCancelled(jobId: string, reason: string, ownerId?: string): Promise<boolean> {

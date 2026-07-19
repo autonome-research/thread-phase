@@ -25,7 +25,7 @@ All notable changes to thread-phase will be documented here. The format is based
 - Upgraded `better-sqlite3` to the Node 26-compatible 12.x line.
 - Upgraded the OpenAI runtime dependency to 6.x and the development test stack to Vitest 4.
 
-The released v5.0.0 `JobStore` interface and its void-returning lifecycle signatures remain unchanged. Atomic ownership/finalization and owner-scoped heartbeat are additive capability interfaces detected by `JobRunner`; existing structural custom stores continue through the legacy fallback without implementing unreleased methods.
+The released v5.0.0 `JobStore` interface remains unchanged. Its published declaration already requires boolean-returning ownership and terminal transitions, atomic finalization, cancellation and abandonment methods, owner-aware heartbeat, and heartbeat enablement. A provenance-backed declaration fixture now verifies that exact contract.
 
 ## [3.2.2] — 2026-05-21
 

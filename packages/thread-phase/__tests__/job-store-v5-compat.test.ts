@@ -15,22 +15,22 @@ const successfulPhase: Phase<Ctx> = {
 };
 
 describe('v5.0.0 custom JobStore compatibility', () => {
-  it('has void lifecycle returns and no unreleased ownership methods', async () => {
+  it('implements the ownership lifecycle published in v5.0.0', async () => {
     const store = new V5CustomJobStore();
-    const jobId = await store.createJob('minimal-v5', null);
+    const jobId = await store.createJob('published-v5', null);
 
-    await expect(store.setRunning(jobId)).resolves.toBeUndefined();
-    await expect(store.heartbeat(jobId)).resolves.toBeUndefined();
-    await expect(store.setCompleted(jobId, null)).resolves.toBeUndefined();
+    await expect(store.setRunning(jobId, { ownerId: 'owner' })).resolves.toBe(true);
+    await expect(store.enableHeartbeat(jobId, 'owner')).resolves.toBe(true);
+    await expect(store.heartbeat(jobId, 'owner')).resolves.toBeUndefined();
+    await expect(store.setCompleted(jobId, null, 'owner')).resolves.toBe(true);
+    await expect(store.setFailed(jobId, 'late', 'owner')).resolves.toBe(false);
     expect(store.close()).toBeUndefined();
-    expect('claimRunning' in store).toBe(false);
-    expect('finalizeJob' in store).toBe(false);
-    expect('finalizeAbandonedIfStale' in store).toBe(false);
-    expect('heartbeatOwned' in store).toBe(false);
-    expect('enableHeartbeat' in store).toBe(false);
+    expect('finalizeJob' in store).toBe(true);
+    expect('finalizeAbandonedIfStale' in store).toBe(true);
+    expect('enableHeartbeat' in store).toBe(true);
   });
 
-  it('runs successfully using only the unchanged v5.0.0 interface', async () => {
+  it('runs successfully using exactly the published v5.0.0 interface', async () => {
     const store = new V5CustomJobStore();
     const runner = new JobRunner(store);
     const jobId = await runner.create('legacy', null);
@@ -42,7 +42,7 @@ describe('v5.0.0 custom JobStore compatibility', () => {
       .toEqual(['data', 'done']);
   });
 
-  it('falls back to legacy failure persistence without requiring new methods', async () => {
+  it('uses published atomic failure finalization', async () => {
     const store = new V5CustomJobStore();
     const runner = new JobRunner(store);
     const jobId = await runner.create('legacy-failure', null);
