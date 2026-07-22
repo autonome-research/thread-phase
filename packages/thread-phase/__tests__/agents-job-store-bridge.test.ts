@@ -500,6 +500,58 @@ describe('persistAgentEventsToJobStore', () => {
     store.close();
   });
 
+  it('allows a failure observer to await reentrant close after an async boundary', async () => {
+    const store = newStore();
+    const bus = createEventBus();
+    const observerSettled = deferred();
+    store.appendEvent = async () => { throw new Error('write failed'); };
+    let bridge!: ReturnType<typeof persistAgentEventsToJobStore>;
+    bridge = persistAgentEventsToJobStore(bus, store, 'reentrant-close', {
+      onFailure: async () => {
+        await Promise.resolve();
+        await bridge.close();
+        observerSettled.resolve();
+      },
+    });
+
+    bus.emit({ type: 'text', source: 'mock', delta: 'failure' });
+    await Promise.race([
+      observerSettled.promise,
+      new Promise<never>((_, reject) => setTimeout(
+        () => reject(new Error('reentrant close deadlocked')),
+        1_000,
+      )),
+    ]);
+    await bridge.close();
+    store.close();
+  });
+
+  it('allows a failure observer to await reentrant flush after an async boundary', async () => {
+    const store = newStore();
+    const bus = createEventBus();
+    const observerSettled = deferred();
+    store.appendEvent = async () => { throw new Error('write failed'); };
+    let bridge!: ReturnType<typeof persistAgentEventsToJobStore>;
+    bridge = persistAgentEventsToJobStore(bus, store, 'reentrant-flush', {
+      onFailure: async () => {
+        await Promise.resolve();
+        await bridge.flush();
+        observerSettled.resolve();
+      },
+    });
+
+    bus.emit({ type: 'text', source: 'mock', delta: 'failure' });
+    await Promise.race([
+      observerSettled.promise,
+      new Promise<never>((_, reject) => setTimeout(
+        () => reject(new Error('reentrant flush deadlocked')),
+        1_000,
+      )),
+    ]);
+    await bridge.close();
+    store.close();
+  });
+
   it('validates finite queue capacity before subscribing', () => {
     const bus = createEventBus();
     const store = newStore();

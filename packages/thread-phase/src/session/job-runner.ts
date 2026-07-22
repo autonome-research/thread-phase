@@ -27,9 +27,11 @@ export interface JobRunnerOptions {
   /** Automatic heartbeat interval for active runs. */
   heartbeatMs?: number;
   /**
-   * Maximum duration of one heartbeat attempt. Defaults to heartbeatMs.
-   * Applies to automatic attempts and manual ctx.heartbeat() refreshes. This
-   * bounds runner waiting; it cannot cancel a custom store's underlying I/O.
+   * Maximum duration of one heartbeat attempt. Requires heartbeatMs and
+   * defaults to heartbeatMs. Once configured, it applies to automatic attempts
+   * and manual ctx.heartbeat() refreshes. Manual-only runs cannot currently
+   * configure a timeout. This bounds runner waiting; it cannot cancel a custom
+   * store's underlying I/O.
    */
   heartbeatTimeoutMs?: number;
 }
