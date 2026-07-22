@@ -25,26 +25,27 @@ The clean candidate branch contains:
 
 As of the 2026-07-22 checkpoint, the candidate passed build, typecheck, full tests, `git diff --check`, and an integrated low-risk review. Canonical master, merge, push, tag, and publication remain separate decisions.
 
-## P0 — release blockers
+## P0 — release preparation
 
-1. **Choose the release line.**
-   - Recommended: retain additive API and release v5.1.0.
-   - Alternative: remove every addition in the stable API inventory and ship a fix-only v5.0.1.
-2. **Choose migration-history policy.**
-   - Retain compatibility with development-only candidate databases; or
-   - collapse unpublished migration history before release and explicitly drop development-database compatibility.
-3. **Align release metadata.**
+Resolved release decisions:
+
+- v5.1.0 is the approved release line.
+- unpublished candidate migrations are collapsed into the single v5.1.0 migration 5; development candidate databases are intentionally unsupported.
+
+Remaining release work:
+
+1. **Align and review release metadata.**
    - root/core/agents/CLI versions;
    - internal dependency ranges and lockfile;
    - changelogs, migration notes, API inventory, and release checklist.
-4. **Validate the exact packages.**
+2. **Validate the exact packages.**
    - clean install;
    - build, typecheck, and full tests;
    - package dry-runs and content inspection;
    - isolated local-tarball import and CLI smoke tests;
    - supported Node/Pi matrix with explicit skips;
    - provenance and human release checklist.
-5. **Obtain final release-candidate review.**
+3. **Obtain final release-candidate review.**
 
 ## P1 — adoption-critical developer experience
 

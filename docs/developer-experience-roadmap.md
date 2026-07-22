@@ -1,12 +1,12 @@
 # Developer Experience and Adoption Roadmap
 
-Status: active planning document for the post-v5.0.0 candidate
+Status: active planning document for the v5.1 release candidate and subsequent adoption work
 
 thread-phase succeeds only if its lifecycle guarantees are understandable and its failure modes are actionable without reading the implementation. Correctness remains non-negotiable, but developer experience is part of correctness: ambiguous ownership failures, surprising versioning, difficult custom-store conformance, and opaque migration errors all increase adoption risk.
 
-This document records known shortcomings in the current candidate and turns them into an ordered adoption roadmap. It does not authorize merge, publication, or a release number.
+This document records known shortcomings in the current candidate and turns them into an ordered adoption roadmap. It does not authorize merge, publication, tagging, or pushing.
 
-## Release decision required before metadata changes
+## Release decisions
 
 The current candidate was initially called v5.0.1, but it adds stable public API in four areas:
 
@@ -17,7 +17,7 @@ The current candidate was initially called v5.0.1, but it adds stable public API
 
 The authoritative symbol-by-symbol list and immutable baseline evidence are in [`unreleased-api-inventory.md`](./unreleased-api-inventory.md). The repository's stability policy defines patch releases as bug fixes with no public API additions. Publishing these additions as 5.0.1 would make the versioning policy unreliable for consumers.
 
-**Recommended decision:** retarget the candidate to **v5.1.0**. The alternative is to remove every stable addition in the inventory and ship only internal fixes as v5.0.1. Do not update package metadata until this decision is explicit.
+**Decision:** v5.1.0 is approved. The additive API is retained and release metadata is aligned to that minor version.
 
 ## Current strengths to preserve
 
@@ -85,16 +85,11 @@ Current guidance: unknown same-named schema objects are not repaired destructive
 
 Future direction: centralize structural schema inspection, document accepted normalizations, and add a CLI inspection command that reports the exact mismatch before opening a worker.
 
-### 7. Candidate-schema compatibility adds maintenance cost
+### 7. Unpublished candidate schemas are intentionally unsupported
 
-The candidate recognizes one known pre-release global-index shape and migrates it conservatively. This helps local evaluators but creates code no published package requires.
+**Decision:** collapse the unpublished migration sequence into the single v5.1.0 migration 5. Published v5.0.0 migrations 1–4 remain immutable. Pre-release development databases must be recreated or exported through a published schema rather than carrying permanent candidate-specific repair code.
 
-Decision before release:
-
-- **Clean release history:** collapse unpublished migrations into the final migration and explicitly drop compatibility with development-only databases; or
-- **Development database continuity:** retain the candidate migration path and own its tests permanently.
-
-The release checklist must record which choice was made.
+The release checklist records this as an intentional compatibility boundary, not an accidental omission.
 
 ### 8. Trace-ID rules are local to one pattern
 
@@ -110,14 +105,12 @@ Future direction: preserve the current candidate and review artifacts as immutab
 
 ## Adoption priorities
 
-### P0 — release blockers
+### P0 — release preparation
 
-1. Decide v5.1.0 versus removing every stable addition in the API inventory for v5.0.1.
-2. Decide whether to retain development-only candidate-schema migration compatibility.
-3. Align package versions, changelogs, migration notes, and internal dependency ranges with that decision.
-4. Run clean-install, build, typecheck, full-test, package-content, tarball-install, and CLI smoke validation.
-5. Validate documented supported Node and Pi versions; report unavailable environments as explicit skips.
-6. Produce a human release checklist and final integrated review.
+1. Review aligned v5.1.0 package versions, changelogs, migration notes, lockfile, and internal dependency ranges.
+2. Run clean-install, build, typecheck, full-test, package-content, tarball-install, and CLI smoke validation.
+3. Validate documented supported Node and Pi versions; report unavailable environments as explicit skips.
+4. Produce a human release checklist and final integrated review.
 
 ### P1 — adoption-critical developer experience
 

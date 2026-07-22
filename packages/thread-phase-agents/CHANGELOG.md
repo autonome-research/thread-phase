@@ -4,7 +4,9 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
-- Locked-version v5 release alongside the core reliable run-lifecycle APIs.
+## [5.1.0] — 2026-07-22
+
+- Locked-version release alongside the additive core v5.1 lifecycle and event APIs.
 - Migrated the Pi adapter and optional peer dependency from deprecated `@mariozechner/pi-coding-agent` to `@earendil-works/pi-coding-agent`.
 
 ## [3.2.2] — 2026-05-21

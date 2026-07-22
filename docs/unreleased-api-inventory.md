@@ -9,7 +9,7 @@ Repository evidence:
 - Published-contract restoration checkpoint: `942df3e804d7301d2897e2f429ee284a99de137e`
 - Current candidate checkpoint when this inventory was reviewed: `512742741c8a0e9c31b3ae61e095be1656bbc860`
 
-This inventory determines the release line. It lists stable additive surfaces, not internal implementation changes. Any fix-only v5.0.1 plan must remove **all** additions below or explicitly establish that an item was already present in the immutable published declaration fixture. Retaining these additions requires a minor release; the recommended target is v5.1.0.
+This inventory records the evidence for the approved v5.1.0 release line. It lists stable additive surfaces, not internal implementation changes. Retaining these additions requires a minor release; v5.1.0 was selected rather than removing them for a fix-only v5.0.1.
 
 ## Agent event observation
 
