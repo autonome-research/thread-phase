@@ -731,6 +731,32 @@ describe('SqliteJobStore — migrations', () => {
     inspect.close();
   });
 
+  it('opens and migrates a nonexistent database concurrently across processes', async () => {
+    const path = join(dir, 'concurrent-fresh.db');
+    const children = Array.from({ length: 4 }, () => spawnMigrationChild());
+    try {
+      await Promise.all(children.map((child) => child.waitFor('ready')));
+      for (const child of children) child.process.send?.({ type: 'start', dbPath: path });
+      await Promise.all(children.map((child) => child.waitFor('opening')));
+      const results = await Promise.all(children.map((child) => child.waitFor('result')));
+      expect(results).toEqual(Array.from(
+        { length: children.length },
+        () => expect.objectContaining({ ok: true }),
+      ));
+      await Promise.all(children.map((child) => child.closeNormally()));
+    } finally {
+      await Promise.all(children.map((child) => child.cleanupAfterFailure()));
+    }
+
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
+    expect(inspect.prepare(
+      `SELECT COUNT(*) AS count FROM sqlite_master
+       WHERE type = 'index' AND name = 'idx_job_one_running_per_name'`,
+    ).get()).toEqual({ count: 1 });
+    inspect.close();
+  }, 15_000);
+
   it('serializes concurrent process initialization and applies the migration once', async () => {
     const path = join(dir, 'concurrent-v5.db');
     const initialized = new SqliteJobStore(path);

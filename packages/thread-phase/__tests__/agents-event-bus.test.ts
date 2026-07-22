@@ -156,6 +156,25 @@ describe('AgentEventBus handler-failure contract', () => {
     expect(seen).toEqual(['first', 'second', 'second']);
   });
 
+  it('snapshots subscriptions for deterministic add/remove during emit', () => {
+    const bus = createEventBus();
+    const seen: string[] = [];
+    const third = () => { seen.push('third'); };
+    let removeSecond!: () => void;
+    bus.on(() => {
+      seen.push('first');
+      removeSecond();
+      bus.on(third);
+    });
+    removeSecond = bus.on(() => { seen.push('second'); });
+
+    bus.emit(event);
+    expect(seen).toEqual(['first', 'second']);
+    seen.length = 0;
+    bus.emit(event);
+    expect(seen).toEqual(['first', 'third']);
+  });
+
   it('removes only the requested error observer and removal is idempotent', () => {
     const bus = createEventBus();
     const observed: string[] = [];

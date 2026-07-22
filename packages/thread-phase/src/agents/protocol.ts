@@ -185,7 +185,8 @@ export interface AgentEventHandlerFailure {
 
 export interface AgentEventBus {
   /**
-   * Dispatch synchronously to all current subscribers.
+   * Dispatch synchronously to a snapshot of current subscribers. Subscriptions
+   * added or removed during dispatch affect only later events.
    *
    * Returned promises are observed but never awaited. Subscriber failures do
    * not escape from emit or stop fan-out to the remaining subscribers.

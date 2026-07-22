@@ -42,7 +42,7 @@ export function createEventBus(): ObservableAgentEventBus {
     error: unknown,
   ): void => {
     const failure = { handler, event, error: normalizeError(error) };
-    for (const observer of errorHandlers) {
+    for (const observer of [...errorHandlers]) {
       try {
         void Promise.resolve(observer(failure)).catch(() => {});
       } catch {
@@ -53,7 +53,9 @@ export function createEventBus(): ObservableAgentEventBus {
 
   return {
     emit(event) {
-      for (const handler of handlers) {
+      // Snapshot subscriptions so add/remove operations during dispatch affect
+      // only later events, never the event currently being fanned out.
+      for (const handler of [...handlers]) {
         try {
           void Promise.resolve(handler(event)).catch((error: unknown) => {
             reportHandlerError(handler, event, error);

@@ -526,6 +526,37 @@ describe('persistAgentEventsToJobStore', () => {
     store.close();
   });
 
+  it('keeps the external close barrier pending after an observer initiates close', async () => {
+    const store = newStore();
+    const bus = createEventBus();
+    const observerPassedClose = deferred();
+    const releaseObserver = deferred();
+    store.appendEvent = async () => { throw new Error('write failed'); };
+    let bridge!: ReturnType<typeof persistAgentEventsToJobStore>;
+    bridge = persistAgentEventsToJobStore(bus, store, 'observer-initiated-close', {
+      onFailure: async () => {
+        await Promise.resolve();
+        await bridge.close();
+        observerPassedClose.resolve();
+        await releaseObserver.promise;
+      },
+    });
+
+    bus.emit({ type: 'text', source: 'mock', delta: 'failure' });
+    await observerPassedClose.promise;
+    let externalCloseSettled = false;
+    const externalClose = bridge.close().then(() => {
+      externalCloseSettled = true;
+    });
+    await Promise.resolve();
+    expect(externalCloseSettled).toBe(false);
+
+    releaseObserver.resolve();
+    await externalClose;
+    expect(externalCloseSettled).toBe(true);
+    store.close();
+  });
+
   it('allows a failure observer to await reentrant flush after an async boundary', async () => {
     const store = newStore();
     const bus = createEventBus();

@@ -339,11 +339,17 @@ export function createAgentEventPersistenceBridge(
       return drainAtInvocation();
     },
     close() {
-      if (!closePromise) {
+      if (!closed) {
         closed = true;
         unsubscribe();
-        closePromise = drainAtInvocation();
       }
+      if (observerContext.getStore()) {
+        // A callback-local barrier must not become the canonical close promise:
+        // it necessarily excludes the callback's own active delivery. A later
+        // external close creates/returns the full barrier and waits for it.
+        return drainAtInvocation();
+      }
+      if (!closePromise) closePromise = drainAtInvocation();
       return closePromise;
     },
     onFailure(handler) {

@@ -131,6 +131,27 @@ function assertSupportedSchemaVersion(version: number): void {
   }
 }
 
+function enableWalWithRetry(db: DB, timeoutMs = 5_000): void {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      db.pragma('journal_mode = WAL');
+      return;
+    } catch (error: unknown) {
+      const code = error instanceof Error && 'code' in error
+        ? String((error as Error & { code?: unknown }).code)
+        : '';
+      if ((code !== 'SQLITE_BUSY' && code !== 'SQLITE_LOCKED') || Date.now() >= deadline) {
+        throw error;
+      }
+      // journal_mode changes do not consistently honor SQLite's busy handler.
+      // Constructor initialization is synchronous, so use a bounded blocking
+      // wait before retrying rather than racing fresh-database openers.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+}
+
 interface JobRow {
   id: string;
   name: string;
@@ -284,7 +305,7 @@ export class SqliteJobStore implements JobStore {
       const initialVersion =
         (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
       assertSupportedSchemaVersion(initialVersion);
-      this.db.pragma('journal_mode = WAL');
+      enableWalWithRetry(this.db);
       this.db.pragma('foreign_keys = ON');
       this.runMigrations();
     } catch (error: unknown) {
