@@ -1,3 +1,19 @@
+# Unreleased post-v5.0.0 candidate
+
+The current candidate contains additive public API across event observation, bounded event persistence, lifecycle drains and heartbeat diagnostics, and fanout attribution. The complete verified list is maintained in [`docs/unreleased-api-inventory.md`](./docs/unreleased-api-inventory.md); it includes more than the headline `JobOwnershipLostError`, `heartbeatTimeoutMs`, `heartbeatAsOperator()`, and `boundedFanoutOf.traceIdFor` additions. Under the documented SemVer policy, the recommended release target is **v5.1.0**, not v5.0.1. Package metadata remains 5.0.0 until that release-line decision is explicit. A fix-only v5.0.1 would require removing every stable addition in the inventory, not merely the headline four.
+
+Expected consumer-facing behavior:
+
+- automatic owner refresh uses the published idempotent `enableHeartbeat(jobId, ownerId)` boolean contract, preserving compatibility with custom v5 stores whose `heartbeat()` remains a no-op on mismatch;
+- `heartbeatEnabled: false` suppresses automatic refresh for that run, while manual `ctx.heartbeat()` can opt in later;
+- SQLite exclusivity is opt-in through `acquireExclusive()`: ordinary same-name runs may overlap each other, but cannot overlap an active exclusive run;
+- `traceIdFor(item, index)` derives unique per-item attribution before any adapter dispatch;
+- future or incompatible SQLite schemas fail closed with an actionable error.
+
+Before release, maintainers must decide whether to retain compatibility with development-only candidate databases. See [`docs/developer-experience-roadmap.md`](./docs/developer-experience-roadmap.md).
+
+---
+
 # Migrating from v4.1.x to v5.0.0
 
 v5 makes the persisted run lifecycle authoritative and safe for workflow hosts deploying deterministic subagents.
