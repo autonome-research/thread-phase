@@ -353,20 +353,22 @@ export class JobRunner extends EventEmitter {
       ctx.heartbeat = async () => {
         // A pipeline using only manual heartbeats opts into stale detection on
         // first use, without requiring heartbeatMs at runner construction.
-        const refresh = Promise.resolve().then(
-          () => this.store.enableHeartbeat(jobId, ownerId),
-        );
-        const enabled = this.heartbeatTimeoutMs === undefined
-          ? await refresh
-          : await withTimeout(
-              refresh,
-              this.heartbeatTimeoutMs,
-              `Heartbeat for job ${jobId} timed out after ${this.heartbeatTimeoutMs}ms`,
-            );
-        if (!enabled) {
-          const error = new JobOwnershipLostError(jobId, ownerId);
-          recordHeartbeatFailure(error);
-          throw error;
+        try {
+          const refresh = Promise.resolve().then(
+            () => this.store.enableHeartbeat(jobId, ownerId),
+          );
+          const enabled = this.heartbeatTimeoutMs === undefined
+            ? await refresh
+            : await withTimeout(
+                refresh,
+                this.heartbeatTimeoutMs,
+                `Heartbeat for job ${jobId} timed out after ${this.heartbeatTimeoutMs}ms`,
+              );
+          if (!enabled) throw new JobOwnershipLostError(jobId, ownerId);
+        } catch (error: unknown) {
+          const failure = error instanceof Error ? error : new Error(String(error));
+          recordHeartbeatFailure(failure);
+          throw failure;
         }
       };
 

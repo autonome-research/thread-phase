@@ -485,6 +485,32 @@ describe('heartbeat', () => {
     expect(runner.signalFor(id)).toBeUndefined();
   });
 
+  it('fails the run even when phase code catches a manual heartbeat rejection', async () => {
+    const runner = new JobRunner(store, { heartbeatMs: 1000 });
+    const id = await runner.create('caught-manual-heartbeat-failure', null);
+    const failure = new Error('manual heartbeat backend failed');
+    const refreshSpy = vi.spyOn(store, 'enableHeartbeat').mockRejectedValue(failure);
+    const phase: Phase<BasePipelineContext> = {
+      name: 'catch-refresh',
+      async *run(ctx) {
+        try { await ctx.heartbeat?.(); } catch { /* runner failure remains authoritative */ }
+      },
+    };
+
+    await expect(runner.run(
+      id,
+      [phase],
+      { cache: new PipelineCache() },
+      undefined,
+      { ownership: { heartbeatEnabled: false } },
+    )).rejects.toBe(failure);
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect(await store.getJob(id)).toMatchObject({
+      status: 'FAILED',
+      error: 'manual heartbeat backend failed',
+    });
+  });
+
   it('bounds a manual heartbeat that never settles', async () => {
     const runner = new JobRunner(store, { heartbeatMs: 10, heartbeatTimeoutMs: 100 });
     const id = await runner.create('hung-manual-heartbeat', null);
