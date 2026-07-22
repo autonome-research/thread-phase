@@ -1,4 +1,5 @@
 export {
+  JobOwnershipLostError,
   type JobStore,
   type JobRecord,
   type EventRecord,

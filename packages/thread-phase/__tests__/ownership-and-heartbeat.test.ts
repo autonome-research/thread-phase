@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqliteJobStore } from '../src/session/sqlite-job-store.js';
+import { JobOwnershipLostError } from '../src/session/job-store.js';
 import { JobRunner } from '../src/session/job-runner.js';
 import { PipelineCache } from '../src/cache.js';
 import type { Phase, BasePipelineContext } from '../src/phase.js';
@@ -160,6 +161,30 @@ describe('heartbeat', () => {
     await store.heartbeat(id);
     const after = (await store.getJob(id))?.heartbeatAt;
     expect(after?.getTime()).toBe(before?.getTime());
+  });
+
+  it('owner-scoped heartbeat refreshes only the current owner', async () => {
+    const id = await store.createJob('owned', null);
+    await store.setRunning(id, { ownerId: 'owner-a', heartbeatEnabled: true });
+
+    await expect(store.heartbeat(id, 'owner-a')).resolves.toBeUndefined();
+    await expect(store.heartbeat(id, 'owner-b')).rejects.toMatchObject({
+      name: 'JobOwnershipLostError',
+      code: 'ERR_JOB_OWNERSHIP_LOST',
+      jobId: id,
+      ownerId: 'owner-b',
+    });
+  });
+
+  it('owner-scoped heartbeat reports ownership loss for terminal and missing jobs', async () => {
+    const id = await store.createJob('terminal', null);
+    await store.setRunning(id, { ownerId: 'owner-a' });
+    await store.setCompleted(id, null, 'owner-a');
+
+    await expect(store.heartbeat(id, 'owner-a')).rejects.toBeInstanceOf(JobOwnershipLostError);
+    await expect(store.heartbeat('missing-job', 'owner-a')).rejects.toBeInstanceOf(
+      JobOwnershipLostError,
+    );
   });
 
   it('JobRunner with heartbeatMs fires the background timer during run()', async () => {

@@ -57,6 +57,19 @@ export type JobStatus =
   | 'ABANDONED'
   | 'STALE';
 
+/** Stable failure raised when an owner-scoped operation no longer owns a RUNNING job. */
+export class JobOwnershipLostError extends Error {
+  readonly code = 'ERR_JOB_OWNERSHIP_LOST';
+
+  constructor(
+    readonly jobId: string,
+    readonly ownerId: string,
+  ) {
+    super(`Job ${jobId} is no longer owned by ${ownerId}`);
+    this.name = 'JobOwnershipLostError';
+  }
+}
+
 export interface JobRecord {
   id: string;
   name: string;
@@ -209,7 +222,11 @@ export interface JobStore {
   /**
    * Update `heartbeatAt` to "now." Called by JobRunner on its
    * heartbeatMs interval and via `ctx.heartbeat?.()` from phase bodies.
-   * No-op if the job is not in RUNNING state.
+   *
+   * When `ownerId` is supplied, implementations must reject with
+   * {@link JobOwnershipLostError} unless that owner still owns the RUNNING
+   * row. Unscoped calls are an operator override and remain a no-op when the
+   * job is not RUNNING.
    */
   heartbeat(jobId: string, ownerId?: string): Promise<void>;
   /** Atomically opt an owned run into stale detection and refresh heartbeat. */

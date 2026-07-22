@@ -16,6 +16,7 @@
 import Database, { type Database as DB } from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import type { PipelineEvent } from '../phase.js';
+import { JobOwnershipLostError } from './job-store.js';
 import type {
   EventRecord,
   GetJobOptions,
@@ -351,13 +352,16 @@ export class SqliteJobStore implements JobStore {
   async heartbeat(jobId: string, ownerId?: string): Promise<void> {
     // Owner-aware when called by JobRunner; unguarded calls remain available
     // for operators and backwards-compatible direct store integrations.
-    this.db
+    const result = this.db
       .prepare(
         `UPDATE job SET heartbeat_at = datetime('now')
          WHERE id = ? AND status = 'RUNNING'
            AND (? IS NULL OR owner_id = ?)`,
       )
       .run(jobId, ownerId ?? null, ownerId ?? null);
+    if (ownerId !== undefined && result.changes !== 1) {
+      throw new JobOwnershipLostError(jobId, ownerId);
+    }
   }
 
   async enableHeartbeat(jobId: string, ownerId: string): Promise<boolean> {
