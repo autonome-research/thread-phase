@@ -285,11 +285,12 @@ export class JobRunner extends EventEmitter {
         heartbeatTimer = null;
         const attempt = (async () => {
           try {
-            await withTimeout(
-              Promise.resolve().then(() => this.store.heartbeat(jobId, ownerId)),
+            const refreshed = await withTimeout(
+              Promise.resolve().then(() => this.store.enableHeartbeat(jobId, ownerId)),
               this.heartbeatTimeoutMs!,
               `Heartbeat for job ${jobId} timed out after ${this.heartbeatTimeoutMs}ms`,
             );
+            if (!refreshed) throw new JobOwnershipLostError(jobId, ownerId);
           } catch (error: unknown) {
             recordHeartbeatFailure(error);
           }
@@ -359,7 +360,12 @@ export class JobRunner extends EventEmitter {
         }
       };
 
-      if (this.heartbeatMs !== undefined) scheduleHeartbeat();
+      // An explicit per-run false is an opt-out even when the runner has a
+      // default interval. Manual ctx.heartbeat() remains available for callers
+      // that later choose to opt in explicitly.
+      if (this.heartbeatMs !== undefined && ownership.heartbeatEnabled !== false) {
+        scheduleHeartbeat();
+      }
 
       for await (const event of runPipeline<TCtx, TEvent>(phases, ctx, { signal })) {
         const pipelineEvent = event as PipelineEvent;

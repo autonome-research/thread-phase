@@ -99,7 +99,11 @@ export interface JobRecord {
   ownerId?: string;
   /** Application-defined source, e.g. `pi-tool`, `cron`, or `webhook`. */
   launchSource?: string;
-  /** Whether this run opted into heartbeat-based stale reconciliation. */
+  /**
+   * Whether this run opted into heartbeat-based stale reconciliation.
+   * In JobRunner ownership options, explicit false also suppresses that run's
+   * automatic interval; a later manual ctx.heartbeat() can opt in.
+   */
   heartbeatEnabled?: boolean;
   /** Most recent heartbeat ISO timestamp. Updated by JobRunner.heartbeat(). */
   heartbeatAt?: Date;
@@ -220,16 +224,21 @@ export interface JobStore {
     expectedOwnerId?: string,
   ): Promise<EventRecord | null>;
   /**
-   * Update `heartbeatAt` to "now." Called by JobRunner on its
-   * heartbeatMs interval and via `ctx.heartbeat?.()` from phase bodies.
+   * Update `heartbeatAt` to "now." Available for direct integrations and
+   * explicit unscoped operator refreshes. JobRunner uses `enableHeartbeat()`
+   * for owner-observable automatic and context refreshes.
    *
-   * When `ownerId` is supplied, implementations must reject with
-   * {@link JobOwnershipLostError} unless that owner still owns the RUNNING
-   * row. Unscoped calls are an operator override and remain a no-op when the
-   * job is not RUNNING.
+   * Implementations should scope updates to `ownerId` when supplied. As in
+   * published v5.0.0, a non-running or mismatched row may remain a no-op;
+   * JobRunner uses boolean-returning `enableHeartbeat()` when it requires
+   * observable owner-loss detection. Unscoped calls are an operator override.
    */
   heartbeat(jobId: string, ownerId?: string): Promise<void>;
-  /** Atomically opt an owned run into stale detection and refresh heartbeat. */
+  /**
+   * Atomically opt an owned run into stale detection and refresh heartbeat.
+   * Must be idempotent: every refresh of the same owned RUNNING row returns
+   * true; false means that owner no longer controls a RUNNING row.
+   */
   enableHeartbeat(jobId: string, ownerId: string): Promise<boolean>;
 
   getJob(jobId: string, options?: GetJobOptions): Promise<JobRecord | null>;

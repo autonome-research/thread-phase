@@ -233,7 +233,7 @@ describe('heartbeat', () => {
   it('JobRunner automatic heartbeats carry the acquired owner id', async () => {
     const runner = new JobRunner(store, { heartbeatMs: 50 });
     const id = await runner.create('p1', null);
-    const heartbeatSpy = vi.spyOn(store, 'heartbeat');
+    const heartbeatSpy = vi.spyOn(store, 'enableHeartbeat');
     const phase: Phase<BasePipelineContext> = {
       name: 'slow',
       async *run() {
@@ -249,6 +249,50 @@ describe('heartbeat', () => {
     );
     expect(heartbeatSpy.mock.calls.length).toBeGreaterThan(1);
     expect(heartbeatSpy.mock.calls.every((call) => call[1] === 'owner-auto')).toBe(true);
+  });
+
+  it('honors an explicit per-run automatic-heartbeat opt-out', async () => {
+    const runner = new JobRunner(store, { heartbeatMs: 10 });
+    const id = await runner.create('heartbeat-opt-out', null);
+    const refreshSpy = vi.spyOn(store, 'enableHeartbeat');
+    const phase: Phase<BasePipelineContext> = {
+      name: 'slow-without-heartbeat',
+      async *run() { await new Promise((resolve) => setTimeout(resolve, 50)); },
+    };
+
+    await runner.run(
+      id,
+      [phase],
+      { cache: new PipelineCache() },
+      undefined,
+      { ownership: { heartbeatEnabled: false } },
+    );
+    expect(refreshSpy).not.toHaveBeenCalled();
+    expect((await store.getJob(id))?.heartbeatEnabled).toBe(false);
+  });
+
+  it('allows manual opt-in after suppressing automatic refresh', async () => {
+    const runner = new JobRunner(store, { heartbeatMs: 10 });
+    const id = await runner.create('manual-after-opt-out', null);
+    const refreshSpy = vi.spyOn(store, 'enableHeartbeat');
+    const phase: Phase<BasePipelineContext> = {
+      name: 'manual-opt-in',
+      async *run(ctx) {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(refreshSpy).not.toHaveBeenCalled();
+        await ctx.heartbeat?.();
+      },
+    };
+
+    await runner.run(
+      id,
+      [phase],
+      { cache: new PipelineCache() },
+      undefined,
+      { ownership: { heartbeatEnabled: false } },
+    );
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect((await store.getJob(id))?.heartbeatEnabled).toBe(true);
   });
 
   it('manual ctx.heartbeat opts a run into stale detection without heartbeatMs', async () => {
@@ -276,13 +320,17 @@ describe('heartbeat', () => {
   });
 
   it('JobRunner clears the heartbeat timer on every exit path (success)', async () => {
-    const runner = new JobRunner(store, { heartbeatMs: 50 });
+    const runner = new JobRunner(store, { heartbeatMs: 10 });
     const id = await runner.create('p1', null);
-    const phase: Phase<BasePipelineContext> = { name: 'noop', async *run() {} };
+    const heartbeatSpy = vi.spyOn(store, 'enableHeartbeat');
+    const phase: Phase<BasePipelineContext> = {
+      name: 'slow',
+      async *run() { await new Promise((resolve) => setTimeout(resolve, 50)); },
+    };
     await runner.run(id, [phase], { cache: new PipelineCache() });
-    const heartbeatSpy = vi.spyOn(store, 'heartbeat');
     const callsAtFinish = heartbeatSpy.mock.calls.length;
-    await new Promise((r) => setTimeout(r, 200));
+    expect(callsAtFinish).toBeGreaterThan(0);
+    await new Promise((r) => setTimeout(r, 100));
     expect(heartbeatSpy.mock.calls.length).toBe(callsAtFinish);
   });
 
@@ -296,13 +344,14 @@ describe('heartbeat', () => {
     let calls = 0;
     let inFlight = 0;
     let maxInFlight = 0;
-    vi.spyOn(store, 'heartbeat').mockImplementation(async () => {
+    vi.spyOn(store, 'enableHeartbeat').mockImplementation(async () => {
       calls++;
       inFlight++;
       maxInFlight = Math.max(maxInFlight, inFlight);
       firstHeartbeat();
       await heartbeatGate;
       inFlight--;
+      return true;
     });
     let releasePhase!: () => void;
     const phaseGate = new Promise<void>((resolve) => { releasePhase = resolve; });
@@ -324,6 +373,9 @@ describe('heartbeat', () => {
   it('stops promptly without overwriting state after actual automatic owner loss', async () => {
     const runner = new JobRunner(store, { heartbeatMs: 10 });
     const id = await runner.create('automatic-owner-loss', null);
+    // A published-v5 custom store may retain heartbeat()'s legacy no-op
+    // behavior; automatic owner detection must use enableHeartbeat's boolean.
+    const legacyHeartbeat = vi.spyOn(store, 'heartbeat').mockResolvedValue(undefined);
     let phaseStarted!: () => void;
     const started = new Promise<void>((resolve) => { phaseStarted = resolve; });
     const phase: Phase<BasePipelineContext> = {
@@ -357,13 +409,14 @@ describe('heartbeat', () => {
       error: 'ownership transferred',
     });
     expect((await store.getEvents(id)).filter((event) => event.eventType === 'error')).toHaveLength(0);
+    expect(legacyHeartbeat).not.toHaveBeenCalled();
   });
 
   it('turns automatic heartbeat rejection into one stable run failure', async () => {
     const runner = new JobRunner(store, { heartbeatMs: 10 });
     const id = await runner.create('heartbeat-failure', null);
     const failure = new Error('heartbeat backend unavailable');
-    const heartbeatSpy = vi.spyOn(store, 'heartbeat').mockRejectedValue(failure);
+    const heartbeatSpy = vi.spyOn(store, 'enableHeartbeat').mockRejectedValue(failure);
     const phase: Phase<BasePipelineContext> = {
       name: 'wait-for-abort',
       async *run(ctx) {
@@ -410,9 +463,9 @@ describe('heartbeat', () => {
     const id = await runner.create('hung-heartbeat', null);
     let heartbeatStarted!: () => void;
     const started = new Promise<void>((resolve) => { heartbeatStarted = resolve; });
-    vi.spyOn(store, 'heartbeat').mockImplementation(async () => {
+    vi.spyOn(store, 'enableHeartbeat').mockImplementation(async () => {
       heartbeatStarted();
-      await new Promise<void>(() => undefined);
+      return new Promise<boolean>(() => undefined);
     });
     let releasePhase!: () => void;
     const phaseGate = new Promise<void>((resolve) => { releasePhase = resolve; });
@@ -440,9 +493,10 @@ describe('heartbeat', () => {
     const pendingHeartbeat = new Promise<void>((_resolve, reject) => { rejectHeartbeat = reject; });
     let heartbeatStarted!: () => void;
     const started = new Promise<void>((resolve) => { heartbeatStarted = resolve; });
-    vi.spyOn(store, 'heartbeat').mockImplementation(async () => {
+    vi.spyOn(store, 'enableHeartbeat').mockImplementation(async () => {
       heartbeatStarted();
       await pendingHeartbeat;
+      return true;
     });
     const phase: Phase<BasePipelineContext> = {
       name: 'wait-for-caller-abort',
@@ -471,9 +525,10 @@ describe('heartbeat', () => {
     const pendingHeartbeat = new Promise<void>((_resolve, reject) => { rejectHeartbeat = reject; });
     let heartbeatStarted!: () => void;
     const started = new Promise<void>((resolve) => { heartbeatStarted = resolve; });
-    vi.spyOn(store, 'heartbeat').mockImplementation(async () => {
+    vi.spyOn(store, 'enableHeartbeat').mockImplementation(async () => {
       heartbeatStarted();
       await pendingHeartbeat;
+      return true;
     });
     const phase: Phase<BasePipelineContext> = {
       name: 'wait-for-abort',
