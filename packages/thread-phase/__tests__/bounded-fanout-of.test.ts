@@ -541,6 +541,31 @@ describe('boundedFanoutOf — traceId propagation', () => {
     expect(traceIds).toEqual([]);
   });
 
+  it('derives and validates every numeric index of a sparse item array', async () => {
+    const items = new Array<string | undefined>(3);
+    items[1] = 'present';
+    const derived: Array<[string | undefined, number]> = [];
+    const traceIds: string[] = [];
+
+    await boundedFanoutOf({
+      items,
+      concurrency: 2,
+      adapter: createScriptedAdapter({ traceIds }),
+      buildConfig: () => ({ delayMs: 1 }),
+      traceIdFor: (item, index) => {
+        derived.push([item, index]);
+        return `sparse-${index}`;
+      },
+    });
+
+    expect(derived).toEqual([
+      [undefined, 0],
+      ['present', 1],
+      [undefined, 2],
+    ]);
+    expect(traceIds.sort()).toEqual(['sparse-0', 'sparse-1', 'sparse-2']);
+  });
+
   it('does not derive a trace ID for an empty item list', async () => {
     const traceIdFor = vi.fn(() => 'unused');
     const results = await boundedFanoutOf({

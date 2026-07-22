@@ -173,7 +173,10 @@ function resolveTraceIds<TItem>(
   traceIdFor: ((item: TItem, index: number) => string) | undefined,
 ): string[] | undefined {
   if (!traceIdFor) return undefined;
-  const traceIds = items.map((item, index) => traceIdFor(item, index));
+  const traceIds = Array.from(
+    { length: items.length },
+    (_, index) => traceIdFor(items[index]!, index),
+  );
   const seen = new Set<string>();
   for (let index = 0; index < traceIds.length; index++) {
     const traceId: unknown = traceIds[index];
