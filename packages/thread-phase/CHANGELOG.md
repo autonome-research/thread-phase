@@ -18,12 +18,13 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ### Fanout attribution
 
-- Added optional `boundedFanoutOf.traceIdFor(item, index)` for stable per-item adapter and event attribution. All derived IDs are validated for non-empty, control-free, exact uniqueness before config construction or adapter dispatch; existing shared `traceId` behavior remains the default.
+- Added optional `boundedFanoutOf.traceIdFor(item, index)` for stable per-item adapter and event attribution. All derived IDs are validated for non-empty, Unicode-control-free, exact uniqueness before config construction or adapter dispatch; existing shared `traceId` behavior remains the default.
 
 ### Reliable run lifecycle
 
 - SQLite now serializes cross-process `acquireExclusive()` calls with an immediate transaction and marks exclusive acquisitions separately. A partial unique index and guarded `setRunning()` prevent ordinary jobs from entering while an exclusive same-name run is active, while ordinary `createJob()`/`setRunning()` jobs retain their documented ability to overlap with other ordinary same-name jobs. The single v5.1.0 migration 5 adds and verifies this opt-in invariant without rewriting the published v5.0.0 migrations 1–4. Unpublished candidate schema versions are intentionally unsupported.
 - Added optional generic `JobRunOptions.drains`, awaited sequentially before terminal persistence and runner shutdown, including ownership-acquisition exits. All registered drains are attempted; drain-only failure marks the run failed, while acquisition failure, pipeline failure, and cancellation retain precedence and accompanying drain failures remain observable through the rejected `AggregateError`.
+- Cancellation still attempts atomic `CANCELLED` finalization when persistence of the preceding `cancellation_requested` audit event fails; the run rejection retains that persistence failure alongside cancellation and drain failures instead of silently discarding it.
 - Added distinct persisted `CANCELLED` and `ABANDONED` states. The bundled SQLite store exposes additive atomic owner-claim, owner-guarded transition, stale-finalization, and terminal status+event capabilities that `JobRunner` uses when available.
 - Added `JobRunner.start()` and `JobRunHandle` for immediate run identity, signal, cancellation, and result access.
 - `JobRunner` now composes its controller with caller `ctx.signal`, restores context hooks after execution, records cancellation request acknowledgement, and prevents late terminal writes from replacing the first terminal state.

@@ -138,6 +138,34 @@ describe('JobRunner.cancel', () => {
     expect(events.map((event) => event.eventType)).not.toContain('error');
   });
 
+  it('finalizes cancellation and surfaces cancellation-request persistence failure', async () => {
+    const requestFailure = new Error('request audit write failed');
+    const appendEvent = store.appendEvent.bind(store);
+    store.appendEvent = async (jobId, event) => {
+      if (event.type === 'cancellation_requested') throw requestFailure;
+      return appendEvent(jobId, event);
+    };
+    const jobId = await runner.create('cancel-request-failure', null);
+    const phase: Phase<Ctx> = {
+      name: 'cooperative',
+      async *run(ctx) {
+        await new Promise<void>((resolve) => {
+          ctx.signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+    };
+
+    const running = runner.run(jobId, [phase], { cache: new PipelineCache() });
+    setTimeout(() => runner.cancel(jobId, 'audit failure cancellation'), 10);
+    const rejection = await running.catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(AggregateError);
+    expect(rejection).toMatchObject({ name: 'AbortError' });
+    expect((rejection as AggregateError).errors).toContain(requestFailure);
+    expect((await store.getJob(jobId))?.status).toBe('CANCELLED');
+    expect((await store.getEvents(jobId)).map((event) => event.eventType)).toEqual(['cancelled']);
+  });
+
   it('orders pre-aborted caller cancellation as request then atomic terminal cancellation', async () => {
     const upstream = new AbortController();
     upstream.abort('already stopped');

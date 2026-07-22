@@ -313,4 +313,45 @@ describe('JobRunner lifecycle drains', () => {
       'cancelled',
     ]);
   });
+
+  it('orders cancellation, request persistence, and drain failures deterministically', async () => {
+    const requestFailure = new Error('request append failed');
+    const drainFailure = new Error('drain failed');
+    const appendEvent = store.appendEvent.bind(store);
+    store.appendEvent = async (jobId, event) => {
+      if (event.type === 'cancellation_requested') throw requestFailure;
+      return appendEvent(jobId, event);
+    };
+    const phaseStarted = deferred<void>();
+    const phase: Phase<Ctx> = {
+      name: 'wait-for-cancel',
+      async *run(ctx) {
+        phaseStarted.resolve();
+        await new Promise<void>((resolve) => {
+          ctx.signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+    };
+    const jobId = await runner.create('cancel-persistence-and-drain-failure', null);
+    const running = runner.run(
+      jobId,
+      [phase],
+      { cache: new PipelineCache() },
+      undefined,
+      { drains: [async () => { throw drainFailure; }] },
+    );
+
+    await phaseStarted.promise;
+    runner.cancel(jobId, 'operator stop');
+    const error = await running.catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error).toMatchObject({ name: 'AbortError', message: 'cancelled: operator stop' });
+    const failures = (error as AggregateError).errors;
+    expect(failures[0]).toMatchObject({ name: 'AbortError' });
+    expect(failures[1]).toBe(requestFailure);
+    expect(failures[2]).toBe(drainFailure);
+    expect(await store.getJob(jobId)).toMatchObject({ status: 'CANCELLED' });
+    expect((await store.getEvents(jobId)).map((event) => event.eventType)).toEqual(['cancelled']);
+  });
 });

@@ -183,7 +183,7 @@ function resolveTraceIds<TItem>(
     if (
       typeof traceId !== 'string' ||
       traceId.trim().length === 0 ||
-      /[\u0000-\u001f\u007f]/.test(traceId)
+      /\p{Cc}/u.test(traceId)
     ) {
       throw new TypeError(`boundedFanoutOf traceIdFor returned an invalid trace ID at item ${index}`);
     }

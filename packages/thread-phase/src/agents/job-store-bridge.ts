@@ -34,9 +34,9 @@ export type AgentEventPersistenceFailureKind = 'append' | 'overflow';
 
 /** A persistence failure reported by {@link createAgentEventPersistenceBridge}. */
 export interface AgentEventPersistenceFailure {
-  kind: AgentEventPersistenceFailureKind;
-  event: AgentEvent;
-  error: Error;
+  readonly kind: AgentEventPersistenceFailureKind;
+  readonly event: AgentEvent;
+  readonly error: Error;
   /**
    * Number of same-kind failures represented by this immutable notification.
    * Failures arriving during its delivery are accumulated into at most one

@@ -522,7 +522,8 @@ describe('boundedFanoutOf — traceId propagation', () => {
   it.each([
     { label: 'empty', ids: ['', 'valid'] },
     { label: 'whitespace', ids: ['   ', 'valid'] },
-    { label: 'control characters', ids: ['bad\ntrace', 'valid'] },
+    { label: 'C0 control characters', ids: ['bad\ntrace', 'valid'] },
+    { label: 'C1 control characters', ids: ['bad\u0080trace', 'valid'] },
     { label: 'non-string', ids: [42 as unknown as string, 'valid'] },
     { label: 'duplicate', ids: ['same', 'same'] },
   ])('rejects $label derived IDs before config or adapter dispatch', async ({ ids }) => {

@@ -154,10 +154,15 @@ export class JobRunner extends EventEmitter {
     if (!entry.cancellationRequested) {
       if (!entry.terminationCause) entry.terminationCause = 'cancellation';
       entry.cancelReason = reason;
-      entry.cancellationRequested = entry.claim.then(async (claimed) => {
+      const request = entry.claim.then(async (claimed) => {
         if (!claimed) return;
         await this.appendLive(jobId, { type: 'cancellation_requested', reason });
-      }).catch(() => undefined);
+      });
+      entry.cancellationRequested = request;
+      // Cancellation can be requested well before run() reaches its catch path.
+      // Observe the rejection now to prevent an unhandled-rejection report, but
+      // retain the original promise so lifecycle completion still surfaces it.
+      void request.catch(() => undefined);
     }
     if (!entry.controller.signal.aborted) entry.controller.abort(reason);
     return true;
@@ -317,23 +322,38 @@ export class JobRunner extends EventEmitter {
     const ensureCancellationRequested = async (reason: string): Promise<void> => {
       if (!entry.cancellationRequested) {
         entry.cancelReason = reason;
-        entry.cancellationRequested = entry.claim.then(async (claimed) => {
+        const request = entry.claim.then(async (claimed) => {
           if (!claimed) return;
           await this.appendLive(jobId, { type: 'cancellation_requested', reason });
-        }).catch(() => undefined);
+        });
+        entry.cancellationRequested = request;
+        void request.catch(() => undefined);
       }
       await entry.cancellationRequested;
     };
 
-    const persistCancellation = async (reason: string): Promise<void> => {
-      await ensureCancellationRequested(reason);
-      const terminal = await this.store.finalizeJob(jobId, {
-        status: 'CANCELLED',
-        error: reason,
-        event: { type: 'cancelled', reason },
-        ownerId,
-      });
-      if (terminal) this.emitRecord(terminal);
+    const persistCancellation = async (reason: string): Promise<unknown[]> => {
+      const failures: unknown[] = [];
+      try {
+        await ensureCancellationRequested(reason);
+      } catch (error: unknown) {
+        failures.push(error);
+      }
+      // The terminal transition must still be attempted when request-event
+      // persistence fails; otherwise an auditable failure could strand a live
+      // RUNNING row after its owner has already aborted.
+      try {
+        const terminal = await this.store.finalizeJob(jobId, {
+          status: 'CANCELLED',
+          error: reason,
+          event: { type: 'cancelled', reason },
+          ownerId,
+        });
+        if (terminal) this.emitRecord(terminal);
+      } catch (error: unknown) {
+        failures.push(error);
+      }
+      return failures;
     };
 
     const persistFailure = async (message: string): Promise<void> => {
@@ -441,11 +461,11 @@ export class JobRunner extends EventEmitter {
       }
       if (entry.terminationCause === 'cancellation') {
         const reason = signalReasonToString(signal, entry.cancelReason ?? 'cancelled');
-        await persistCancellation(reason);
+        const persistenceFailures = await persistCancellation(reason);
         const abort = error instanceof Error && error.name === 'AbortError'
           ? error
           : Object.assign(new Error(`cancelled: ${reason}`), { name: 'AbortError' });
-        throw combineLifecycleErrors(abort, drainFailures);
+        throw combineLifecycleErrors(abort, [...persistenceFailures, ...drainFailures]);
       }
       const effectiveError = entry.terminationCause === 'heartbeat'
         ? heartbeatFailure
