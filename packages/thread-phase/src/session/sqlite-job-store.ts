@@ -109,6 +109,17 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE job ADD COLUMN heartbeat_enabled INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    // Database-enforced single-runner invariant. Creating this partial unique
+    // index deliberately fails when historical RUNNING rows conflict; the
+    // migration transaction then leaves both the rows and user_version intact.
+    version: 5,
+    up: `
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_job_one_running_per_name
+        ON job (name)
+        WHERE status = 'RUNNING';
+    `,
+  },
 ];
 
 interface JobRow {
@@ -149,14 +160,79 @@ function parseDate(s: string | null): Date | null {
   return s ? new Date(s + 'Z') : null;
 }
 
+const EXCLUSIVITY_INDEX = 'idx_job_one_running_per_name';
+
+/**
+ * CREATE INDEX IF NOT EXISTS is intentionally paired with verification: SQLite
+ * otherwise treats any same-named index as success, even when it is non-unique,
+ * targets another column, or has a different partial predicate.
+ */
+function verifyExclusivityIndex(db: DB): void {
+  // Trigger names occupy a separate SQLite namespace and can collide with an
+  // index name. Inspect every matching schema object so row order can never
+  // make a collision look authoritative.
+  const schemaObjects = db
+    .prepare(`SELECT type, tbl_name, sql FROM sqlite_schema WHERE name = ?`)
+    .all(EXCLUSIVITY_INDEX) as Array<{
+      type: string;
+      tbl_name: string;
+      sql: string | null;
+    }>;
+  const schema = schemaObjects.length === 1 ? schemaObjects[0] : undefined;
+  const listed = (db.pragma('index_list(job)') as Array<{
+    name: string;
+    unique: number;
+    partial: number;
+  }>).find((index) => index.name === EXCLUSIVITY_INDEX);
+  const keyColumns = schema?.type === 'index'
+    ? (db.pragma(`index_xinfo('${EXCLUSIVITY_INDEX}')`) as Array<{
+        name: string | null;
+        coll: string;
+        desc: number;
+        key: number;
+      }>).filter((column) => column.key === 1)
+    : [];
+  const predicate = schema?.sql?.match(/\bWHERE\b([\s\S]*)$/i)?.[1]
+    ?.replace(/;\s*$/, '')
+    .trim();
+  // SQLite identifiers and keywords are case-insensitive. Accept harmless
+  // identifier quoting and parenthesization, but retain exact BINARY matching
+  // for the RUNNING value and reject any wider or narrower predicate.
+  const predicateMatch = predicate?.match(
+    /^\(*\s*(?:status|"status"|`status`|\[status\])\s*=\s*'([^']*)'\s*\)*$/i,
+  );
+  const expectedPredicate = predicateMatch?.[1] === 'RUNNING';
+
+  const valid =
+    schema?.type === 'index' &&
+    schema.tbl_name === 'job' &&
+    listed?.unique === 1 &&
+    listed.partial === 1 &&
+    keyColumns.length === 1 &&
+    keyColumns[0]?.name === 'name' &&
+    keyColumns[0].coll === 'BINARY' &&
+    keyColumns[0].desc === 0 &&
+    expectedPredicate;
+  if (!valid) {
+    throw new Error(
+      `SQLite migration 5 schema collision: ${EXCLUSIVITY_INDEX} is not the expected unique partial index`,
+    );
+  }
+}
+
 export class SqliteJobStore implements JobStore {
   private db: DB;
 
   constructor(dbPath: string = defaultDbPath()) {
     this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
-    this.runMigrations();
+    try {
+      this.db.pragma('journal_mode = WAL');
+      this.db.pragma('foreign_keys = ON');
+      this.runMigrations();
+    } catch (error: unknown) {
+      this.db.close();
+      throw error;
+    }
   }
 
   /**
@@ -167,16 +243,36 @@ export class SqliteJobStore implements JobStore {
    * Idempotent: running twice is a no-op once the schema is current.
    */
   private runMigrations(): void {
-    const current = (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+    let observedVersion =
+      (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
     for (const m of MIGRATIONS) {
-      if (m.version <= current) continue;
+      if (m.version <= observedVersion) continue;
+      // Take the write lock before deciding to apply a pending migration. A
+      // concurrent opener may have completed it while this connection waited,
+      // so user_version must be checked again inside the transaction.
       this.db.transaction(() => {
+        const lockedVersion =
+          (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+        if (m.version <= lockedVersion) return;
         this.db.exec(m.up);
+        if (m.version === 5) verifyExclusivityIndex(this.db);
         // user_version is an integer pragma; better-sqlite3 doesn't support
         // parameter binding for pragmas, so interpolate the integer directly.
         this.db.pragma(`user_version = ${m.version}`);
-      })();
+      }).immediate();
+      observedVersion = m.version;
     }
+
+    // user_version is not proof that the invariant still exists: an operator,
+    // older binary, or interrupted manual repair may have removed or replaced
+    // the index after migration. Verify the current schema on every open while
+    // holding the write lock so concurrent schema changes cannot race this
+    // initialization check.
+    this.db.transaction(() => {
+      const finalVersion =
+        (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+      if (finalVersion >= 5) verifyExclusivityIndex(this.db);
+    }).immediate();
   }
 
   // -------------------------------------------------------------------------
@@ -192,12 +288,11 @@ export class SqliteJobStore implements JobStore {
   }
 
   async acquireExclusive(name: string, input: unknown): Promise<string | null> {
-    // better-sqlite3's `db.transaction(fn)` wraps the callback in BEGIN…COMMIT
-    // (defaults to deferred, but the runtime upgrades to a write lock the
-    // moment we INSERT, which serializes concurrent acquireExclusive calls
-    // on the same DB file). The check + insert therefore happens atomically:
-    // a second caller racing on the same name will see the row we just
-    // inserted (status='RUNNING') and return null.
+    // Take the write lock before reading. A deferred transaction can let two
+    // processes both observe no RUNNING row and then make one fail while
+    // upgrading its stale read transaction. BEGIN IMMEDIATE serializes the
+    // check + insert, so the loser observes the committed winner and returns
+    // the contractually promised null rather than leaking SQLITE_BUSY.
     const tx = this.db.transaction((n: string, i: unknown): string | null => {
       const existing = this.db
         .prepare(`SELECT id FROM job WHERE name = ? AND status = 'RUNNING' LIMIT 1`)
@@ -212,7 +307,7 @@ export class SqliteJobStore implements JobStore {
         .run(id, n, JSON.stringify(i));
       return id;
     });
-    return tx(name, input);
+    return tx.immediate(name, input);
   }
 
   async setRunning(jobId: string, ownership?: JobOwnership): Promise<boolean> {
