@@ -12,6 +12,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqliteJobStore } from '../src/session/sqlite-job-store.js';
 import { JobOwnershipLostError } from '../src/session/job-store.js';
+import { JobOwnershipLostError as SessionOwnershipLostError } from '../src/session/index.js';
+import { JobOwnershipLostError as RootOwnershipLostError } from '../src/index.js';
 import { JobRunner } from '../src/session/job-runner.js';
 import { PipelineCache } from '../src/cache.js';
 import type { Phase, BasePipelineContext } from '../src/phase.js';
@@ -141,6 +143,20 @@ describe('ownership metadata', () => {
 });
 
 describe('heartbeat', () => {
+  it('validates heartbeat timeout configuration', () => {
+    expect(() => new JobRunner(store, { heartbeatMs: 10, heartbeatTimeoutMs: 0 })).toThrow(
+      /heartbeatTimeoutMs must be a positive safe integer/,
+    );
+    expect(() => new JobRunner(store, { heartbeatTimeoutMs: 10 })).toThrow(
+      /heartbeatTimeoutMs requires heartbeatMs/,
+    );
+  });
+
+  it('exports the stable ownership-loss error from root and session entry points', () => {
+    expect(SessionOwnershipLostError).toBe(JobOwnershipLostError);
+    expect(RootOwnershipLostError).toBe(JobOwnershipLostError);
+  });
+
   it('store.heartbeat updates heartbeatAt for a RUNNING job', async () => {
     const id = await store.createJob('p1', null);
     await store.setRunning(id);
@@ -187,7 +203,7 @@ describe('heartbeat', () => {
     );
   });
 
-  it('JobRunner with heartbeatMs fires the background timer during run()', async () => {
+  it('JobRunner automatic heartbeats carry the acquired owner id', async () => {
     const runner = new JobRunner(store, { heartbeatMs: 50 });
     const id = await runner.create('p1', null);
     const heartbeatSpy = vi.spyOn(store, 'heartbeat');
@@ -197,9 +213,15 @@ describe('heartbeat', () => {
         await new Promise((r) => setTimeout(r, 200));
       },
     };
-    await runner.run(id, [phase], { cache: new PipelineCache() });
-    // At least one auto-heartbeat fired during the 200ms phase.
+    await runner.run(
+      id,
+      [phase],
+      { cache: new PipelineCache() },
+      undefined,
+      { ownership: { ownerId: 'owner-auto' } },
+    );
     expect(heartbeatSpy.mock.calls.length).toBeGreaterThan(1);
+    expect(heartbeatSpy.mock.calls.every((call) => call[1] === 'owner-auto')).toBe(true);
   });
 
   it('manual ctx.heartbeat opts a run into stale detection without heartbeatMs', async () => {
@@ -235,6 +257,263 @@ describe('heartbeat', () => {
     const callsAtFinish = heartbeatSpy.mock.calls.length;
     await new Promise((r) => setTimeout(r, 200));
     expect(heartbeatSpy.mock.calls.length).toBe(callsAtFinish);
+  });
+
+  it('serializes slow automatic heartbeat attempts', async () => {
+    const runner = new JobRunner(store, { heartbeatMs: 10, heartbeatTimeoutMs: 500 });
+    const id = await runner.create('serialized-heartbeat', null);
+    let releaseHeartbeat!: () => void;
+    const heartbeatGate = new Promise<void>((resolve) => { releaseHeartbeat = resolve; });
+    let firstHeartbeat!: () => void;
+    const heartbeatStarted = new Promise<void>((resolve) => { firstHeartbeat = resolve; });
+    let calls = 0;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    vi.spyOn(store, 'heartbeat').mockImplementation(async () => {
+      calls++;
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      firstHeartbeat();
+      await heartbeatGate;
+      inFlight--;
+    });
+    let releasePhase!: () => void;
+    const phaseGate = new Promise<void>((resolve) => { releasePhase = resolve; });
+    const phase: Phase<BasePipelineContext> = {
+      name: 'wait',
+      async *run() { await phaseGate; },
+    };
+
+    const running = runner.run(id, [phase], { cache: new PipelineCache() });
+    await heartbeatStarted;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls).toBe(1);
+    expect(maxInFlight).toBe(1);
+    releaseHeartbeat();
+    releasePhase();
+    await running;
+  });
+
+  it('stops promptly without overwriting state after actual automatic owner loss', async () => {
+    const runner = new JobRunner(store, { heartbeatMs: 10 });
+    const id = await runner.create('automatic-owner-loss', null);
+    let phaseStarted!: () => void;
+    const started = new Promise<void>((resolve) => { phaseStarted = resolve; });
+    const phase: Phase<BasePipelineContext> = {
+      name: 'wait-for-owner-loss',
+      async *run(ctx) {
+        phaseStarted();
+        await new Promise<void>((_resolve, reject) => {
+          ctx.signal?.addEventListener('abort', () => reject(ctx.signal?.reason), { once: true });
+        });
+      },
+    };
+
+    const running = runner.run(
+      id,
+      [phase],
+      { cache: new PipelineCache() },
+      undefined,
+      { ownership: { ownerId: 'displaced-owner' } },
+    );
+    await started;
+    await store.setAbandoned(id, 'ownership transferred');
+
+    await expect(running).rejects.toMatchObject({
+      name: 'JobOwnershipLostError',
+      code: 'ERR_JOB_OWNERSHIP_LOST',
+      jobId: id,
+      ownerId: 'displaced-owner',
+    });
+    expect(await store.getJob(id)).toMatchObject({
+      status: 'ABANDONED',
+      error: 'ownership transferred',
+    });
+    expect((await store.getEvents(id)).filter((event) => event.eventType === 'error')).toHaveLength(0);
+  });
+
+  it('turns automatic heartbeat rejection into one stable run failure', async () => {
+    const runner = new JobRunner(store, { heartbeatMs: 10 });
+    const id = await runner.create('heartbeat-failure', null);
+    const failure = new Error('heartbeat backend unavailable');
+    const heartbeatSpy = vi.spyOn(store, 'heartbeat').mockRejectedValue(failure);
+    const phase: Phase<BasePipelineContext> = {
+      name: 'wait-for-abort',
+      async *run(ctx) {
+        await new Promise<void>((_resolve, reject) => {
+          ctx.signal?.addEventListener('abort', () => reject(ctx.signal?.reason), { once: true });
+        });
+      },
+    };
+
+    await expect(runner.run(id, [phase], { cache: new PipelineCache() })).rejects.toBe(failure);
+    expect(heartbeatSpy).toHaveBeenCalledTimes(1);
+    expect(await store.getJob(id)).toMatchObject({
+      status: 'FAILED',
+      error: 'heartbeat backend unavailable',
+    });
+    expect((await store.getEvents(id)).filter((event) => event.eventType === 'error')).toHaveLength(1);
+  });
+
+  it('reports manual heartbeat owner loss with the stable error', async () => {
+    const runner = new JobRunner(store);
+    const id = await runner.create('manual-owner-loss', null);
+    vi.spyOn(store, 'enableHeartbeat').mockResolvedValue(false);
+    const phase: Phase<BasePipelineContext> = {
+      name: 'manual-heartbeat',
+      async *run(ctx) { await ctx.heartbeat?.(); },
+    };
+
+    await expect(runner.run(
+      id,
+      [phase],
+      { cache: new PipelineCache() },
+      undefined,
+      { ownership: { ownerId: 'manual-owner' } },
+    )).rejects.toMatchObject({
+      name: 'JobOwnershipLostError',
+      code: 'ERR_JOB_OWNERSHIP_LOST',
+      jobId: id,
+      ownerId: 'manual-owner',
+    });
+  });
+
+  it('bounds a heartbeat that never settles and still cleans up the run', async () => {
+    const runner = new JobRunner(store, { heartbeatMs: 10, heartbeatTimeoutMs: 100 });
+    const id = await runner.create('hung-heartbeat', null);
+    let heartbeatStarted!: () => void;
+    const started = new Promise<void>((resolve) => { heartbeatStarted = resolve; });
+    vi.spyOn(store, 'heartbeat').mockImplementation(async () => {
+      heartbeatStarted();
+      await new Promise<void>(() => undefined);
+    });
+    let releasePhase!: () => void;
+    const phaseGate = new Promise<void>((resolve) => { releasePhase = resolve; });
+    const phase: Phase<BasePipelineContext> = {
+      name: 'complete-after-heartbeat-starts',
+      async *run() { await phaseGate; },
+    };
+
+    const running = runner.run(id, [phase], { cache: new PipelineCache() });
+    await started;
+    releasePhase();
+    await expect(Promise.race([
+      running,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('run did not settle')), 1000)),
+    ])).rejects.toThrow(/Heartbeat .* timed out after 100ms/);
+    expect(await store.getJob(id)).toMatchObject({ status: 'FAILED' });
+    expect(runner.signalFor(id)).toBeUndefined();
+  });
+
+  it('keeps caller-signal cancellation authoritative when it precedes heartbeat rejection', async () => {
+    const caller = new AbortController();
+    const runner = new JobRunner(store, { heartbeatMs: 10, heartbeatTimeoutMs: 1000 });
+    const id = await runner.create('caller-cancel-heartbeat-race', null);
+    let rejectHeartbeat!: (error: Error) => void;
+    const pendingHeartbeat = new Promise<void>((_resolve, reject) => { rejectHeartbeat = reject; });
+    let heartbeatStarted!: () => void;
+    const started = new Promise<void>((resolve) => { heartbeatStarted = resolve; });
+    vi.spyOn(store, 'heartbeat').mockImplementation(async () => {
+      heartbeatStarted();
+      await pendingHeartbeat;
+    });
+    const phase: Phase<BasePipelineContext> = {
+      name: 'wait-for-caller-abort',
+      async *run(ctx) {
+        await new Promise<void>((_resolve, reject) => {
+          ctx.signal?.addEventListener('abort', () => reject(new Error('caller stopped')), { once: true });
+        });
+      },
+    };
+
+    const running = runner.run(id, [phase], { cache: new PipelineCache(), signal: caller.signal });
+    await started;
+    caller.abort('caller cancelled');
+    rejectHeartbeat(new Error('late heartbeat failure'));
+    await expect(running).rejects.toMatchObject({ name: 'AbortError' });
+    expect(await store.getJob(id)).toMatchObject({
+      status: 'CANCELLED',
+      error: 'caller cancelled',
+    });
+  });
+
+  it('keeps runner cancellation authoritative when it precedes heartbeat rejection', async () => {
+    const runner = new JobRunner(store, { heartbeatMs: 10 });
+    const id = await runner.create('cancel-heartbeat-race', null);
+    let rejectHeartbeat!: (error: Error) => void;
+    const pendingHeartbeat = new Promise<void>((_resolve, reject) => { rejectHeartbeat = reject; });
+    let heartbeatStarted!: () => void;
+    const started = new Promise<void>((resolve) => { heartbeatStarted = resolve; });
+    vi.spyOn(store, 'heartbeat').mockImplementation(async () => {
+      heartbeatStarted();
+      await pendingHeartbeat;
+    });
+    const phase: Phase<BasePipelineContext> = {
+      name: 'wait-for-abort',
+      async *run(ctx) {
+        await new Promise<void>((_resolve, reject) => {
+          ctx.signal?.addEventListener('abort', () => reject(new Error('phase stopped')), { once: true });
+        });
+      },
+    };
+
+    const running = runner.run(id, [phase], { cache: new PipelineCache() });
+    await started;
+    expect(runner.cancel(id, 'operator cancelled')).toBe(true);
+    rejectHeartbeat(new Error('late heartbeat failure'));
+    await expect(running).rejects.toMatchObject({ name: 'AbortError' });
+    expect(await store.getJob(id)).toMatchObject({
+      status: 'CANCELLED',
+      error: 'operator cancelled',
+    });
+  });
+
+  it('rejects cancellation once successful terminal persistence has begun', async () => {
+    const runner = new JobRunner(store);
+    const id = await runner.create('completion-boundary', null);
+    const originalFinalize = store.finalizeJob.bind(store);
+    let completionStarted!: () => void;
+    const started = new Promise<void>((resolve) => { completionStarted = resolve; });
+    let releaseCompletion!: () => void;
+    const completionGate = new Promise<void>((resolve) => { releaseCompletion = resolve; });
+    vi.spyOn(store, 'finalizeJob').mockImplementation(async (jobId, finalization) => {
+      if (finalization.status === 'COMPLETED') {
+        completionStarted();
+        await completionGate;
+      }
+      return originalFinalize(jobId, finalization);
+    });
+    const phase: Phase<BasePipelineContext> = { name: 'noop', async *run() {} };
+
+    const running = runner.run(id, [phase], { cache: new PipelineCache() });
+    await started;
+    expect(runner.cancel(id, 'too late')).toBe(false);
+    releaseCompletion();
+    await expect(running).resolves.toMatchObject({ status: 'completed' });
+    expect((await store.getEvents(id)).some(
+      (event) => event.eventType === 'cancellation_requested',
+    )).toBe(false);
+  });
+
+  it('removes its caller-signal listener after completion', async () => {
+    const caller = new AbortController();
+    const removeSpy = vi.spyOn(caller.signal, 'removeEventListener');
+    const runner = new JobRunner(store);
+    const id = await runner.create('caller-listener-cleanup', null);
+    const phase: Phase<BasePipelineContext> = { name: 'noop', async *run() {} };
+
+    await runner.run(id, [phase], { cache: new PipelineCache(), signal: caller.signal });
+    expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+  });
+
+  it('provides an explicit operator-only heartbeat alias', async () => {
+    const runner = new JobRunner(store);
+    const id = await store.createJob('operator-heartbeat', null);
+    await store.setRunning(id, { ownerId: 'other-owner' });
+    const heartbeatSpy = vi.spyOn(store, 'heartbeat');
+
+    await runner.heartbeatAsOperator(id);
+    expect(heartbeatSpy).toHaveBeenCalledWith(id);
   });
 
   it('ctx.heartbeat is populated during runner.run for manual phase-level refresh', async () => {
