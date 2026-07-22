@@ -494,4 +494,123 @@ describe('boundedFanoutOf — traceId propagation', () => {
     expect(traceIds).toHaveLength(4);
     expect(traceIds.every((t) => t === 'trace-xyz')).toBe(true);
   });
+
+  it('derives stable per-item trace IDs before dispatch', async () => {
+    const traceIds: string[] = [];
+    const adapter = createScriptedAdapter({ traceIds });
+    const derived: Array<[string, number]> = [];
+    await boundedFanoutOf({
+      items: ['alpha', 'beta', 'gamma'],
+      concurrency: 2,
+      adapter,
+      buildConfig: (item) => ({ delayMs: 1, text: item }),
+      traceId: 'shared-fallback',
+      traceIdFor: (item, index) => {
+        derived.push([item, index]);
+        return `item-${index}-${item}`;
+      },
+    });
+
+    expect(derived).toEqual([
+      ['alpha', 0],
+      ['beta', 1],
+      ['gamma', 2],
+    ]);
+    expect(traceIds).toEqual(['item-0-alpha', 'item-1-beta', 'item-2-gamma']);
+  });
+
+  it.each([
+    { label: 'empty', ids: ['', 'valid'] },
+    { label: 'whitespace', ids: ['   ', 'valid'] },
+    { label: 'control characters', ids: ['bad\ntrace', 'valid'] },
+    { label: 'non-string', ids: [42 as unknown as string, 'valid'] },
+    { label: 'duplicate', ids: ['same', 'same'] },
+  ])('rejects $label derived IDs before config or adapter dispatch', async ({ ids }) => {
+    const traceIds: string[] = [];
+    const adapter = createScriptedAdapter({ traceIds });
+    const buildConfig = vi.fn(() => ({ delayMs: 1 }));
+
+    await expect(boundedFanoutOf({
+      items: [0, 1],
+      concurrency: 2,
+      adapter,
+      buildConfig,
+      traceIdFor: (_item, index) => ids[index]!,
+    })).rejects.toThrow(/traceIdFor/);
+    expect(buildConfig).not.toHaveBeenCalled();
+    expect(traceIds).toEqual([]);
+  });
+
+  it('does not derive a trace ID for an empty item list', async () => {
+    const traceIdFor = vi.fn(() => 'unused');
+    const results = await boundedFanoutOf({
+      items: [],
+      concurrency: 2,
+      adapter: createScriptedAdapter(),
+      buildConfig: () => ({ delayMs: 1 }),
+      traceIdFor,
+    });
+    expect(results).toEqual([]);
+    expect(traceIdFor).not.toHaveBeenCalled();
+  });
+
+  it('propagates each derived trace ID through shared bus events', async () => {
+    const bus = createEventBus();
+    const seen: string[] = [];
+    bus.on((event) => {
+      if (event.type === 'agent_start' && event.traceId) seen.push(event.traceId);
+    });
+
+    await boundedFanoutOf({
+      items: ['a', 'b', 'c'],
+      concurrency: 3,
+      adapter: createScriptedAdapter(),
+      buildConfig: () => ({ delayMs: 1 }),
+      eventBus: bus,
+      traceIdFor: (item, index) => `bus-${index}-${item}`,
+    });
+    expect(seen.sort()).toEqual(['bus-0-a', 'bus-1-b', 'bus-2-c']);
+  });
+
+  it('rejects a throwing derivation callback before adapter dispatch', async () => {
+    const traceIds: string[] = [];
+    const adapter = createScriptedAdapter({ traceIds });
+    const buildConfig = vi.fn(() => ({ delayMs: 1 }));
+
+    await expect(boundedFanoutOf({
+      items: [0, 1, 2],
+      concurrency: 2,
+      adapter,
+      buildConfig,
+      traceIdFor: (_item, index) => {
+        if (index === 1) throw new Error('cannot derive trace');
+        return `item-${index}`;
+      },
+    })).rejects.toThrow('cannot derive trace');
+    expect(buildConfig).not.toHaveBeenCalled();
+    expect(traceIds).toEqual([]);
+  });
+
+  it('preserves collect-mode cancellation with per-item attribution', async () => {
+    const controller = new AbortController();
+    controller.abort('pre-aborted');
+    const traceIds: string[] = [];
+    const adapter = createScriptedAdapter({ traceIds });
+
+    const results = await boundedFanoutOf({
+      items: [0, 1, 2],
+      concurrency: 2,
+      adapter,
+      buildConfig: () => ({ delayMs: 1 }),
+      traceIdFor: (_item, index) => `cancelled-${index}`,
+      signal: controller.signal,
+      mode: 'collect',
+    });
+    expect(results.map((result) => result.finishReason)).toEqual([
+      'aborted',
+      'aborted',
+      'aborted',
+    ]);
+    expect(traceIds).toEqual([]);
+  });
 });

@@ -14,6 +14,10 @@ All notable changes to thread-phase will be documented here. The format is based
 - Added an opt-in, finitely bounded persistence bridge that serializes accepted adapter events, reports append and overflow failures, and provides deterministic `flush()` and idempotent draining `close()` barriers. Asynchronous failure observation is also bounded: synchronous same-kind bursts aggregate before delivery; a barrier can seal one serial successor while later failures coalesce into one remaining pending notification. Append and overflow batches remain separate, observer callbacks stay serial per kind, and flush/close wait for every invocation-time covered batch to settle.
 - Preserved `pipeAgentEventsToJobStore(bus, store, jobId, options?)` unchanged as the best-effort alternative: it still returns an unsubscribe callback, performs fire-and-forget appends, and isolates both synchronous store throws and asynchronous append rejections.
 
+### Fanout attribution
+
+- Added optional `boundedFanoutOf.traceIdFor(item, index)` for stable per-item adapter and event attribution. All derived IDs are validated for non-empty, control-free, exact uniqueness before config construction or adapter dispatch; existing shared `traceId` behavior remains the default.
+
 ### Reliable run lifecycle
 
 - Added optional generic `JobRunOptions.drains`, awaited sequentially before terminal persistence and runner shutdown, including ownership-acquisition exits. All registered drains are attempted; drain-only failure marks the run failed, while acquisition failure, pipeline failure, and cancellation retain precedence and accompanying drain failures remain observable through the rejected `AggregateError`.
