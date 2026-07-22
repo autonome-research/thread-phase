@@ -485,6 +485,28 @@ describe('heartbeat', () => {
     expect(runner.signalFor(id)).toBeUndefined();
   });
 
+  it('bounds a manual heartbeat that never settles', async () => {
+    const runner = new JobRunner(store, { heartbeatMs: 10, heartbeatTimeoutMs: 100 });
+    const id = await runner.create('hung-manual-heartbeat', null);
+    vi.spyOn(store, 'enableHeartbeat').mockImplementation(
+      async () => new Promise<boolean>(() => undefined),
+    );
+    const phase: Phase<BasePipelineContext> = {
+      name: 'manual-heartbeat',
+      async *run(ctx) { await ctx.heartbeat?.(); },
+    };
+
+    await expect(runner.run(
+      id,
+      [phase],
+      { cache: new PipelineCache() },
+      undefined,
+      { ownership: { heartbeatEnabled: false } },
+    )).rejects.toThrow(/Heartbeat .* timed out after 100ms/);
+    expect(await store.getJob(id)).toMatchObject({ status: 'FAILED' });
+    expect(runner.signalFor(id)).toBeUndefined();
+  });
+
   it('keeps caller-signal cancellation authoritative when it precedes heartbeat rejection', async () => {
     const caller = new AbortController();
     const runner = new JobRunner(store, { heartbeatMs: 10, heartbeatTimeoutMs: 1000 });

@@ -28,7 +28,8 @@ export interface JobRunnerOptions {
   heartbeatMs?: number;
   /**
    * Maximum duration of one heartbeat attempt. Defaults to heartbeatMs.
-   * This bounds runner waiting; it cannot cancel a custom store's underlying I/O.
+   * Applies to automatic attempts and manual ctx.heartbeat() refreshes. This
+   * bounds runner waiting; it cannot cancel a custom store's underlying I/O.
    */
   heartbeatTimeoutMs?: number;
 }
@@ -352,7 +353,16 @@ export class JobRunner extends EventEmitter {
       ctx.heartbeat = async () => {
         // A pipeline using only manual heartbeats opts into stale detection on
         // first use, without requiring heartbeatMs at runner construction.
-        const enabled = await this.store.enableHeartbeat(jobId, ownerId);
+        const refresh = Promise.resolve().then(
+          () => this.store.enableHeartbeat(jobId, ownerId),
+        );
+        const enabled = this.heartbeatTimeoutMs === undefined
+          ? await refresh
+          : await withTimeout(
+              refresh,
+              this.heartbeatTimeoutMs,
+              `Heartbeat for job ${jobId} timed out after ${this.heartbeatTimeoutMs}ms`,
+            );
         if (!enabled) {
           const error = new JobOwnershipLostError(jobId, ownerId);
           recordHeartbeatFailure(error);
