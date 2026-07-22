@@ -21,6 +21,9 @@ describe('v5.0.0 custom JobStore compatibility', () => {
 
     await expect(store.setRunning(jobId, { ownerId: 'owner' })).resolves.toBe(true);
     await expect(store.enableHeartbeat(jobId, 'owner')).resolves.toBe(true);
+    // This valid published-v5 implementation reports whether enablement changed,
+    // not whether an already-enabled owner still controls the row.
+    await expect(store.enableHeartbeat(jobId, 'owner')).resolves.toBe(false);
     await expect(store.heartbeat(jobId, 'owner')).resolves.toBeUndefined();
     await expect(store.setCompleted(jobId, null, 'owner')).resolves.toBe(true);
     await expect(store.setFailed(jobId, 'late', 'owner')).resolves.toBe(false);
@@ -40,6 +43,35 @@ describe('v5.0.0 custom JobStore compatibility', () => {
     expect(await store.getJob(jobId)).toMatchObject({ status: 'COMPLETED' });
     expect((await store.getEvents(jobId)).map((event) => event.eventType))
       .toEqual(['data', 'done']);
+  });
+
+  it('runs repeated automatic intervals without requiring idempotent enable results', async () => {
+    class TransitionOnlyEnableStore extends V5CustomJobStore {
+      enableCalls = 0;
+      heartbeatCalls = 0;
+
+      override async enableHeartbeat(jobId: string, ownerId: string): Promise<boolean> {
+        this.enableCalls += 1;
+        return super.enableHeartbeat(jobId, ownerId);
+      }
+
+      override async heartbeat(jobId: string, ownerId?: string): Promise<void> {
+        this.heartbeatCalls += 1;
+        return super.heartbeat(jobId, ownerId);
+      }
+    }
+    const store = new TransitionOnlyEnableStore();
+    const runner = new JobRunner(store, { heartbeatMs: 10 });
+    const jobId = await runner.create('legacy-automatic-heartbeat', null);
+    const phase: Phase<Ctx> = {
+      name: 'wait-for-heartbeats',
+      async *run() { await new Promise((resolve) => setTimeout(resolve, 80)); },
+    };
+
+    await expect(runner.run(jobId, [phase], { cache: new PipelineCache() }))
+      .resolves.toMatchObject({ status: 'completed' });
+    expect(store.enableCalls).toBe(0);
+    expect(store.heartbeatCalls).toBeGreaterThanOrEqual(2);
   });
 
   it('uses published atomic failure finalization', async () => {

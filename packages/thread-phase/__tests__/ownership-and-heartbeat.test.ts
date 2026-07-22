@@ -233,7 +233,7 @@ describe('heartbeat', () => {
   it('JobRunner automatic heartbeats carry the acquired owner id', async () => {
     const runner = new JobRunner(store, { heartbeatMs: 50 });
     const id = await runner.create('p1', null);
-    const heartbeatSpy = vi.spyOn(store, 'enableHeartbeat');
+    const heartbeatSpy = vi.spyOn(store, 'refreshHeartbeat');
     const phase: Phase<BasePipelineContext> = {
       name: 'slow',
       async *run() {
@@ -254,7 +254,7 @@ describe('heartbeat', () => {
   it('honors an explicit per-run automatic-heartbeat opt-out', async () => {
     const runner = new JobRunner(store, { heartbeatMs: 10 });
     const id = await runner.create('heartbeat-opt-out', null);
-    const refreshSpy = vi.spyOn(store, 'enableHeartbeat');
+    const refreshSpy = vi.spyOn(store, 'refreshHeartbeat');
     const phase: Phase<BasePipelineContext> = {
       name: 'slow-without-heartbeat',
       async *run() { await new Promise((resolve) => setTimeout(resolve, 50)); },
@@ -322,7 +322,7 @@ describe('heartbeat', () => {
   it('JobRunner clears the heartbeat timer on every exit path (success)', async () => {
     const runner = new JobRunner(store, { heartbeatMs: 10 });
     const id = await runner.create('p1', null);
-    const heartbeatSpy = vi.spyOn(store, 'enableHeartbeat');
+    const heartbeatSpy = vi.spyOn(store, 'refreshHeartbeat');
     const phase: Phase<BasePipelineContext> = {
       name: 'slow',
       async *run() { await new Promise((resolve) => setTimeout(resolve, 50)); },
@@ -344,7 +344,7 @@ describe('heartbeat', () => {
     let calls = 0;
     let inFlight = 0;
     let maxInFlight = 0;
-    vi.spyOn(store, 'enableHeartbeat').mockImplementation(async () => {
+    vi.spyOn(store, 'refreshHeartbeat').mockImplementation(async () => {
       calls++;
       inFlight++;
       maxInFlight = Math.max(maxInFlight, inFlight);
@@ -416,7 +416,7 @@ describe('heartbeat', () => {
     const runner = new JobRunner(store, { heartbeatMs: 10 });
     const id = await runner.create('heartbeat-failure', null);
     const failure = new Error('heartbeat backend unavailable');
-    const heartbeatSpy = vi.spyOn(store, 'enableHeartbeat').mockRejectedValue(failure);
+    const heartbeatSpy = vi.spyOn(store, 'refreshHeartbeat').mockRejectedValue(failure);
     const phase: Phase<BasePipelineContext> = {
       name: 'wait-for-abort',
       async *run(ctx) {
@@ -440,7 +440,7 @@ describe('heartbeat', () => {
     const id = await runner.create('heartbeat-and-finalization-failure', null);
     const heartbeatFailure = new Error('heartbeat backend unavailable');
     const persistenceFailure = new Error('FAILED finalization unavailable');
-    vi.spyOn(store, 'enableHeartbeat').mockRejectedValue(heartbeatFailure);
+    vi.spyOn(store, 'refreshHeartbeat').mockRejectedValue(heartbeatFailure);
     const finalizeJob = store.finalizeJob.bind(store);
     vi.spyOn(store, 'finalizeJob').mockImplementation(async (jobId, finalization) => {
       if (finalization.status === 'FAILED') throw persistenceFailure;
@@ -466,7 +466,7 @@ describe('heartbeat', () => {
   it('reports manual heartbeat owner loss with the stable error', async () => {
     const runner = new JobRunner(store);
     const id = await runner.create('manual-owner-loss', null);
-    vi.spyOn(store, 'enableHeartbeat').mockResolvedValue(false);
+    vi.spyOn(store, 'refreshHeartbeat').mockResolvedValue(false);
     const phase: Phase<BasePipelineContext> = {
       name: 'manual-heartbeat',
       async *run(ctx) { await ctx.heartbeat?.(); },
@@ -491,7 +491,7 @@ describe('heartbeat', () => {
     const id = await runner.create('hung-heartbeat', null);
     let heartbeatStarted!: () => void;
     const started = new Promise<void>((resolve) => { heartbeatStarted = resolve; });
-    vi.spyOn(store, 'enableHeartbeat').mockImplementation(async () => {
+    vi.spyOn(store, 'refreshHeartbeat').mockImplementation(async () => {
       heartbeatStarted();
       return new Promise<boolean>(() => undefined);
     });
@@ -517,7 +517,7 @@ describe('heartbeat', () => {
     const runner = new JobRunner(store, { heartbeatMs: 1000 });
     const id = await runner.create('caught-manual-heartbeat-failure', null);
     const failure = new Error('manual heartbeat backend failed');
-    const refreshSpy = vi.spyOn(store, 'enableHeartbeat').mockRejectedValue(failure);
+    const refreshSpy = vi.spyOn(store, 'refreshHeartbeat').mockRejectedValue(failure);
     const phase: Phase<BasePipelineContext> = {
       name: 'catch-refresh',
       async *run(ctx) {
@@ -542,7 +542,7 @@ describe('heartbeat', () => {
   it('bounds a manual heartbeat that never settles', async () => {
     const runner = new JobRunner(store, { heartbeatMs: 10, heartbeatTimeoutMs: 100 });
     const id = await runner.create('hung-manual-heartbeat', null);
-    vi.spyOn(store, 'enableHeartbeat').mockImplementation(
+    vi.spyOn(store, 'refreshHeartbeat').mockImplementation(
       async () => new Promise<boolean>(() => undefined),
     );
     const phase: Phase<BasePipelineContext> = {
@@ -569,7 +569,7 @@ describe('heartbeat', () => {
     const pendingHeartbeat = new Promise<void>((_resolve, reject) => { rejectHeartbeat = reject; });
     let heartbeatStarted!: () => void;
     const started = new Promise<void>((resolve) => { heartbeatStarted = resolve; });
-    vi.spyOn(store, 'enableHeartbeat').mockImplementation(async () => {
+    vi.spyOn(store, 'refreshHeartbeat').mockImplementation(async () => {
       heartbeatStarted();
       await pendingHeartbeat;
       return true;
@@ -601,7 +601,7 @@ describe('heartbeat', () => {
     const pendingHeartbeat = new Promise<void>((_resolve, reject) => { rejectHeartbeat = reject; });
     let heartbeatStarted!: () => void;
     const started = new Promise<void>((resolve) => { heartbeatStarted = resolve; });
-    vi.spyOn(store, 'enableHeartbeat').mockImplementation(async () => {
+    vi.spyOn(store, 'refreshHeartbeat').mockImplementation(async () => {
       heartbeatStarted();
       await pendingHeartbeat;
       return true;

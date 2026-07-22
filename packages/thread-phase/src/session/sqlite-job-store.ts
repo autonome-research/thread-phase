@@ -465,6 +465,16 @@ export class SqliteJobStore implements JobStore {
     return result.changes === 1;
   }
 
+  async refreshHeartbeat(jobId: string, ownerId: string): Promise<boolean> {
+    const result = this.db
+      .prepare(
+        `UPDATE job SET heartbeat_at = datetime('now')
+         WHERE id = ? AND status = 'RUNNING' AND owner_id = ?`,
+      )
+      .run(jobId, ownerId);
+    return result.changes === 1;
+  }
+
   async setCompleted(jobId: string, result: unknown, ownerId?: string): Promise<boolean> {
     const resultRow = this.db
       .prepare(

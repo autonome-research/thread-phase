@@ -252,6 +252,7 @@ export class JobRunner extends EventEmitter {
     let heartbeatInFlight: Promise<void> | null = null;
     let heartbeatStopped = false;
     let heartbeatFailure: unknown;
+    let heartbeatOptedIn = ownership.heartbeatEnabled === true;
     let eventCount = 0;
     let stopReason: string | undefined;
     let ownershipAcquired = false;
@@ -287,18 +288,36 @@ export class JobRunner extends EventEmitter {
       if (!controller.signal.aborted) controller.abort(failure);
     };
 
+    const refreshOwnedHeartbeat = async (): Promise<void> => {
+      if (!heartbeatOptedIn) {
+        // Published v5 stores may return false when heartbeat was already
+        // enabled rather than only on ownership loss, so this result cannot be
+        // used as an owner-observable refresh signal.
+        await this.store.enableHeartbeat(jobId, ownerId);
+        heartbeatOptedIn = true;
+      }
+      if (this.store.refreshHeartbeat) {
+        const refreshed = await this.store.refreshHeartbeat(jobId, ownerId);
+        if (!refreshed) throw new JobOwnershipLostError(jobId, ownerId);
+      } else {
+        // Compatibility fallback for published v5 stores. Implementations
+        // should owner-scope this write, but legacy no-op mismatch behavior
+        // cannot provide observable ownership loss.
+        await this.store.heartbeat(jobId, ownerId);
+      }
+    };
+
     const scheduleHeartbeat = (): void => {
       if (heartbeatStopped || this.heartbeatMs === undefined) return;
       heartbeatTimer = setTimeout(() => {
         heartbeatTimer = null;
         const attempt = (async () => {
           try {
-            const refreshed = await withTimeout(
-              Promise.resolve().then(() => this.store.enableHeartbeat(jobId, ownerId)),
+            await withTimeout(
+              Promise.resolve().then(() => refreshOwnedHeartbeat()),
               this.heartbeatTimeoutMs!,
               `Heartbeat for job ${jobId} timed out after ${this.heartbeatTimeoutMs}ms`,
             );
-            if (!refreshed) throw new JobOwnershipLostError(jobId, ownerId);
           } catch (error: unknown) {
             recordHeartbeatFailure(error);
           }
@@ -381,17 +400,13 @@ export class JobRunner extends EventEmitter {
         // A pipeline using only manual heartbeats opts into stale detection on
         // first use, without requiring heartbeatMs at runner construction.
         try {
-          const refresh = Promise.resolve().then(
-            () => this.store.enableHeartbeat(jobId, ownerId),
+          const refresh = Promise.resolve().then(() => refreshOwnedHeartbeat());
+          if (this.heartbeatTimeoutMs === undefined) await refresh;
+          else await withTimeout(
+            refresh,
+            this.heartbeatTimeoutMs,
+            `Heartbeat for job ${jobId} timed out after ${this.heartbeatTimeoutMs}ms`,
           );
-          const enabled = this.heartbeatTimeoutMs === undefined
-            ? await refresh
-            : await withTimeout(
-                refresh,
-                this.heartbeatTimeoutMs,
-                `Heartbeat for job ${jobId} timed out after ${this.heartbeatTimeoutMs}ms`,
-              );
-          if (!enabled) throw new JobOwnershipLostError(jobId, ownerId);
         } catch (error: unknown) {
           const failure = error instanceof Error ? error : new Error(String(error));
           recordHeartbeatFailure(failure);

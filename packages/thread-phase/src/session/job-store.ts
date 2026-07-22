@@ -224,22 +224,22 @@ export interface JobStore {
     expectedOwnerId?: string,
   ): Promise<EventRecord | null>;
   /**
-   * Update `heartbeatAt` to "now." Available for direct integrations and
-   * explicit unscoped operator refreshes. JobRunner uses `enableHeartbeat()`
-   * for owner-observable automatic and context refreshes.
+   * Update `heartbeatAt` to "now." Available for direct integrations,
+   * legacy JobRunner refresh fallback, and explicit unscoped operator refreshes.
    *
    * Implementations should scope updates to `ownerId` when supplied. As in
-   * published v5.0.0, a non-running or mismatched row may remain a no-op;
-   * JobRunner uses boolean-returning `enableHeartbeat()` when it requires
-   * observable owner-loss detection. Unscoped calls are an operator override.
+   * published v5.0.0, a non-running or mismatched row may remain a no-op.
+   * Unscoped calls are an operator override.
    */
   heartbeat(jobId: string, ownerId?: string): Promise<void>;
-  /**
-   * Atomically opt an owned run into stale detection and refresh heartbeat.
-   * Must be idempotent: every refresh of the same owned RUNNING row returns
-   * true; false means that owner no longer controls a RUNNING row.
-   */
+  /** Atomically opt an owned run into stale detection and refresh heartbeat. */
   enableHeartbeat(jobId: string, ownerId: string): Promise<boolean>;
+  /**
+   * Optional v5.1 owner-observable refresh capability. Unlike the published
+   * v5.0 enable operation, repeated calls must return true for the same owned
+   * RUNNING row and false when that owner no longer controls it.
+   */
+  refreshHeartbeat?(jobId: string, ownerId: string): Promise<boolean>;
 
   getJob(jobId: string, options?: GetJobOptions): Promise<JobRecord | null>;
   listJobs(options?: ListJobsOptions): Promise<JobRecord[]>;

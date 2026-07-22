@@ -30,9 +30,18 @@ type Assert<T extends true> = T;
 // Either assignment fails if required methods, parameters, or returns drift.
 type _CurrentAcceptsReleased = Assert<ReleasedV5JobStore extends CurrentJobStore ? true : false>;
 type _ReleasedAcceptsCurrent = Assert<CurrentJobStore extends ReleasedV5JobStore ? true : false>;
-type _ExactStoreShape = Assert<Equal<CurrentJobStore, ReleasedV5JobStore>>;
-type _ExactRootStoreShape = Assert<Equal<CurrentJobStore, ReleasedV5RootJobStore>>;
-type _ExactSessionStoreShape = Assert<Equal<CurrentJobStore, ReleasedV5SessionJobStore>>;
+type _ExactPublishedStoreProjection = Assert<Equal<
+  Pick<CurrentJobStore, keyof ReleasedV5JobStore>,
+  ReleasedV5JobStore
+>>;
+type _ExactPublishedRootProjection = Assert<Equal<
+  Pick<CurrentJobStore, keyof ReleasedV5RootJobStore>,
+  ReleasedV5RootJobStore
+>>;
+type _ExactPublishedSessionProjection = Assert<Equal<
+  Pick<CurrentJobStore, keyof ReleasedV5SessionJobStore>,
+  ReleasedV5SessionJobStore
+>>;
 type _ExactPipelineEventShape = Assert<Equal<CurrentPipelineEvent, ReleasedV5PipelineEvent>>;
 type _NoUnpublishedSqliteAliases = Assert<Equal<
   Extract<keyof ReleasedV5SqliteJobStore, 'claimRunning' | 'heartbeatOwned'>,
@@ -154,9 +163,10 @@ export class V5CustomJobStore implements ReleasedV5JobStore {
   async enableHeartbeat(jobId: string, ownerId: string): Promise<boolean> {
     const job = this.requireJob(jobId);
     if (job.status !== 'RUNNING' || job.ownerId !== ownerId) return false;
+    const changed = job.heartbeatEnabled !== true;
     job.heartbeatEnabled = true;
     job.heartbeatAt = new Date();
-    return true;
+    return changed;
   }
 
   async getJob(jobId: string, _options?: GetJobOptions): Promise<JobRecord | null> {

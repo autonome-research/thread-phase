@@ -62,11 +62,12 @@ Added optional public field:
 
 - `JobRunnerOptions.heartbeatTimeoutMs?: number`
 
-Added public method:
+Added public methods/capabilities:
 
 - `JobRunner.heartbeatAsOperator(jobId)`
+- optional `JobStore.refreshHeartbeat?(jobId, ownerId): Promise<boolean>`
 
-Compatibility note: `JobRunner.heartbeat(jobId)` remains as a deprecated alias. Automatic and manual owner-sensitive refresh use the already-published `enableHeartbeat(jobId, ownerId): Promise<boolean>` contract.
+Compatibility note: `JobRunner.heartbeat(jobId)` remains as a deprecated alias. The optional v5.1 capability defines repeated owner-observable refresh semantics. Published-v5 stores remain compatible through one-time `enableHeartbeat()` plus owner-scoped `heartbeat()` fallback; their legacy boolean and mismatch semantics are not strengthened retroactively.
 
 ## Fanout attribution
 

@@ -33,18 +33,18 @@ The authoritative symbol-by-symbol list and immutable baseline evidence are in [
 
 ## Known shortcomings and current workarounds
 
-### 1. Heartbeat API naming is compatibility-driven
+### 1. Heartbeat capability is compatibility-layered
 
-`enableHeartbeat(jobId, ownerId)` now serves as both opt-in and owner-checked refresh because its published boolean result is the only v5-compatible way to observe owner loss. The behavior is safe, but the method name underspecifies its role.
+Published v5 did not define repeated-call boolean semantics for `enableHeartbeat(jobId, ownerId)`, so v5.1 does not reinterpret `false` as ownership loss. Instead, `JobStore.refreshHeartbeat?()` is an additive owner-observable capability.
 
 Current guidance:
 
-- Custom stores must make repeated calls idempotent.
-- `true` means the same owner refreshed a RUNNING row.
-- `false` means that owner no longer controls a RUNNING row.
+- Updated stores should implement repeated `refreshHeartbeat()` calls idempotently: `true` means the same owner refreshed a RUNNING row; `false` means it no longer controls one.
+- Published-v5 stores remain compatible through one-time `enableHeartbeat()` plus owner-scoped `heartbeat()` fallback.
+- Legacy stores that no-op on owner mismatch cannot provide immediate ownership-loss observation until they adopt the optional capability.
 - Explicit `heartbeatEnabled: false` suppresses automatic refresh; manual `ctx.heartbeat()` may opt in later.
 
-Future direction: add a clearer owner-refresh primitive with a discriminated result and optional abort signal. Keep `enableHeartbeat()` as a compatibility adapter.
+Future direction: evolve the optional refresh capability toward a discriminated result and abort signal without changing the published v5 methods.
 
 ### 2. Heartbeat timeout cannot cancel store I/O
 

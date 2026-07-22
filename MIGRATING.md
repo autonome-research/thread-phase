@@ -4,7 +4,7 @@ v5.1.0 is additive at the TypeScript API boundary and retains the published v5.0
 
 Consumer-facing behavior:
 
-- automatic owner refresh uses the published idempotent `enableHeartbeat(jobId, ownerId)` boolean contract, preserving compatibility with custom v5 stores whose `heartbeat()` remains a no-op on mismatch;
+- bundled SQLite and updated custom stores can implement optional `refreshHeartbeat(jobId, ownerId)` for owner-observable repeated refresh; published-v5 stores fall back to one-time `enableHeartbeat()` plus owner-scoped `heartbeat()` without imposing new meaning on the legacy boolean result;
 - `heartbeatEnabled: false` suppresses automatic refresh for that run, while manual `ctx.heartbeat()` can opt in later;
 - SQLite exclusivity is opt-in through `acquireExclusive()`: ordinary same-name runs may overlap each other, but cannot overlap an active exclusive run;
 - `traceIdFor(item, index)` derives unique per-item attribution before any adapter dispatch;
