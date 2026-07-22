@@ -114,6 +114,33 @@ describe('ownership metadata', () => {
     await first;
   });
 
+  it('allows concurrent ordinary JobRunner runs with the same pipeline name', async () => {
+    const runner = new JobRunner(store);
+    const firstId = await runner.create('shared-pipeline', null);
+    const secondId = await runner.create('shared-pipeline', null);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let startedCount = 0;
+    let bothStarted!: () => void;
+    const started = new Promise<void>((resolve) => { bothStarted = resolve; });
+    const phase: Phase<BasePipelineContext> = {
+      name: 'overlap',
+      async *run() {
+        startedCount++;
+        if (startedCount === 2) bothStarted();
+        await gate;
+      },
+    };
+
+    const first = runner.run(firstId, [phase], { cache: new PipelineCache() });
+    const second = runner.run(secondId, [phase], { cache: new PipelineCache() });
+    await started;
+    expect((await store.getJob(firstId))?.status).toBe('RUNNING');
+    expect((await store.getJob(secondId))?.status).toBe('RUNNING');
+    release();
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+  });
+
   it('JobRunner accepts a caller-supplied sessionId via run options', async () => {
     const runner = new JobRunner(store);
     const id = await runner.create('p1', null);

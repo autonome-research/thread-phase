@@ -37,11 +37,12 @@ import type {
  *
  * To add a migration: append a new entry with version = (last + 1). NEVER
  * edit a previously-shipped migration — that would leave older databases in
- * an inconsistent state.
+ * an inconsistent state. Versions 1–4 are the published v5.0.0 history;
+ * versions 5–6 are the unreleased v5.0.1 candidate migration sequence.
  */
 interface Migration {
   version: number;
-  up: string;
+  up: string | ((db: DB) => void);
 }
 
 const MIGRATIONS: Migration[] = [
@@ -111,15 +112,18 @@ const MIGRATIONS: Migration[] = [
     `,
   },
   {
-    // Database-enforced single-runner invariant. Creating this partial unique
-    // index deliberately fails when historical RUNNING rows conflict; the
-    // migration transaction then leaves both the rows and user_version intact.
+    // Database-enforced invariant for jobs created through acquireExclusive.
+    // Ordinary createJob/setRunning jobs remain unconstrained and may share a
+    // name; exclusivity is opt-in rather than a global pipeline-name lock.
     version: 5,
     up: `
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_job_one_running_per_name
-        ON job (name)
-        WHERE status = 'RUNNING';
+      ALTER TABLE job ADD COLUMN is_exclusive INTEGER NOT NULL DEFAULT 0
+        CHECK (is_exclusive IN (0, 1));
     `,
+  },
+  {
+    version: 6,
+    up: migrateExclusiveIndex,
   },
 ];
 
@@ -163,6 +167,82 @@ function parseDate(s: string | null): Date | null {
 
 const EXCLUSIVITY_INDEX = 'idx_job_one_running_per_name';
 
+function migrateExclusiveIndex(db: DB): void {
+  const columns = db.pragma('table_info(job)') as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'is_exclusive')) {
+    db.exec(`
+      ALTER TABLE job ADD COLUMN is_exclusive INTEGER NOT NULL DEFAULT 0
+        CHECK (is_exclusive IN (0, 1));
+    `);
+  }
+  verifyExclusivityColumn(db);
+
+  const existing = db.prepare(
+    `SELECT type, tbl_name, sql FROM sqlite_schema WHERE name = ?`,
+  ).all(EXCLUSIVITY_INDEX) as Array<{
+    type: string;
+    tbl_name: string;
+    sql: string | null;
+  }>;
+  if (existing.length === 1 && isKnownCandidateV5Index(existing[0]!)) {
+    // Migration 5 was exercised locally before v5.0.1 shipped. Replace only
+    // that exact known candidate shape; unknown collisions still fail closed.
+    db.exec(`DROP INDEX ${EXCLUSIVITY_INDEX}`);
+  }
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_job_one_running_per_name
+      ON job (name)
+      WHERE status = 'RUNNING' AND is_exclusive = 1;
+  `);
+  verifyExclusivityIndex(db);
+}
+
+function verifyExclusivityColumn(db: DB): void {
+  const columns = db.pragma('table_info(job)') as Array<{
+    name: string;
+    type: string;
+    notnull: number;
+    dflt_value: string | null;
+  }>;
+  const matches = columns.filter((column) => column.name === 'is_exclusive');
+  const column = matches.length === 1 ? matches[0] : undefined;
+  const table = db.prepare(
+    `SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'job'`,
+  ).get() as { sql: string | null } | undefined;
+  const hasExpectedCheck = table?.sql !== null && table?.sql !== undefined &&
+    /(?:is_exclusive|"is_exclusive"|`is_exclusive`|\[is_exclusive\])\s+INTEGER\s+NOT\s+NULL\s+DEFAULT\s+0\s+CHECK\s*\(\s*(?:is_exclusive|"is_exclusive"|`is_exclusive`|\[is_exclusive\])\s+IN\s*\(\s*0\s*,\s*1\s*\)\s*\)/i.test(table.sql);
+  const invalidValue = column
+    ? db.prepare(
+        `SELECT 1 FROM job WHERE is_exclusive IS NULL OR is_exclusive NOT IN (0, 1) LIMIT 1`,
+      ).get()
+    : undefined;
+  if (
+    !column ||
+    column.type.toUpperCase() !== 'INTEGER' ||
+    column.notnull !== 1 ||
+    column.dflt_value !== '0' ||
+    !hasExpectedCheck ||
+    invalidValue !== undefined
+  ) {
+    throw new Error(
+      'SQLite migration 6 schema collision: job.is_exclusive is not the expected constrained flag',
+    );
+  }
+}
+
+function isKnownCandidateV5Index(schema: {
+  type: string;
+  tbl_name: string;
+  sql: string | null;
+}): boolean {
+  if (schema.type !== 'index' || schema.tbl_name !== 'job' || schema.sql === null) {
+    return false;
+  }
+  return schema.sql.replace(/\s+/g, ' ').trim() ===
+    "CREATE UNIQUE INDEX idx_job_one_running_per_name ON job (name) WHERE status = 'RUNNING'";
+}
+
 /**
  * CREATE INDEX IF NOT EXISTS is intentionally paired with verification: SQLite
  * otherwise treats any same-named index as success, even when it is non-unique,
@@ -200,7 +280,7 @@ function verifyExclusivityIndex(db: DB): void {
   // identifier quoting and parenthesization, but retain exact BINARY matching
   // for the RUNNING value and reject any wider or narrower predicate.
   const predicateMatch = predicate?.match(
-    /^\(*\s*(?:status|"status"|`status`|\[status\])\s*=\s*'([^']*)'\s*\)*$/i,
+    /^\(*\s*(?:status|"status"|`status`|\[status\])\s*=\s*'([^']*)'\s*\)*\s+AND\s+\(*\s*(?:is_exclusive|"is_exclusive"|`is_exclusive`|\[is_exclusive\])\s*=\s*1\s*\)*$/i,
   );
   const expectedPredicate = predicateMatch?.[1] === 'RUNNING';
 
@@ -216,7 +296,7 @@ function verifyExclusivityIndex(db: DB): void {
     expectedPredicate;
   if (!valid) {
     throw new Error(
-      `SQLite migration 5 schema collision: ${EXCLUSIVITY_INDEX} is not the expected unique partial index`,
+      `SQLite migration 6 schema collision: ${EXCLUSIVITY_INDEX} is not the expected unique partial index`,
     );
   }
 }
@@ -255,8 +335,8 @@ export class SqliteJobStore implements JobStore {
         const lockedVersion =
           (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
         if (m.version <= lockedVersion) return;
-        this.db.exec(m.up);
-        if (m.version === 5) verifyExclusivityIndex(this.db);
+        if (typeof m.up === 'string') this.db.exec(m.up);
+        else m.up(this.db);
         // user_version is an integer pragma; better-sqlite3 doesn't support
         // parameter binding for pragmas, so interpolate the integer directly.
         this.db.pragma(`user_version = ${m.version}`);
@@ -272,7 +352,10 @@ export class SqliteJobStore implements JobStore {
     this.db.transaction(() => {
       const finalVersion =
         (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
-      if (finalVersion >= 5) verifyExclusivityIndex(this.db);
+      if (finalVersion >= 6) {
+        verifyExclusivityColumn(this.db);
+        verifyExclusivityIndex(this.db);
+      }
     }).immediate();
   }
 
@@ -302,8 +385,8 @@ export class SqliteJobStore implements JobStore {
       const id = randomUUID();
       this.db
         .prepare(
-          `INSERT INTO job (id, name, input, status, started_at)
-           VALUES (?, ?, ?, 'RUNNING', datetime('now'))`,
+          `INSERT INTO job (id, name, input, status, started_at, is_exclusive)
+           VALUES (?, ?, ?, 'RUNNING', datetime('now'), 1)`,
         )
         .run(id, n, JSON.stringify(i));
       return id;
@@ -318,7 +401,7 @@ export class SqliteJobStore implements JobStore {
     // null out previously-recorded values.
     const result = this.db
       .prepare(
-        `UPDATE job SET status       = 'RUNNING',
+        `UPDATE job AS target SET status       = 'RUNNING',
                         started_at   = COALESCE(started_at, datetime('now')),
                         session_id   = COALESCE(?, session_id),
                         pid          = COALESCE(?, pid),
@@ -329,10 +412,17 @@ export class SqliteJobStore implements JobStore {
                         launch_source = COALESCE(?, launch_source),
                         heartbeat_enabled = COALESCE(?, heartbeat_enabled),
                         heartbeat_at = COALESCE(heartbeat_at, datetime('now'))
-         WHERE id = ?
-           AND (status = 'PENDING'
-                OR (status = 'RUNNING' AND owner_id IS NULL)
-                OR (status = 'RUNNING' AND owner_id = ?))`,
+         WHERE target.id = ?
+           AND (target.status = 'PENDING'
+                OR (target.status = 'RUNNING' AND target.owner_id IS NULL)
+                OR (target.status = 'RUNNING' AND target.owner_id = ?))
+           AND NOT EXISTS (
+             SELECT 1 FROM job AS exclusive_job
+              WHERE exclusive_job.name = target.name
+                AND exclusive_job.status = 'RUNNING'
+                AND exclusive_job.is_exclusive = 1
+                AND exclusive_job.id <> target.id
+           )`,
       )
       .run(
         ownership?.sessionId ?? null,

@@ -18,6 +18,7 @@ process.on('message', async (message: unknown) => {
     dbPath?: string;
     name?: string;
     input?: unknown;
+    jobId?: string;
   };
 
   if (command.type === 'open' && command.dbPath) {
@@ -41,6 +42,21 @@ process.on('message', async (message: unknown) => {
     try {
       const jobId = await store.acquireExclusive(command.name, command.input);
       await send({ type: 'result', ok: true, jobId });
+    } catch (error: unknown) {
+      await send({
+        type: 'result',
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+
+  if (command.type === 'set-running' && store && command.jobId) {
+    await send({ type: 'starting' });
+    try {
+      const started = await store.setRunning(command.jobId);
+      await send({ type: 'result', ok: true, started });
     } catch (error: unknown) {
       await send({
         type: 'result',
