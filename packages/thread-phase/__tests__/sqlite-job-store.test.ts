@@ -398,6 +398,21 @@ describe('SqliteJobStore — migrations', () => {
     s2.close();
   });
 
+  it('fails closed on a future schema version without mutating journal mode', () => {
+    const path = join(dir, 'future-version.db');
+    const seed = new Database(path);
+    seed.pragma('journal_mode = DELETE');
+    seed.pragma('user_version = 7');
+    expect(seed.pragma('journal_mode', { simple: true })).toBe('delete');
+    seed.close();
+
+    expect(() => new SqliteJobStore(path)).toThrow(/version 7 is newer than supported version 6/);
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(7);
+    expect(inspect.pragma('journal_mode', { simple: true })).toBe('delete');
+    inspect.close();
+  });
+
   it('fails closed when a current-version database is missing the exclusivity index', () => {
     const path = join(dir, 'missing-index-v5.db');
     const initialized = new SqliteJobStore(path);
@@ -458,7 +473,7 @@ describe('SqliteJobStore — migrations', () => {
     expect(await store.getJob(second)).toMatchObject({ status: 'RUNNING' });
   });
 
-  it('upgrades the known pre-release v5 global index without losing data', () => {
+  it('upgrades the known pre-release v5 global index without losing data', async () => {
     const path = join(dir, 'candidate-global-v5.db');
     const initialized = new SqliteJobStore(path);
     initialized.close();
@@ -488,12 +503,17 @@ describe('SqliteJobStore — migrations', () => {
     ).all()).toEqual(before);
     expect(inspect.prepare(
       `SELECT is_exclusive FROM job WHERE id = 'legacy-running'`,
-    ).get()).toEqual({ is_exclusive: 0 });
+    ).get()).toEqual({ is_exclusive: 1 });
     expect(inspect.prepare(
       `SELECT sql FROM sqlite_master
        WHERE type = 'index' AND name = 'idx_job_one_running_per_name'`,
     ).get()).toEqual(expect.objectContaining({ sql: expect.stringContaining('is_exclusive = 1') }));
     inspect.close();
+
+    const reopened = new SqliteJobStore(path);
+    const ordinary = await reopened.createJob('legacy', null);
+    await expect(reopened.setRunning(ordinary)).resolves.toBe(false);
+    reopened.close();
   });
 
   it('upgrades a pre-release v5 database whose candidate index is missing', () => {

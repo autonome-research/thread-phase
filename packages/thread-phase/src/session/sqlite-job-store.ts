@@ -127,6 +127,16 @@ const MIGRATIONS: Migration[] = [
   },
 ];
 
+const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
+
+function assertSupportedSchemaVersion(version: number): void {
+  if (version > LATEST_SCHEMA_VERSION) {
+    throw new Error(
+      `SQLite schema version ${version} is newer than supported version ${LATEST_SCHEMA_VERSION}`,
+    );
+  }
+}
+
 interface JobRow {
   id: string;
   name: string;
@@ -169,13 +179,21 @@ const EXCLUSIVITY_INDEX = 'idx_job_one_running_per_name';
 
 function migrateExclusiveIndex(db: DB): void {
   const columns = db.pragma('table_info(job)') as Array<{ name: string }>;
-  if (!columns.some((column) => column.name === 'is_exclusive')) {
+  const addedLegacyColumn = !columns.some((column) => column.name === 'is_exclusive');
+  if (addedLegacyColumn) {
     db.exec(`
       ALTER TABLE job ADD COLUMN is_exclusive INTEGER NOT NULL DEFAULT 0
         CHECK (is_exclusive IN (0, 1));
     `);
   }
   verifyExclusivityColumn(db);
+  if (addedLegacyColumn) {
+    // Candidate-v5 had a global same-name RUNNING lock but no marker column.
+    // Provenance is unavailable, so conservatively retain that protection for
+    // every active row until it reaches terminal state. The old index already
+    // guarantees these rows are unique by name when present.
+    db.exec(`UPDATE job SET is_exclusive = 1 WHERE status = 'RUNNING'`);
+  }
 
   const existing = db.prepare(
     `SELECT type, tbl_name, sql FROM sqlite_schema WHERE name = ?`,
@@ -307,6 +325,9 @@ export class SqliteJobStore implements JobStore {
   constructor(dbPath: string = defaultDbPath()) {
     this.db = new Database(dbPath);
     try {
+      const initialVersion =
+        (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+      assertSupportedSchemaVersion(initialVersion);
       this.db.pragma('journal_mode = WAL');
       this.db.pragma('foreign_keys = ON');
       this.runMigrations();
@@ -326,6 +347,7 @@ export class SqliteJobStore implements JobStore {
   private runMigrations(): void {
     let observedVersion =
       (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+    assertSupportedSchemaVersion(observedVersion);
     for (const m of MIGRATIONS) {
       if (m.version <= observedVersion) continue;
       // Take the write lock before deciding to apply a pending migration. A
@@ -334,6 +356,7 @@ export class SqliteJobStore implements JobStore {
       this.db.transaction(() => {
         const lockedVersion =
           (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+        assertSupportedSchemaVersion(lockedVersion);
         if (m.version <= lockedVersion) return;
         if (typeof m.up === 'string') this.db.exec(m.up);
         else m.up(this.db);
@@ -352,6 +375,7 @@ export class SqliteJobStore implements JobStore {
     this.db.transaction(() => {
       const finalVersion =
         (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+      assertSupportedSchemaVersion(finalVersion);
       if (finalVersion >= 6) {
         verifyExclusivityColumn(this.db);
         verifyExclusivityIndex(this.db);
