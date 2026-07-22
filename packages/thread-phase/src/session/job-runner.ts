@@ -356,14 +356,19 @@ export class JobRunner extends EventEmitter {
       return failures;
     };
 
-    const persistFailure = async (message: string): Promise<void> => {
-      const terminal = await this.store.finalizeJob(jobId, {
-        status: 'FAILED',
-        error: message,
-        event: { type: 'error', message },
-        ownerId,
-      });
-      if (terminal) this.emitRecord(terminal);
+    const persistFailure = async (message: string): Promise<unknown[]> => {
+      try {
+        const terminal = await this.store.finalizeJob(jobId, {
+          status: 'FAILED',
+          error: message,
+          event: { type: 'error', message },
+          ownerId,
+        });
+        if (terminal) this.emitRecord(terminal);
+        return [];
+      } catch (error: unknown) {
+        return [error];
+      }
     };
 
     try {
@@ -476,8 +481,8 @@ export class JobRunner extends EventEmitter {
       const message = effectiveError instanceof Error
         ? effectiveError.message
         : String(effectiveError);
-      await persistFailure(message);
-      throw primaryError;
+      const persistenceFailures = await persistFailure(message);
+      throw appendLifecycleErrors(primaryError, persistenceFailures);
     } finally {
       this.inflight.delete(jobId);
       this.activeContexts.delete(ctx);
@@ -529,6 +534,16 @@ function combineLifecycleErrors(primary: unknown, drainFailures: ReadonlyArray<u
   const combined = new AggregateError([primary, ...drainFailures], message);
   if (primary instanceof Error && primary.name === 'AbortError') combined.name = 'AbortError';
   return combined;
+}
+
+function appendLifecycleErrors(primary: unknown, additional: ReadonlyArray<unknown>): unknown {
+  if (additional.length === 0) return primary;
+  if (primary instanceof AggregateError) {
+    const combined = new AggregateError([...primary.errors, ...additional], primary.message);
+    combined.name = primary.name;
+    return combined;
+  }
+  return combineLifecycleErrors(primary, additional);
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

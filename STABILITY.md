@@ -7,7 +7,7 @@
 thread-phase ships two modes of use, both supported and stable:
 
 1. **Agent-loop mode** — thread-phase is the inner `runAgentWithTools` + pipeline composition layer inside an outer workflow runtime (Temporal, Inngest, LangGraph). The outer runtime handles durability, heartbeat, supervision, retry, and observability. You consume thread-phase via the library imports; you do NOT use `JobRunner` or `JobStore`.
-2. **Primary-runtime mode** — thread-phase IS the workflow runner. You drive pipelines via `oneShot`, `schedule`, `hook`, or directly via `JobRunner.run`. Durability comes from `SqliteJobStore` + heartbeat + ownership metadata + checkpoint/resume. Single-process by deliberate choice; for distributed workflow shapes, use mode 1 instead.
+2. **Primary-runtime mode** — thread-phase IS the workflow runner. You drive pipelines via `oneShot`, `schedule`, `hook`, or directly via `JobRunner.run`. Durability comes from `SqliteJobStore` + heartbeat + ownership metadata + checkpoint/resume. This is a single-node SQLite runtime by deliberate choice. Multiple local processes sharing one database can coordinate opt-in exclusive acquisition, but thread-phase is not a distributed workflow runtime; for distributed workflow shapes, use mode 1 instead.
 
 Primary-runtime mode landed as a coherent feature set in v4.1.0:
 - `JobRunner` heartbeat option (`heartbeatMs`) + `ctx.heartbeat?.()` for manual phase-level liveness
@@ -16,7 +16,7 @@ Primary-runtime mode landed as a coherent feature set in v4.1.0:
 - `Phase.checkpointKey` + `RunPipelineOptions.resume.completedKeys` for linear skip-on-resume
 - `superviseChild` in `thread-phase/agents/authoring` for subprocess-based adapter lifecycle
 
-The framework deliberately does NOT ship: distributed JobStore (Postgres/Redis), sweeper / reaper processes, multi-process coordination, ctx/Thread/Memory state restoration on resume, DAG-shaped checkpoint resume, or built-in observability beyond the event log.
+The framework deliberately does NOT ship: a bundled distributed JobStore (Postgres/Redis), distributed orchestration or consensus, sweeper / reaper processes, ctx/Thread/Memory state restoration on resume, DAG-shaped checkpoint resume, or built-in observability beyond the event log. SQLite does provide bounded cross-process coordination for migration and opt-in exclusive acquisition when those processes share the same local database.
 
 ## Two tiers in the `/agents` subpath
 
@@ -41,7 +41,7 @@ Consumer-facing types and decorators that have stabilized across multiple minor 
 `AgentAdapter`, `AgentAdapterMeta`, `AgentCapabilities`, `AgentEvent`, `AgentEventBus`, `ObservableAgentEventBus`, `AgentEventHandler`, `AgentEventHandlerFailure`, `AgentFinishReason`, `AgentRun`, `AgentRunOptions`, `AgentRunResult`, `ResumeToken`, `SerializableError`, `SteerableAgentRun`, `defineAgentAdapter`, `isSteerable`
 
 **Composition primitives:**
-`createEventBus`, `pipeAgentEventsToJobStore`, `PipeAgentEventsOptions`
+`createEventBus`, `pipeAgentEventsToJobStore`, `PipeAgentEventsOptions`, `createAgentEventPersistenceBridge`, `persistAgentEventsToJobStore`, `AgentEventPersistenceBridge`, `AgentEventPersistenceFailure`, `AgentEventPersistenceFailureHandler`, `AgentEventPersistenceFailureKind`, `AgentEventPersistenceOptions`
 
 **Thread state:**
 `Thread`, `createThread`, `appendEvent`, `resumeTokenFor`, `setResumeToken`, `threadToMessages`

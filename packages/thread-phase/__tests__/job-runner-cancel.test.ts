@@ -64,6 +64,29 @@ describe('JobRunner.run summary', () => {
     expect((await store.getJob(jobId))?.status).toBe('FAILED');
   });
 
+  it('falls back to FAILED when successful completion persistence rejects', async () => {
+    const completionFailure = new Error('completion write failed');
+    const finalizeJob = store.finalizeJob.bind(store);
+    store.finalizeJob = async (jobId, finalization) => {
+      if (finalization.status === 'COMPLETED') throw completionFailure;
+      return finalizeJob(jobId, finalization);
+    };
+    const phase: Phase<Ctx> = {
+      name: 'work',
+      async *run() { yield { type: 'phase', phase: 'work' }; },
+    };
+    const jobId = await runner.create('completion-persistence-failure', null);
+
+    await expect(
+      runner.run(jobId, [phase], { cache: new PipelineCache() }),
+    ).rejects.toBe(completionFailure);
+    expect(await store.getJob(jobId)).toMatchObject({
+      status: 'FAILED',
+      error: 'completion write failed',
+    });
+    expect((await store.getEvents(jobId)).at(-1)?.eventType).toBe('error');
+  });
+
   it('rejects with the phase error, marks job FAILED, writes a synthesized error event', async () => {
     const phase: Phase<Ctx> = {
       name: 'boom',

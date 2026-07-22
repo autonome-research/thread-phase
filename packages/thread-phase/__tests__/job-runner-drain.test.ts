@@ -281,6 +281,41 @@ describe('JobRunner lifecycle drains', () => {
     expect(await store.getJob(jobId)).toMatchObject({ status: 'FAILED', error: 'pipeline failed' });
   });
 
+  it('preserves pipeline, drain, and failed-terminal persistence errors in order', async () => {
+    const pipelineFailure = new Error('pipeline failed');
+    const drainFailure = new Error('drain failed');
+    const persistenceFailure = new Error('FAILED finalization rejected');
+    const finalizeJob = store.finalizeJob.bind(store);
+    store.finalizeJob = async (jobId, finalization) => {
+      if (finalization.status === 'FAILED') throw persistenceFailure;
+      return finalizeJob(jobId, finalization);
+    };
+    const phase: Phase<Ctx> = {
+      name: 'fail',
+      async *run() {
+        throw pipelineFailure;
+      },
+    };
+    const jobId = await runner.create('pipeline-drain-persistence-failure', null);
+    const running = runner.run(
+      jobId,
+      [phase],
+      { cache: new PipelineCache() },
+      undefined,
+      { drains: [async () => { throw drainFailure; }] },
+    );
+
+    const error = await running.catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([
+      pipelineFailure,
+      drainFailure,
+      persistenceFailure,
+    ]);
+    expect(await store.getJob(jobId)).toMatchObject({ status: 'RUNNING' });
+  });
+
   it('gives cancellation precedence without hiding a drain failure', async () => {
     const phaseStarted = deferred<void>();
     const phase: Phase<Ctx> = {

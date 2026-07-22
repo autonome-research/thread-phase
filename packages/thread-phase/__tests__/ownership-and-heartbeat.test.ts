@@ -435,6 +435,34 @@ describe('heartbeat', () => {
     expect((await store.getEvents(id)).filter((event) => event.eventType === 'error')).toHaveLength(1);
   });
 
+  it('keeps heartbeat failure primary when FAILED finalization also rejects', async () => {
+    const runner = new JobRunner(store, { heartbeatMs: 10 });
+    const id = await runner.create('heartbeat-and-finalization-failure', null);
+    const heartbeatFailure = new Error('heartbeat backend unavailable');
+    const persistenceFailure = new Error('FAILED finalization unavailable');
+    vi.spyOn(store, 'enableHeartbeat').mockRejectedValue(heartbeatFailure);
+    const finalizeJob = store.finalizeJob.bind(store);
+    vi.spyOn(store, 'finalizeJob').mockImplementation(async (jobId, finalization) => {
+      if (finalization.status === 'FAILED') throw persistenceFailure;
+      return finalizeJob(jobId, finalization);
+    });
+    const phase: Phase<BasePipelineContext> = {
+      name: 'wait-for-abort',
+      async *run(ctx) {
+        await new Promise<void>((_resolve, reject) => {
+          ctx.signal?.addEventListener('abort', () => reject(ctx.signal?.reason), { once: true });
+        });
+      },
+    };
+
+    const error = await runner.run(id, [phase], { cache: new PipelineCache() })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([heartbeatFailure, persistenceFailure]);
+    expect(await store.getJob(id)).toMatchObject({ status: 'RUNNING' });
+  });
+
   it('reports manual heartbeat owner loss with the stable error', async () => {
     const runner = new JobRunner(store);
     const id = await runner.create('manual-owner-loss', null);
