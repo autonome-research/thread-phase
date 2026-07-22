@@ -37,8 +37,9 @@ import type {
  *
  * To add a migration: append a new entry with version = (last + 1). NEVER
  * edit a previously-shipped migration — that would leave older databases in
- * an inconsistent state. Versions 1–4 are the published v5.0.0 history;
- * versions 5–6 are the unreleased v5.0.1 candidate migration sequence.
+ * an inconsistent state. Versions 1–4 are the published v5.0.0 history.
+ * Version 5 is the first v5.1.0 migration; unpublished candidate migrations
+ * were collapsed before release and are intentionally unsupported.
  */
 interface Migration {
   version: number;
@@ -116,14 +117,7 @@ const MIGRATIONS: Migration[] = [
     // Ordinary createJob/setRunning jobs remain unconstrained and may share a
     // name; exclusivity is opt-in rather than a global pipeline-name lock.
     version: 5,
-    up: `
-      ALTER TABLE job ADD COLUMN is_exclusive INTEGER NOT NULL DEFAULT 0
-        CHECK (is_exclusive IN (0, 1));
-    `,
-  },
-  {
-    version: 6,
-    up: migrateExclusiveIndex,
+    up: migrateExclusivity,
   },
 ];
 
@@ -177,42 +171,16 @@ function parseDate(s: string | null): Date | null {
 
 const EXCLUSIVITY_INDEX = 'idx_job_one_running_per_name';
 
-function migrateExclusiveIndex(db: DB): void {
-  const columns = db.pragma('table_info(job)') as Array<{ name: string }>;
-  const addedLegacyColumn = !columns.some((column) => column.name === 'is_exclusive');
-  if (addedLegacyColumn) {
-    db.exec(`
-      ALTER TABLE job ADD COLUMN is_exclusive INTEGER NOT NULL DEFAULT 0
-        CHECK (is_exclusive IN (0, 1));
-    `);
-  }
-  verifyExclusivityColumn(db);
-  if (addedLegacyColumn) {
-    // Candidate-v5 had a global same-name RUNNING lock but no marker column.
-    // Provenance is unavailable, so conservatively retain that protection for
-    // every active row until it reaches terminal state. The old index already
-    // guarantees these rows are unique by name when present.
-    db.exec(`UPDATE job SET is_exclusive = 1 WHERE status = 'RUNNING'`);
-  }
-
-  const existing = db.prepare(
-    `SELECT type, tbl_name, sql FROM sqlite_schema WHERE name = ?`,
-  ).all(EXCLUSIVITY_INDEX) as Array<{
-    type: string;
-    tbl_name: string;
-    sql: string | null;
-  }>;
-  if (existing.length === 1 && isKnownCandidateV5Index(existing[0]!)) {
-    // Migration 5 was exercised locally before v5.0.1 shipped. Replace only
-    // that exact known candidate shape; unknown collisions still fail closed.
-    db.exec(`DROP INDEX ${EXCLUSIVITY_INDEX}`);
-  }
-
+function migrateExclusivity(db: DB): void {
   db.exec(`
+    ALTER TABLE job ADD COLUMN is_exclusive INTEGER NOT NULL DEFAULT 0
+      CHECK (is_exclusive IN (0, 1));
+
     CREATE UNIQUE INDEX IF NOT EXISTS idx_job_one_running_per_name
       ON job (name)
       WHERE status = 'RUNNING' AND is_exclusive = 1;
   `);
+  verifyExclusivityColumn(db);
   verifyExclusivityIndex(db);
 }
 
@@ -244,21 +212,9 @@ function verifyExclusivityColumn(db: DB): void {
     invalidValue !== undefined
   ) {
     throw new Error(
-      'SQLite migration 6 schema collision: job.is_exclusive is not the expected constrained flag',
+      'SQLite migration 5 schema collision: job.is_exclusive is not the expected constrained flag',
     );
   }
-}
-
-function isKnownCandidateV5Index(schema: {
-  type: string;
-  tbl_name: string;
-  sql: string | null;
-}): boolean {
-  if (schema.type !== 'index' || schema.tbl_name !== 'job' || schema.sql === null) {
-    return false;
-  }
-  return schema.sql.replace(/\s+/g, ' ').trim() ===
-    "CREATE UNIQUE INDEX idx_job_one_running_per_name ON job (name) WHERE status = 'RUNNING'";
 }
 
 /**
@@ -314,7 +270,7 @@ function verifyExclusivityIndex(db: DB): void {
     expectedPredicate;
   if (!valid) {
     throw new Error(
-      `SQLite migration 6 schema collision: ${EXCLUSIVITY_INDEX} is not the expected unique partial index`,
+      `SQLite migration 5 schema collision: ${EXCLUSIVITY_INDEX} is not the expected unique partial index`,
     );
   }
 }
@@ -376,7 +332,7 @@ export class SqliteJobStore implements JobStore {
       const finalVersion =
         (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
       assertSupportedSchemaVersion(finalVersion);
-      if (finalVersion >= 6) {
+      if (finalVersion >= 5) {
         verifyExclusivityColumn(this.db);
         verifyExclusivityIndex(this.db);
       }

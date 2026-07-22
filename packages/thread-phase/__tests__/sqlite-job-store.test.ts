@@ -388,7 +388,7 @@ describe('SqliteJobStore — migrations', () => {
     s.close();
 
     const raw = new Database(path);
-    expect(raw.pragma('user_version', { simple: true })).toBe(6);
+    expect(raw.pragma('user_version', { simple: true })).toBe(5);
     raw.close();
 
     // A repeated open is an idempotent no-op.
@@ -402,13 +402,13 @@ describe('SqliteJobStore — migrations', () => {
     const path = join(dir, 'future-version.db');
     const seed = new Database(path);
     seed.pragma('journal_mode = DELETE');
-    seed.pragma('user_version = 7');
+    seed.pragma('user_version = 6');
     expect(seed.pragma('journal_mode', { simple: true })).toBe('delete');
     seed.close();
 
-    expect(() => new SqliteJobStore(path)).toThrow(/version 7 is newer than supported version 6/);
+    expect(() => new SqliteJobStore(path)).toThrow(/version 6 is newer than supported version 5/);
     const inspect = new Database(path);
-    expect(inspect.pragma('user_version', { simple: true })).toBe(7);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(6);
     expect(inspect.pragma('journal_mode', { simple: true })).toBe('delete');
     inspect.close();
   });
@@ -420,13 +420,13 @@ describe('SqliteJobStore — migrations', () => {
 
     const seed = new Database(path);
     seed.exec('DROP INDEX idx_job_one_running_per_name');
-    expect(seed.pragma('user_version', { simple: true })).toBe(6);
+    expect(seed.pragma('user_version', { simple: true })).toBe(5);
     seed.close();
 
-    expect(() => new SqliteJobStore(path)).toThrow(/migration 6 schema collision/);
+    expect(() => new SqliteJobStore(path)).toThrow(/migration 5 schema collision/);
 
     const inspect = new Database(path);
-    expect(inspect.pragma('user_version', { simple: true })).toBe(6);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
     expect(inspect.prepare(
       `SELECT name FROM sqlite_master
        WHERE type = 'index' AND name = 'idx_job_one_running_per_name'`,
@@ -448,13 +448,13 @@ describe('SqliteJobStore — migrations', () => {
       `SELECT type, tbl_name, sql FROM sqlite_master
        WHERE name = 'idx_job_one_running_per_name'`,
     ).get();
-    expect(seed.pragma('user_version', { simple: true })).toBe(6);
+    expect(seed.pragma('user_version', { simple: true })).toBe(5);
     seed.close();
 
-    expect(() => new SqliteJobStore(path)).toThrow(/migration 6 schema collision/);
+    expect(() => new SqliteJobStore(path)).toThrow(/migration 5 schema collision/);
 
     const inspect = new Database(path);
-    expect(inspect.pragma('user_version', { simple: true })).toBe(6);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
     expect(inspect.prepare(
       `SELECT type, tbl_name, sql FROM sqlite_master
        WHERE name = 'idx_job_one_running_per_name'`,
@@ -473,8 +473,8 @@ describe('SqliteJobStore — migrations', () => {
     expect(await store.getJob(second)).toMatchObject({ status: 'RUNNING' });
   });
 
-  it('upgrades the known pre-release v5 global index without losing data', async () => {
-    const path = join(dir, 'candidate-global-v5.db');
+  it('rejects the unpublished candidate-v5 global-index schema', () => {
+    const path = join(dir, 'unsupported-candidate-v5.db');
     const initialized = new SqliteJobStore(path);
     initialized.close();
 
@@ -485,61 +485,19 @@ describe('SqliteJobStore — migrations', () => {
       CREATE UNIQUE INDEX idx_job_one_running_per_name
         ON job (name) WHERE status = 'RUNNING';
       PRAGMA user_version = 5;
-      INSERT INTO job (id, name, input, status, started_at)
-        VALUES ('legacy-running', 'legacy', '{"source":"old-v5"}', 'RUNNING', '2025-01-01 00:00:00');
-    `);
-    const before = seed.prepare(
-      `SELECT id, name, input, status, started_at FROM job ORDER BY id`,
-    ).all();
-    seed.close();
-
-    const migrated = new SqliteJobStore(path);
-    migrated.close();
-
-    const inspect = new Database(path);
-    expect(inspect.pragma('user_version', { simple: true })).toBe(6);
-    expect(inspect.prepare(
-      `SELECT id, name, input, status, started_at FROM job ORDER BY id`,
-    ).all()).toEqual(before);
-    expect(inspect.prepare(
-      `SELECT is_exclusive FROM job WHERE id = 'legacy-running'`,
-    ).get()).toEqual({ is_exclusive: 1 });
-    expect(inspect.prepare(
-      `SELECT sql FROM sqlite_master
-       WHERE type = 'index' AND name = 'idx_job_one_running_per_name'`,
-    ).get()).toEqual(expect.objectContaining({ sql: expect.stringContaining('is_exclusive = 1') }));
-    inspect.close();
-
-    const reopened = new SqliteJobStore(path);
-    const ordinary = await reopened.createJob('legacy', null);
-    await expect(reopened.setRunning(ordinary)).resolves.toBe(false);
-    reopened.close();
-  });
-
-  it('upgrades a pre-release v5 database whose candidate index is missing', () => {
-    const path = join(dir, 'candidate-missing-index-v5.db');
-    const initialized = new SqliteJobStore(path);
-    initialized.close();
-
-    const seed = new Database(path);
-    seed.exec(`
-      DROP INDEX idx_job_one_running_per_name;
-      ALTER TABLE job DROP COLUMN is_exclusive;
-      PRAGMA user_version = 5;
     `);
     seed.close();
 
-    const migrated = new SqliteJobStore(path);
-    migrated.close();
+    expect(() => new SqliteJobStore(path)).toThrow(/migration 5 schema collision/);
     const inspect = new Database(path);
-    expect(inspect.pragma('user_version', { simple: true })).toBe(6);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
     expect(inspect.prepare(
       `SELECT name FROM pragma_table_info('job') WHERE name = 'is_exclusive'`,
-    ).get()).toEqual({ name: 'is_exclusive' });
+    ).get()).toBeUndefined();
     inspect.close();
   });
 
-  it('fails closed on an incompatible pre-release v5 exclusivity column', () => {
+  it('fails closed on an incompatible current-version exclusivity column', () => {
     const path = join(dir, 'candidate-invalid-column-v5.db');
     const initialized = new SqliteJobStore(path);
     initialized.close();
@@ -568,7 +526,7 @@ describe('SqliteJobStore — migrations', () => {
   });
 
   it('verifies the exclusivity column on every current-version open', () => {
-    const path = join(dir, 'candidate-invalid-column-v6.db');
+    const path = join(dir, 'current-invalid-column-v5.db');
     const initialized = new SqliteJobStore(path);
     initialized.close();
 
@@ -585,11 +543,11 @@ describe('SqliteJobStore — migrations', () => {
 
     expect(() => new SqliteJobStore(path)).toThrow(/is_exclusive is not the expected constrained flag/);
     const inspect = new Database(path);
-    expect(inspect.pragma('user_version', { simple: true })).toBe(6);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
     inspect.close();
   });
 
-  it('transactionally verifies an already-installed compatible v5 index before advancing', () => {
+  it('transactionally verifies an already-installed compatible current-version index on open', () => {
     const path = join(dir, 'verified-v5.db');
     const initialized = new SqliteJobStore(path);
     initialized.close();
@@ -607,7 +565,7 @@ describe('SqliteJobStore — migrations', () => {
     const migrated = new SqliteJobStore(path);
     migrated.close();
     const inspect = new Database(path);
-    expect(inspect.pragma('user_version', { simple: true })).toBe(6);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
     expect(
       inspect.prepare(
         `SELECT COUNT(*) AS count FROM sqlite_master
@@ -635,7 +593,7 @@ describe('SqliteJobStore — migrations', () => {
     ).all();
     seed.close();
 
-    expect(() => new SqliteJobStore(path)).toThrow(/migration 6 schema collision/);
+    expect(() => new SqliteJobStore(path)).toThrow(/migration 5 schema collision/);
 
     const inspect = new Database(path);
     expect(inspect.pragma('user_version', { simple: true })).toBe(5);
@@ -667,7 +625,7 @@ describe('SqliteJobStore — migrations', () => {
     ).get();
     seed.close();
 
-    expect(() => new SqliteJobStore(path)).toThrow(/migration 6 schema collision/);
+    expect(() => new SqliteJobStore(path)).toThrow(/migration 5 schema collision/);
 
     const inspect = new Database(path);
     expect(inspect.pragma('user_version', { simple: true })).toBe(5);
@@ -693,7 +651,7 @@ describe('SqliteJobStore — migrations', () => {
     `);
     seed.close();
 
-    expect(() => new SqliteJobStore(path)).toThrow(/migration 6 schema collision/);
+    expect(() => new SqliteJobStore(path)).toThrow(/migration 5 schema collision/);
 
     const inspect = new Database(path);
     expect(inspect.pragma('user_version', { simple: true })).toBe(5);
@@ -727,7 +685,7 @@ describe('SqliteJobStore — migrations', () => {
     ).get();
     seed.close();
 
-    expect(() => new SqliteJobStore(path)).toThrow(/migration 6 schema collision/);
+    expect(() => new SqliteJobStore(path)).toThrow(/migration 5 schema collision/);
 
     const inspect = new Database(path);
     expect(inspect.pragma('user_version', { simple: true })).toBe(5);
@@ -763,7 +721,7 @@ describe('SqliteJobStore — migrations', () => {
     migrated.close();
 
     const inspect = new Database(path);
-    expect(inspect.pragma('user_version', { simple: true })).toBe(6);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
     expect(inspect.prepare(
       `SELECT id, name, input, status, started_at FROM job ORDER BY id`,
     ).all()).toEqual(before);
@@ -773,45 +731,12 @@ describe('SqliteJobStore — migrations', () => {
     inspect.close();
   });
 
-  it('preserves historical same-name RUNNING rows as ordinary non-exclusive jobs', () => {
-    const path = join(dir, 'historical-same-name-v5.db');
-    const initialized = new SqliteJobStore(path);
-    initialized.close();
-
-    const seed = new Database(path);
-    seed.exec(`
-      DROP INDEX idx_job_one_running_per_name;
-      PRAGMA user_version = 5;
-      INSERT INTO job (id, name, input, status, started_at)
-        VALUES ('historical-a', 'duplicate', '{"source":"a"}', 'RUNNING', '2025-01-01 00:00:00');
-      INSERT INTO job (id, name, input, status, started_at)
-        VALUES ('historical-b', 'duplicate', '{"source":"b"}', 'RUNNING', '2025-01-02 00:00:00');
-    `);
-    const before = seed.prepare('SELECT * FROM job ORDER BY id').all();
-    seed.close();
-
-    const migrated = new SqliteJobStore(path);
-    migrated.close();
-
-    const inspect = new Database(path);
-    expect(inspect.pragma('user_version', { simple: true })).toBe(6);
-    expect(inspect.prepare('SELECT * FROM job ORDER BY id').all()).toEqual(before);
-    expect(inspect.prepare(
-      `SELECT COUNT(*) AS count FROM job WHERE is_exclusive = 1`,
-    ).get()).toEqual({ count: 0 });
-    expect(inspect.prepare(
-      `SELECT name FROM sqlite_master
-       WHERE type = 'index' AND name = 'idx_job_one_running_per_name'`,
-    ).get()).toEqual({ name: 'idx_job_one_running_per_name' });
-    inspect.close();
-  });
-
   it('serializes concurrent process initialization and applies the migration once', async () => {
     const path = join(dir, 'concurrent-v5.db');
     const initialized = new SqliteJobStore(path);
     initialized.close();
     const locker = new Database(path);
-    locker.exec('DROP INDEX idx_job_one_running_per_name; PRAGMA user_version = 5; BEGIN IMMEDIATE');
+    locker.exec('DROP INDEX idx_job_one_running_per_name; ALTER TABLE job DROP COLUMN is_exclusive; PRAGMA user_version = 4; BEGIN IMMEDIATE');
 
     const children = [spawnMigrationChild(), spawnMigrationChild()];
     try {
@@ -836,7 +761,7 @@ describe('SqliteJobStore — migrations', () => {
     }
 
     const inspect = new Database(path);
-    expect(inspect.pragma('user_version', { simple: true })).toBe(6);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
     expect(
       inspect.prepare(
         `SELECT COUNT(*) AS count FROM sqlite_master
