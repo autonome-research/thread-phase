@@ -307,6 +307,68 @@ describe('JobRunner.cancel', () => {
     await first;
   });
 
+  it('keeps handle cancellation authoritative when finalResult requests it', async () => {
+    const phase: Phase<Ctx> = {
+      name: 'work',
+      async *run() {
+        yield { type: 'phase', phase: 'work' };
+      },
+    };
+    const jobId = await runner.create('cancel-in-final-result', null);
+    let handle!: { cancel(reason?: string): void };
+    handle = runner.start(
+      jobId,
+      [phase],
+      { cache: new PipelineCache() },
+      () => {
+        handle.cancel('final-result-cancel');
+        return 'must-not-complete';
+      },
+    );
+
+    await expect(handle.result).rejects.toMatchObject({
+      name: 'AbortError',
+      message: /final-result-cancel/,
+    });
+    expect((await store.getJob(jobId))?.status).toBe('CANCELLED');
+    expect((await store.getEvents(jobId)).map((record) => record.eventType)).toEqual([
+      'phase',
+      'cancellation_requested',
+      'cancelled',
+    ]);
+  });
+
+  it('keeps caller-signal cancellation authoritative when finalResult aborts it', async () => {
+    const upstream = new AbortController();
+    const phase: Phase<Ctx> = {
+      name: 'work',
+      async *run() {
+        yield { type: 'phase', phase: 'work' };
+      },
+    };
+    const jobId = await runner.create('abort-in-final-result', null);
+    const running = runner.run(
+      jobId,
+      [phase],
+      { cache: new PipelineCache(), signal: upstream.signal },
+      () => {
+        upstream.abort('final-result-abort');
+        return 'must-not-complete';
+      },
+    );
+
+    await expect(running).rejects.toMatchObject({
+      name: 'AbortError',
+      message: /final-result-abort/,
+    });
+    expect((await store.getJob(jobId))?.status).toBe('CANCELLED');
+    expect((await store.getEvents(jobId)).map((record) => record.eventType)).toEqual([
+      'phase',
+      'cancellation_requested',
+      'cancelled',
+    ]);
+  });
+
   it('start() exposes an immediate handle for deterministic subagent deployment', async () => {
     const phase: Phase<Ctx> = {
       name: 'work',

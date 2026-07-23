@@ -155,6 +155,33 @@ describe('JobRunner lifecycle drains', () => {
     expect(rejectingRunner.signalFor('claim-rejected')).toBeUndefined();
   });
 
+  it('does not let a context restoration setter hide the pipeline failure', async () => {
+    const pipelineError = new Error('pipeline remained primary');
+    const restorationError = new Error('signal restoration failed');
+    const previousController = new AbortController();
+    let currentSignal: AbortSignal | undefined = previousController.signal;
+    const ctx: Ctx = { cache: new PipelineCache() };
+    Object.defineProperty(ctx, 'signal', {
+      configurable: true,
+      get: () => currentSignal,
+      set(value: AbortSignal | undefined) {
+        if (value === previousController.signal) throw restorationError;
+        currentSignal = value;
+      },
+    });
+    const failingPhase: Phase<Ctx> = {
+      name: 'fail',
+      async *run() {
+        throw pipelineError;
+      },
+    };
+    const jobId = await runner.create('restore-setter-failure', null);
+
+    expect(await runner.run(jobId, [failingPhase], ctx).catch((error: unknown) => error)).toBe(pipelineError);
+    expect((await store.getJob(jobId))?.status).toBe('FAILED');
+    expect(currentSignal).not.toBe(previousController.signal);
+  });
+
   it('preserves a pre-registration setup error and allows context reuse through run()', async () => {
     const setupError = new Error('drain getter failed');
     const drains: JobRunOptions['drains'] = [];
@@ -234,6 +261,52 @@ describe('JobRunner lifecycle drains', () => {
       await expect(runner.run(retryJobId, [successfulPhase], ctx)).resolves.toMatchObject({
         status: 'completed',
       });
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it.each([
+    { mode: 'run', contextKind: 'frozen' },
+    { mode: 'start', contextKind: 'frozen' },
+    { mode: 'run', contextKind: 'throwing signal setter' },
+    { mode: 'start', contextKind: 'throwing signal setter' },
+  ] as const)('does not claim after $contextKind setup fails through $mode()', async ({ mode, contextKind }) => {
+    const setupError = new Error(`${contextKind} rejected signal installation`);
+    const ctx: Ctx = { cache: new PipelineCache() };
+    if (contextKind === 'frozen') {
+      Object.freeze(ctx);
+    } else {
+      Object.defineProperty(ctx, 'signal', {
+        configurable: true,
+        get: () => undefined,
+        set: () => { throw setupError; },
+      });
+    }
+    const jobId = await runner.create(`setup-${mode}-${contextKind}`, null);
+    const setRunning = vi.spyOn(store, 'setRunning');
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      let result: Promise<unknown>;
+      if (mode === 'start') {
+        const handle = runner.start(jobId, [successfulPhase], ctx);
+        expect(handle.signal.aborted).toBe(true);
+        result = handle.result;
+      } else {
+        result = runner.run(jobId, [successfulPhase], ctx);
+      }
+      const error = await result.catch((caught: unknown) => caught);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      if (contextKind === 'frozen') expect(error).toBeInstanceOf(TypeError);
+      else expect(error).toBe(setupError);
+      expect(setRunning).not.toHaveBeenCalled();
+      expect((await store.getJob(jobId))?.status).toBe('PENDING');
+      expect(runner.signalFor(jobId)).toBeUndefined();
+      expect(unhandled).toEqual([]);
     } finally {
       process.off('unhandledRejection', onUnhandled);
     }

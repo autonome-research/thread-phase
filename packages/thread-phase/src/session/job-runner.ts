@@ -235,10 +235,16 @@ export class JobRunner extends EventEmitter {
     };
     const ownerId = ownership.ownerId!;
     const registeredDrains = [...(options.drains ?? [])];
-    // Defer the store call itself, not just its result. Structural stores may
-    // throw before returning a Promise; running it in a microtask guarantees
-    // local state and context hooks are installed before acquisition starts.
-    const claim = Promise.resolve().then(() => this.store.setRunning(jobId, ownership));
+    // Keep one stable claim promise so a reentrant cancel from a context setter
+    // can wait for ownership, but do not invoke the store until every context
+    // hook has installed successfully. Structural stores may throw before
+    // returning a Promise, so the actual call remains deferred to a microtask.
+    let resolveClaim!: (claimed: boolean) => void;
+    let rejectClaim!: (error: unknown) => void;
+    const claim = new Promise<boolean>((resolve, reject) => {
+      resolveClaim = resolve;
+      rejectClaim = reject;
+    });
     const entry: InflightRun = {
       controller,
       signal,
@@ -262,6 +268,9 @@ export class JobRunner extends EventEmitter {
       inflightRegistered = true;
       ctx.signal = signal;
     } catch (error: unknown) {
+      // No store call has been created yet. Settle any reentrant cancellation
+      // waiter without claiming the persisted job.
+      resolveClaim(false);
       if (inflightRegistered) this.inflight.delete(jobId);
       if (activeContextRegistered) this.activeContexts.delete(ctx);
       if (callerCancellationListenerAttached) {
@@ -272,6 +281,10 @@ export class JobRunner extends EventEmitter {
       catch { /* Preserve the original setup failure. */ }
       throw error;
     }
+
+    void Promise.resolve()
+      .then(() => this.store.setRunning(jobId, ownership))
+      .then(resolveClaim, rejectClaim);
 
     let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
     let heartbeatInFlight: Promise<void> | null = null;
@@ -478,6 +491,15 @@ export class JobRunner extends EventEmitter {
       }
 
       const result = finalResult ? finalResult() : null;
+      // finalResult is host code and may synchronously request cancellation or
+      // abort the caller signal. Cancellation remains authoritative until the
+      // completion intent is committed below.
+      if (entry.terminationCause === 'cancellation' || signal.aborted) {
+        const reason = signalReasonToString(signal, entry.cancelReason ?? 'cancelled');
+        const error = new Error(`cancelled: ${reason}`);
+        error.name = 'AbortError';
+        throw error;
+      }
       const doneEvent: PipelineEvent = stopReason === undefined
         ? { type: 'done' }
         : { type: 'done', reason: stopReason };
@@ -529,9 +551,14 @@ export class JobRunner extends EventEmitter {
       this.inflight.delete(jobId);
       this.activeContexts.delete(ctx);
       await stopHeartbeats();
-      previousSignal?.removeEventListener('abort', markCallerCancellation);
-      ctx.signal = previousSignal;
-      ctx.heartbeat = previousHeartbeat;
+      try { previousSignal?.removeEventListener('abort', markCallerCancellation); }
+      catch { /* Preserve the authoritative lifecycle result. */ }
+      // Context accessors are host code. Restoration failures must not replace
+      // the pipeline/cancellation result after its durable lifecycle decision.
+      try { ctx.signal = previousSignal; }
+      catch { /* Preserve the authoritative lifecycle result. */ }
+      try { ctx.heartbeat = previousHeartbeat; }
+      catch { /* Preserve the authoritative lifecycle result. */ }
     }
   }
 
