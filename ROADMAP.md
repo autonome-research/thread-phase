@@ -23,7 +23,7 @@ The clean candidate branch contains:
 - stable prevalidated per-item fanout attribution;
 - published-v5 declaration provenance and compatibility tests.
 
-At validated code/package checkpoint `f24d28a`, the candidate passed clean-install build, typecheck, full tests, `git diff --check`, production audit, package inspection, and exact-tarball smoke tests on Node 20, 22, and 26. The final integrated review remains the last technical gate. Canonical master, merge, push, tag, and publication remain separate decisions.
+At validated code/package checkpoint `f24d28a`, the candidate passed clean-install build, typecheck, full tests, `git diff --check`, production audit, package inspection, and exact-tarball smoke tests on Node 20, 22, and 26. The final full-range review through evidence checkpoint `a16e253` returned a low-risk verdict with no critical findings. Canonical master, merge, tag, and publication remain separate decisions.
 
 ## P0 — release preparation
 
@@ -40,9 +40,9 @@ Completed release preparation:
 
 Remaining release work:
 
-1. Obtain a final release-candidate review.
-2. Confirm candidate cleanliness and canonical-master isolation.
-3. Obtain separate human decisions for merge, push, tag, and publication.
+1. Confirm candidate cleanliness and canonical-master isolation.
+2. Push the reviewed candidate branch under the explicit approval already granted.
+3. Obtain separate human decisions for merge, tag, and publication.
 
 ## P1 — adoption-critical developer experience
 
@@ -69,6 +69,9 @@ Remaining release work:
 3. Add bounded process-race stress tests.
 4. Keep schema verification structural, small, and independently tested.
 5. Ensure every stable export change triggers an explicit minor-version decision.
+6. Snapshot persistence-failure observers so callback-time subscription changes affect only later notifications.
+7. Strengthen stale-reconciliation pagination when the first listed page changes before conditional finalization.
+8. Expand clean-install CI across every Node line claimed by package `engines`.
 
 ## Architectural boundaries
 
