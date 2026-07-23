@@ -556,6 +556,70 @@ describe('persistAgentEventsToJobStore', () => {
     store.close();
   });
 
+  it('reentrant close excludes only its caller and waits for sibling observers', async () => {
+    const store = newStore();
+    const bus = createEventBus();
+    const firstEntered = deferred();
+    const firstPassedClose = deferred();
+    const secondEntered = deferred();
+    const releaseSecond = deferred();
+    store.appendEvent = async () => { throw new Error('write failed'); };
+    const bridge = persistAgentEventsToJobStore(bus, store, 'reentrant-close-siblings');
+    bridge.onFailure(async () => {
+      firstEntered.resolve();
+      await bridge.close();
+      firstPassedClose.resolve();
+    });
+    bridge.onFailure(async () => {
+      secondEntered.resolve();
+      await releaseSecond.promise;
+    });
+
+    bus.emit({ type: 'text', source: 'mock', delta: 'failure' });
+    await Promise.all([firstEntered.promise, secondEntered.promise]);
+    let firstPassed = false;
+    void firstPassedClose.promise.then(() => { firstPassed = true; });
+    await Promise.resolve();
+    expect(firstPassed).toBe(false);
+
+    releaseSecond.resolve();
+    await firstPassedClose.promise;
+    await bridge.close();
+    store.close();
+  });
+
+  it('reentrant flush excludes only its caller and waits for sibling observers', async () => {
+    const store = newStore();
+    const bus = createEventBus();
+    const firstEntered = deferred();
+    const firstPassedFlush = deferred();
+    const secondEntered = deferred();
+    const releaseSecond = deferred();
+    store.appendEvent = async () => { throw new Error('write failed'); };
+    const bridge = persistAgentEventsToJobStore(bus, store, 'reentrant-flush-siblings');
+    bridge.onFailure(async () => {
+      firstEntered.resolve();
+      await bridge.flush();
+      firstPassedFlush.resolve();
+    });
+    bridge.onFailure(async () => {
+      secondEntered.resolve();
+      await releaseSecond.promise;
+    });
+
+    bus.emit({ type: 'text', source: 'mock', delta: 'failure' });
+    await Promise.all([firstEntered.promise, secondEntered.promise]);
+    let firstPassed = false;
+    void firstPassedFlush.promise.then(() => { firstPassed = true; });
+    await Promise.resolve();
+    expect(firstPassed).toBe(false);
+
+    releaseSecond.resolve();
+    await firstPassedFlush.promise;
+    await bridge.close();
+    store.close();
+  });
+
   it('keeps the external close barrier pending after an observer initiates close', async () => {
     const store = newStore();
     const bus = createEventBus();

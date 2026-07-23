@@ -142,9 +142,15 @@ export function createAgentEventPersistenceBridge(
     readonly error: Error;
     readonly occurrences: number;
   }
+  interface ObserverInvocation {
+    readonly batch: FailureBatch;
+    readonly settled: Promise<void>;
+    readonly settle: () => void;
+  }
   interface FailureBatch {
     readonly settled: Promise<void>;
     readonly settle: () => void;
+    readonly observers: ObserverInvocation[];
   }
   interface PendingFailureBatch extends FailureBatch {
     accumulator: FailureAccumulator;
@@ -157,14 +163,14 @@ export function createAgentEventPersistenceBridge(
     pending?: PendingFailureBatch;
   }
   const failureStates = new Map<AgentEventPersistenceFailureKind, FailureState>();
-  const observerContext = new AsyncLocalStorage<FailureBatch>();
+  const observerContext = new AsyncLocalStorage<ObserverInvocation>();
 
   const newBatch = (): FailureBatch => {
     let settle!: () => void;
     const settled = new Promise<void>((resolve) => {
       settle = resolve;
     });
-    return { settled, settle };
+    return { settled, settle, observers: [] };
   };
 
   const deliver = (
@@ -181,22 +187,29 @@ export function createAgentEventPersistenceBridge(
       occurrences: accumulator.occurrences,
     }) satisfies AgentEventPersistenceFailure;
 
-    const observations: Promise<void>[] = [];
     // Subscription changes made by an observer apply only to later failure
-    // notifications, matching AgentEventBus snapshot dispatch semantics.
-    for (const handler of [...failureHandlers]) {
+    // notifications, matching AgentEventBus snapshot dispatch semantics. Build
+    // every invocation token before calling the first handler so a reentrant
+    // barrier can already include all sibling observers from this dispatch.
+    const handlers = [...failureHandlers];
+    const invocations = handlers.map((): ObserverInvocation => {
+      let settle!: () => void;
+      const settled = new Promise<void>((resolve) => { settle = resolve; });
+      return { batch, settled, settle };
+    });
+    batch.observers.push(...invocations);
+    for (let index = 0; index < handlers.length; index++) {
+      const handler = handlers[index]!;
+      const invocation = invocations[index]!;
       try {
-        observations.push(
-          Promise.resolve(observerContext.run(batch, () => handler(failure))).then(
-            () => {},
-            () => {},
-          ),
-        );
+        const result = observerContext.run(invocation, () => handler(failure));
+        void Promise.resolve(result).then(invocation.settle, invocation.settle);
       } catch {
         // Failure observers are terminal sinks and must not disrupt draining.
+        invocation.settle();
       }
     }
-    void Promise.all(observations).then(() => {
+    void Promise.all(invocations.map((invocation) => invocation.settled)).then(() => {
       if (state.active === batch) state.active = undefined;
       batch.settle();
       deliverPending(kind, state);
@@ -263,10 +276,9 @@ export function createAgentEventPersistenceBridge(
 
   const drainAtInvocation = (): Promise<void> => {
     // A failure observer may react by flushing or closing the bridge, including
-    // after an await. Waiting for its own active notification would deadlock.
-    // AsyncLocalStorage propagates the batch identity across that asynchronous
-    // callback so only the reentrant batch is omitted from its barrier.
-    const reentrantBatch = observerContext.getStore();
+    // after an await. Waiting for its own invocation would deadlock, but sibling
+    // observers from the same notification remain part of the barrier.
+    const reentrantObserver = observerContext.getStore();
     const accepted = [...pendingAcceptedSettlements];
     const observed = [...failureStates.values()].flatMap((state) => {
       // Seal an available serial slot without dispatching it beside an active
@@ -274,10 +286,14 @@ export function createAgentEventPersistenceBridge(
       // failures accumulate in the one remaining bounded pending slot.
       sealPending(state);
       const batches = [state.active, state.sealed, state.pending].filter(
-        (batch): batch is FailureBatch =>
-          batch !== undefined && batch !== reentrantBatch,
+        (batch): batch is FailureBatch => batch !== undefined,
       );
-      return batches.map((batch) => batch.settled);
+      return batches.flatMap((batch) => {
+        if (reentrantObserver?.batch !== batch) return [batch.settled];
+        return batch.observers
+          .filter((observer) => observer !== reentrantObserver)
+          .map((observer) => observer.settled);
+      });
     });
     return Promise.all([
       ...accepted.map((settlement) => settlement.settled),
@@ -289,7 +305,7 @@ export function createAgentEventPersistenceBridge(
       // queue capacity) survive, and coalesced records share one reaction.
       const appendFailures = new Set(
         accepted.flatMap((settlement) =>
-          settlement.failureSettlement && settlement.failureSettlement !== reentrantBatch?.settled
+          settlement.failureSettlement && settlement.failureSettlement !== reentrantObserver?.batch.settled
             ? [settlement.failureSettlement]
             : []
         ),
