@@ -73,6 +73,7 @@ export {
 // local and network-backed stores share one consistency contract.
 export {
   type JobStore,
+  JobOwnershipLostError,
   SqliteJobStore,
   JobRunner,
   type JobRecord,
@@ -84,6 +85,7 @@ export {
   type GetJobOptions,
   type JobRunnerOptions,
   type JobRunOptions,
+  type JobRunDrain,
   type JobRunHandle,
   type LiveEvent,
 } from './session/index.js';

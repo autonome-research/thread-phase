@@ -1,3 +1,36 @@
+# Migrating from v6.0.0 to v6.1.0
+
+v6.1.0 is additive at the TypeScript API boundary. It forward-ports the reviewed lifecycle, event persistence, heartbeat, SQLite exclusivity, and fanout-attribution work onto the v6 `node:sqlite` backend. The complete stable API inventory is maintained in [`docs/unreleased-api-inventory.md`](./docs/unreleased-api-inventory.md).
+
+Consumer-facing behavior:
+
+- bundled SQLite and updated custom stores can implement optional `refreshHeartbeat(jobId, ownerId)` for owner-observable repeated refresh; published-v5/v6 structural stores retain the owner-scoped compatibility fallback;
+- `heartbeatEnabled: false` suppresses automatic refresh for that run, while manual `ctx.heartbeat()` can opt in later;
+- SQLite exclusivity is opt-in through `acquireExclusive()`: ordinary same-name runs may overlap each other, but cannot overlap an active exclusive run;
+- `traceIdFor(item, index)` derives unique per-item attribution before any adapter dispatch;
+- event persistence bridges and generic lifecycle drains are bounded and failure-observable;
+- future or incompatible SQLite schemas fail closed with an actionable error.
+
+## SQLite schema migration
+
+Published v6.0.0 databases end at schema version 4. v6.1.0 applies one transactional migration to schema version 5, adding the constrained `is_exclusive` flag and its verified partial unique index. Existing rows remain ordinary, non-exclusive rows.
+
+Unpublished development candidate schemas were deliberately collapsed before release and are not supported. If a local database was opened by a pre-release candidate, delete/recreate it or export the data through a published schema before opening it with v6.1.0. Schema versions newer than 5 fail closed without automatic repair.
+
+## Runtime requirement
+
+All locked packages now consistently require Node.js 22.5 or newer because core v6 uses the built-in `node:sqlite` module. The Pi adapter's current optional SDK requires Node.js 22.19 or newer when installed.
+
+---
+
+# Migrating from v5.x to v6.0.0
+
+v6 replaces `better-sqlite3` with Node's built-in `node:sqlite` implementation. Remove any dependency installed solely for the bundled store and upgrade to Node.js 22.5 or newer. Existing schema-version-4 databases remain readable and are upgraded by v6.1 migration 5.
+
+v6 also adds `skip` and `retryItem` hooks to `boundedFanout` and fixes `oneShot` so dispatch input reaches its handler.
+
+---
+
 # Migrating from v4.1.x to v5.0.0
 
 v5 makes the persisted run lifecycle authoritative and safe for workflow hosts deploying deterministic subagents.
@@ -156,7 +189,7 @@ npm install @autonome-research/thread-phase-agents
 
 ## JobStore is async
 
-Every method on `JobStore` returns a Promise. `SqliteJobStore` wraps its sync `better-sqlite3` calls in `Promise.resolve(...)`; performance is unchanged.
+Every method on `JobStore` returns a Promise. Current `SqliteJobStore` releases wrap synchronous built-in `node:sqlite` calls in the async interface; performance remains synchronous internally.
 
 ```diff
 - const jobId = store.createJob('my-pipeline', input);

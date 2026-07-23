@@ -40,8 +40,14 @@ export interface BoundedFanoutOfOptions<TItem, TConfig> {
   signal?: AbortSignal;
   /** Shared event bus — every per-item adapter run mirrors events here. */
   eventBus?: AgentEventBus;
-  /** Optional traceId propagated into each adapter's options.traceId. */
+  /** Optional shared traceId propagated into every adapter call. */
   traceId?: string;
+  /**
+   * Optional stable per-item trace attribution. All IDs are derived and
+   * validated before any adapter is invoked; when present this overrides
+   * the shared traceId for each item.
+   */
+  traceIdFor?: (item: TItem, index: number) => string;
   /**
    * Default `fail-fast`. `collect` collects adapter results whose
    * finishReason is `error`; mechanical setup/result/callback exceptions still
@@ -70,6 +76,7 @@ export async function boundedFanoutOf<TItem, TConfig>(
   }
   if (items.length === 0) return [];
 
+  const traceIds = resolveTraceIds(items, opts.traceIdFor);
   const concurrency = Math.min(opts.concurrency, items.length);
   const mode: BoundedFanoutOfMode = opts.mode ?? 'fail-fast';
   const results: Array<AgentRunResult | undefined> = new Array(items.length);
@@ -112,7 +119,7 @@ export async function boundedFanoutOf<TItem, TConfig>(
         const run = opts.adapter.adapter(config, {
           signal: compositeSignal,
           eventBus: opts.eventBus,
-          traceId: opts.traceId,
+          traceId: traceIds?.[i] ?? opts.traceId,
         });
         const entry: InFlight = { controller: itemController, run, result: run.result };
         inFlight.add(entry);
@@ -159,6 +166,33 @@ export async function boundedFanoutOf<TItem, TConfig>(
   }
 
   return results as AgentRunResult[];
+}
+
+function resolveTraceIds<TItem>(
+  items: ReadonlyArray<TItem>,
+  traceIdFor: ((item: TItem, index: number) => string) | undefined,
+): string[] | undefined {
+  if (!traceIdFor) return undefined;
+  const traceIds = Array.from(
+    { length: items.length },
+    (_, index) => traceIdFor(items[index]!, index),
+  );
+  const seen = new Set<string>();
+  for (let index = 0; index < traceIds.length; index++) {
+    const traceId: unknown = traceIds[index];
+    if (
+      typeof traceId !== 'string' ||
+      traceId.trim().length === 0 ||
+      /\p{Cc}/u.test(traceId)
+    ) {
+      throw new TypeError(`boundedFanoutOf traceIdFor returned an invalid trace ID at item ${index}`);
+    }
+    if (seen.has(traceId)) {
+      throw new Error(`boundedFanoutOf traceIdFor returned duplicate trace ID ${JSON.stringify(traceId)}`);
+    }
+    seen.add(traceId);
+  }
+  return traceIds;
 }
 
 export class BoundedFanoutOfError extends Error {

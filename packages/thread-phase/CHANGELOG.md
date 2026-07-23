@@ -4,17 +4,50 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [6.1.0] — 2026-07-22
+
+### Agent event dispatch
+
+- `AgentEventBus` now isolates both subscriber throws and returned-promise rejections while preserving synchronous, non-blocking `emit` fan-out. Each dispatch snapshots its subscribers, so add/remove operations during a callback affect only later events.
+- Factory-created buses expose additive `ObservableAgentEventBus.onHandlerError` for non-recursive observation of the failed handler, original event, and normalized `Error`; the emit/on-only `AgentEventBus` contract remains structurally compatible with legacy implementations. Handler-failure notifications are readonly and frozen so one observer cannot alter diagnostics seen by later observers.
+
+### Agent event persistence
+
+- Added an opt-in, finitely bounded persistence bridge that serializes accepted adapter events, reports append and overflow failures, and provides deterministic `flush()` and idempotent draining `close()` barriers. Asynchronous failure observation is also bounded: synchronous same-kind bursts aggregate before delivery; a barrier can seal one serial successor while later failures coalesce into one remaining pending notification. Append and overflow batches remain separate, observer callbacks stay serial per kind, and flush/close wait for every invocation-time covered batch to settle. Failure observers may safely await reentrant `flush()` or `close()` calls, including after an asynchronous boundary; callback-local barriers exclude the observer's own active delivery to avoid self-deadlock, while the canonical external close barrier still waits for that observer to settle.
+- Preserved `pipeAgentEventsToJobStore(bus, store, jobId, options?)` unchanged as the best-effort alternative: it still returns an unsubscribe callback, performs fire-and-forget appends, and isolates both synchronous store throws and asynchronous append rejections.
+
+### Fanout attribution
+
+- Added optional `boundedFanoutOf.traceIdFor(item, index)` for stable per-item adapter and event attribution. All derived IDs are validated for non-empty, Unicode-control-free, exact uniqueness before config construction or adapter dispatch; existing shared `traceId` behavior remains the default.
+
 ### Reliable run lifecycle
 
-- Added distinct persisted `CANCELLED` and `ABANDONED` states plus atomic owner claims, owner-guarded transitions, `JobStore.setCancelled` / `setAbandoned`, and atomic terminal status+event finalization methods.
-- Added `JobRunner.start()` and `JobRunHandle` for immediate run identity, signal, cancellation, and result access.
-- `JobRunner` now composes its controller with caller `ctx.signal`, restores context hooks after execution, records cancellation request acknowledgement, and prevents late terminal writes from replacing the first terminal state.
+- SQLite now serializes cross-process `acquireExclusive()` calls with an immediate transaction and marks exclusive acquisitions separately. A partial unique index and guarded `setRunning()` prevent ordinary jobs from entering while an exclusive same-name run is active, while ordinary `createJob()`/`setRunning()` jobs retain their documented ability to overlap with other ordinary same-name jobs. The single migration 5 adds and verifies this opt-in invariant without rewriting published migrations 1–4. Unpublished candidate schema versions are intentionally unsupported. The Node `node:sqlite` driver now exposes immediate transactions, complete pragma result sets, bounded busy waiting, and retryable WAL initialization so concurrent processes can initialize one nonexistent path safely.
+- Added optional generic `JobRunOptions.drains`, awaited sequentially before terminal persistence and runner shutdown, including ownership-acquisition exits. All registered drains are attempted; drain-only failure marks the run failed, while acquisition failure, pipeline failure, and cancellation retain precedence and accompanying drain failures remain observable through the rejected `AggregateError`.
+- Cancellation still attempts atomic `CANCELLED` finalization when persistence of the preceding `cancellation_requested` audit event fails; the run rejection retains that persistence failure alongside cancellation and drain failures instead of silently discarding it.
+- Added optional `JobStore.refreshHeartbeat(jobId, ownerId)` for repeated owner-observable refresh. Bundled SQLite implements it; published-v5 custom stores retain compatibility through one-time `enableHeartbeat()` plus owner-scoped `heartbeat()` fallback without retroactively strengthening legacy boolean semantics.
+- Rejection of `FAILED` terminal persistence no longer hides the originating pipeline or heartbeat error; primary, drain, and persistence failures remain observable in deterministic order.
+- Clarified that `heartbeatTimeoutMs` requires `heartbeatMs`; once configured it covers both automatic and manual refreshes, while manual-only timeout configuration remains future work.
+- Added distinct persisted `CANCELLED` and `ABANDONED` states. The bundled SQLite store exposes additive atomic owner-claim, owner-guarded transition, stale-finalization, and terminal status+event capabilities that `JobRunner` uses when available.
+- Added `JobRunner.start()` and `JobRunHandle` for immediate run identity, signal, cancellation, and result access. Pre-registration setup failures retain their original rejection, return an already-aborted handle signal from `start()`, and cannot leak job/context registrations.
+- `JobRunner` now composes its controller with caller `ctx.signal`, restores context hooks after execution without allowing unusual restoration setters to replace the lifecycle result, records cancellation request acknowledgement, and prevents late terminal writes from replacing the first terminal state. Cancellation requested by `finalResult()` or its caller signal remains authoritative before completion is committed.
 - Added owner IDs, launch-source metadata, and stale-run reconciliation through `JobRunner.reconcileAbandoned()`.
 - Fail-fast `boundedFanout` now aborts and awaits sibling workers before rejecting; unsafe concurrency and item-limit values are rejected before dispatch.
-- Upgraded `better-sqlite3` to the Node 26-compatible 12.x line.
+- Forward-ported lifecycle and migration guarantees onto the v6 `node:sqlite` backend; Node.js 22.5 or newer is required across the locked package set.
 - Upgraded the OpenAI runtime dependency to 6.x and the development test stack to Vitest 4.
 
-These changes extend the `JobStore` interface and are breaking for custom store implementations. Implementations must adopt boolean first-writer-wins terminal transitions, owner-aware claiming/heartbeat, and atomic `finalizeJob` / `finalizeAbandonedIfStale` methods.
+The released v5.0.0 `JobStore` interface remains preserved as compatibility evidence. Its published declaration already requires boolean-returning ownership and terminal transitions, atomic finalization, cancellation and abandonment methods, owner-aware heartbeat, and heartbeat enablement. A provenance-backed declaration fixture verifies that exact contract.
+
+## [6.0.0] — 2026-07-17
+
+### Breaking
+
+- Replaced the ABI-pinned `better-sqlite3` dependency with the built-in `node:sqlite` backend and raised the core Node requirement to 22.5 or newer.
+
+### Added
+
+- Added `skip` and `retryItem` hooks to `boundedFanout`.
+- Fixed `oneShot` to forward dispatch input to its handler.
 
 ## [3.2.2] — 2026-05-21
 

@@ -64,6 +64,29 @@ describe('JobRunner.run summary', () => {
     expect((await store.getJob(jobId))?.status).toBe('FAILED');
   });
 
+  it('falls back to FAILED when successful completion persistence rejects', async () => {
+    const completionFailure = new Error('completion write failed');
+    const finalizeJob = store.finalizeJob.bind(store);
+    store.finalizeJob = async (jobId, finalization) => {
+      if (finalization.status === 'COMPLETED') throw completionFailure;
+      return finalizeJob(jobId, finalization);
+    };
+    const phase: Phase<Ctx> = {
+      name: 'work',
+      async *run() { yield { type: 'phase', phase: 'work' }; },
+    };
+    const jobId = await runner.create('completion-persistence-failure', null);
+
+    await expect(
+      runner.run(jobId, [phase], { cache: new PipelineCache() }),
+    ).rejects.toBe(completionFailure);
+    expect(await store.getJob(jobId)).toMatchObject({
+      status: 'FAILED',
+      error: 'completion write failed',
+    });
+    expect((await store.getEvents(jobId)).at(-1)?.eventType).toBe('error');
+  });
+
   it('rejects with the phase error, marks job FAILED, writes a synthesized error event', async () => {
     const phase: Phase<Ctx> = {
       name: 'boom',
@@ -136,6 +159,34 @@ describe('JobRunner.cancel', () => {
     expect(events.map((event) => event.eventType)).toContain('cancellation_requested');
     expect(events.map((event) => event.eventType)).toContain('cancelled');
     expect(events.map((event) => event.eventType)).not.toContain('error');
+  });
+
+  it('finalizes cancellation and surfaces cancellation-request persistence failure', async () => {
+    const requestFailure = new Error('request audit write failed');
+    const appendEvent = store.appendEvent.bind(store);
+    store.appendEvent = async (jobId, event) => {
+      if (event.type === 'cancellation_requested') throw requestFailure;
+      return appendEvent(jobId, event);
+    };
+    const jobId = await runner.create('cancel-request-failure', null);
+    const phase: Phase<Ctx> = {
+      name: 'cooperative',
+      async *run(ctx) {
+        await new Promise<void>((resolve) => {
+          ctx.signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+      },
+    };
+
+    const running = runner.run(jobId, [phase], { cache: new PipelineCache() });
+    setTimeout(() => runner.cancel(jobId, 'audit failure cancellation'), 10);
+    const rejection = await running.catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(AggregateError);
+    expect(rejection).toMatchObject({ name: 'AbortError' });
+    expect((rejection as AggregateError).errors).toContain(requestFailure);
+    expect((await store.getJob(jobId))?.status).toBe('CANCELLED');
+    expect((await store.getEvents(jobId)).map((event) => event.eventType)).toEqual(['cancelled']);
   });
 
   it('orders pre-aborted caller cancellation as request then atomic terminal cancellation', async () => {
@@ -254,6 +305,68 @@ describe('JobRunner.cancel', () => {
     await expect(runner.run(secondId, [phase], ctx)).rejects.toThrow(/same pipeline context/);
     release();
     await first;
+  });
+
+  it('keeps handle cancellation authoritative when finalResult requests it', async () => {
+    const phase: Phase<Ctx> = {
+      name: 'work',
+      async *run() {
+        yield { type: 'phase', phase: 'work' };
+      },
+    };
+    const jobId = await runner.create('cancel-in-final-result', null);
+    let handle!: { cancel(reason?: string): void };
+    handle = runner.start(
+      jobId,
+      [phase],
+      { cache: new PipelineCache() },
+      () => {
+        handle.cancel('final-result-cancel');
+        return 'must-not-complete';
+      },
+    );
+
+    await expect(handle.result).rejects.toMatchObject({
+      name: 'AbortError',
+      message: /final-result-cancel/,
+    });
+    expect((await store.getJob(jobId))?.status).toBe('CANCELLED');
+    expect((await store.getEvents(jobId)).map((record) => record.eventType)).toEqual([
+      'phase',
+      'cancellation_requested',
+      'cancelled',
+    ]);
+  });
+
+  it('keeps caller-signal cancellation authoritative when finalResult aborts it', async () => {
+    const upstream = new AbortController();
+    const phase: Phase<Ctx> = {
+      name: 'work',
+      async *run() {
+        yield { type: 'phase', phase: 'work' };
+      },
+    };
+    const jobId = await runner.create('abort-in-final-result', null);
+    const running = runner.run(
+      jobId,
+      [phase],
+      { cache: new PipelineCache(), signal: upstream.signal },
+      () => {
+        upstream.abort('final-result-abort');
+        return 'must-not-complete';
+      },
+    );
+
+    await expect(running).rejects.toMatchObject({
+      name: 'AbortError',
+      message: /final-result-abort/,
+    });
+    expect((await store.getJob(jobId))?.status).toBe('CANCELLED');
+    expect((await store.getEvents(jobId)).map((record) => record.eventType)).toEqual([
+      'phase',
+      'cancellation_requested',
+      'cancelled',
+    ]);
   });
 
   it('start() exposes an immediate handle for deterministic subagent deployment', async () => {

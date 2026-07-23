@@ -57,6 +57,19 @@ export type JobStatus =
   | 'ABANDONED'
   | 'STALE';
 
+/** Stable failure raised when an owner-scoped operation no longer owns a RUNNING job. */
+export class JobOwnershipLostError extends Error {
+  readonly code = 'ERR_JOB_OWNERSHIP_LOST';
+
+  constructor(
+    readonly jobId: string,
+    readonly ownerId: string,
+  ) {
+    super(`Job ${jobId} is no longer owned by ${ownerId}`);
+    this.name = 'JobOwnershipLostError';
+  }
+}
+
 export interface JobRecord {
   id: string;
   name: string;
@@ -86,7 +99,11 @@ export interface JobRecord {
   ownerId?: string;
   /** Application-defined source, e.g. `pi-tool`, `cron`, or `webhook`. */
   launchSource?: string;
-  /** Whether this run opted into heartbeat-based stale reconciliation. */
+  /**
+   * Whether this run opted into heartbeat-based stale reconciliation.
+   * In JobRunner ownership options, explicit false also suppresses that run's
+   * automatic interval; a later manual ctx.heartbeat() can opt in.
+   */
   heartbeatEnabled?: boolean;
   /** Most recent heartbeat ISO timestamp. Updated by JobRunner.heartbeat(). */
   heartbeatAt?: Date;
@@ -207,13 +224,22 @@ export interface JobStore {
     expectedOwnerId?: string,
   ): Promise<EventRecord | null>;
   /**
-   * Update `heartbeatAt` to "now." Called by JobRunner on its
-   * heartbeatMs interval and via `ctx.heartbeat?.()` from phase bodies.
-   * No-op if the job is not in RUNNING state.
+   * Update `heartbeatAt` to "now." Available for direct integrations,
+   * legacy JobRunner refresh fallback, and explicit unscoped operator refreshes.
+   *
+   * Implementations should scope updates to `ownerId` when supplied. As in
+   * published v5.0.0, a non-running or mismatched row may remain a no-op.
+   * Unscoped calls are an operator override.
    */
   heartbeat(jobId: string, ownerId?: string): Promise<void>;
   /** Atomically opt an owned run into stale detection and refresh heartbeat. */
   enableHeartbeat(jobId: string, ownerId: string): Promise<boolean>;
+  /**
+   * Optional v5.1 owner-observable refresh capability. Unlike the published
+   * v5.0 enable operation, repeated calls must return true for the same owned
+   * RUNNING row and false when that owner no longer controls it.
+   */
+  refreshHeartbeat?(jobId: string, ownerId: string): Promise<boolean>;
 
   getJob(jobId: string, options?: GetJobOptions): Promise<JobRecord | null>;
   listJobs(options?: ListJobsOptions): Promise<JobRecord[]>;

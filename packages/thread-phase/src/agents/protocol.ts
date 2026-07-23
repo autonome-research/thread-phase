@@ -171,9 +171,46 @@ export interface AgentCapabilities {
  * fan-out; the run's events iterable is consumed once.
  *
  */
+export type AgentEventHandler = (event: AgentEvent) => void | Promise<void>;
+
+/** Details reported when an event subscriber throws or rejects. */
+export interface AgentEventHandlerFailure {
+  /** The exact subscriber function that failed. */
+  readonly handler: AgentEventHandler;
+  /** The exact event passed to the subscriber. */
+  readonly event: AgentEvent;
+  /** The thrown or rejected value, normalized to an Error. */
+  readonly error: Error;
+}
+
 export interface AgentEventBus {
+  /**
+   * Dispatch synchronously to a snapshot of current subscribers. Subscriptions
+   * added or removed during dispatch affect only later events.
+   *
+   * Returned promises are observed but never awaited. Subscriber failures do
+   * not escape from emit or stop fan-out to the remaining subscribers.
+   */
   emit(event: AgentEvent): void;
-  on(handler: (event: AgentEvent) => void | Promise<void>): () => void;
+  on(handler: AgentEventHandler): () => void;
+}
+
+/**
+ * Additive event-bus surface returned by {@link createEventBus}.
+ *
+ * `AgentEventBus` intentionally remains the emit/on-only protocol so legacy
+ * and third-party bus implementations stay structurally assignable.
+ */
+export interface ObservableAgentEventBus extends AgentEventBus {
+  /**
+   * Observe failures from ordinary event subscribers.
+   *
+   * Error observers are also fire-and-forget. Their own throws and rejections
+   * are contained and are not reported recursively.
+   */
+  onHandlerError(
+    handler: (failure: AgentEventHandlerFailure) => void | Promise<void>,
+  ): () => void;
 }
 
 // ---------------------------------------------------------------------------
