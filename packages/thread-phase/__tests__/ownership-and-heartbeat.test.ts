@@ -993,6 +993,69 @@ describe('read-time staleness', () => {
     }
   });
 
+  it('advances across multiple recovered pages interleaved with actionable stale jobs', async () => {
+    const records = Array.from({ length: 220 }, (_, index): JobRecord => ({
+      id: `scan-${String(index).padStart(3, '0')}`,
+      name: 'cursor-stress',
+      input: null,
+      status: 'STALE',
+      result: null,
+      error: null,
+      eventCount: 0,
+      createdAt: new Date(1_000_000 - index * 1_000),
+      startedAt: new Date(0),
+      completedAt: null,
+      ownerId: `owner-${index}`,
+      heartbeatEnabled: true,
+      heartbeatAt: new Date(0),
+    }));
+    const recovered = new Set([
+      ...records.slice(0, 100).map((record) => record.id),
+      ...records.slice(110, 210).map((record) => record.id),
+    ]);
+    const active = new Map(records.map((record) => [record.id, record]));
+    let listCalls = 0;
+    const fakeStore = new Proxy(store, {
+      get(target, property) {
+        if (property === 'listJobsPage') {
+          return async (options: { limit?: number; before?: { createdAt: Date; id: string } } = {}) => {
+            listCalls++;
+            const before = options.before;
+            return [...active.values()]
+              .filter((record) => before === undefined
+                || record.createdAt < before.createdAt
+                || (record.createdAt.getTime() === before.createdAt.getTime() && record.id < before.id))
+              .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id))
+              .slice(0, options.limit ?? 50);
+          };
+        }
+        if (property === 'finalizeAbandonedIfStale') {
+          return async (jobId: string, _before: Date, reason: string): Promise<EventRecord | null> => {
+            if (recovered.has(jobId)) return null;
+            active.delete(jobId);
+            return {
+              id: Number(jobId.slice(-3)) + 1,
+              jobId,
+              eventType: 'abandoned',
+              data: { type: 'abandoned', reason },
+              createdAt: new Date(0),
+            };
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as JobStore;
+
+    const reconciled = await new JobRunner(fakeStore).reconcileAbandoned(1_000);
+    expect(new Set(reconciled)).toEqual(new Set([
+      ...records.slice(100, 110).map((record) => record.id),
+      ...records.slice(210, 220).map((record) => record.id),
+    ]));
+    expect(reconciled).toHaveLength(20);
+    expect(listCalls).toBeLessThanOrEqual(8);
+  });
+
   it('does not abandon a stale-listed owner that heartbeats before the atomic transition', async () => {
     const runner = new JobRunner(store);
     const id = await store.createJob('recovered-owner', null);

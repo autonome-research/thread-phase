@@ -8,7 +8,7 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ### Agent event dispatch
 
-- `AgentEventBus` now isolates both subscriber throws and returned-promise rejections while preserving synchronous, non-blocking `emit` fan-out. Each dispatch snapshots its subscribers, so add/remove operations during a callback affect only later events.
+- Factory-created buses from `createEventBus()` now isolate both subscriber throws and returned-promise rejections while preserving synchronous, non-blocking `emit` fan-out. Each factory-bus dispatch snapshots its subscribers, so add/remove operations during a callback affect only later events; the base structural `AgentEventBus` does not impose these semantics on third-party implementations.
 - Factory-created buses expose additive `ObservableAgentEventBus.onHandlerError` for non-recursive observation of the failed handler, original event, and normalized `Error`; the emit/on-only `AgentEventBus` contract remains structurally compatible with legacy implementations. Handler-failure notifications are readonly and frozen so one observer cannot alter diagnostics seen by later observers. Shared defensive normalization contains even hostile thrown/rejected values whose reflection or coercion traps throw.
 
 ### Agent event persistence
