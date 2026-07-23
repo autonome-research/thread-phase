@@ -187,7 +187,15 @@ export class JobRunner extends EventEmitter {
     const reconciled: string[] = [];
     let previousRejectedPage: string | undefined;
     while (true) {
-      const stale = await this.store.listJobs({ status: 'STALE', staleAfterMs, limit: 100 });
+      // Keep listing and guarded finalization on the same invocation-time
+      // cutoff. Expressing that fixed cutoff through the duration-based store
+      // API requires increasing staleAfterMs as the scan itself ages.
+      const listingStaleAfterMs = Math.max(1, Date.now() - staleBefore.getTime());
+      const stale = await this.store.listJobs({
+        status: 'STALE',
+        staleAfterMs: listingStaleAfterMs,
+        limit: 100,
+      });
       if (stale.length === 0) break;
       const pageIdentity = stale
         .map((job) => `${job.id}\u0000${job.ownerId ?? ''}`)

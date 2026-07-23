@@ -11,7 +11,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SqliteJobStore } from '../src/session/sqlite-job-store.js';
-import { JobOwnershipLostError } from '../src/session/job-store.js';
+import {
+  JobOwnershipLostError,
+  type EventRecord,
+  type JobRecord,
+  type JobStore,
+} from '../src/session/job-store.js';
 import { JobOwnershipLostError as SessionOwnershipLostError } from '../src/session/index.js';
 import { JobOwnershipLostError as RootOwnershipLostError } from '../src/index.js';
 import { JobRunner } from '../src/session/job-runner.js';
@@ -779,6 +784,96 @@ describe('read-time staleness', () => {
     const reconciled = await runner.reconcileAbandoned(1000);
     expect(new Set(reconciled)).toEqual(new Set(ids));
     expect((await store.listJobs({ status: 'STALE', staleAfterMs: 1000, limit: 200 }))).toHaveLength(0);
+  });
+
+  it('uses one fixed staleness cutoff while a multi-page scan ages', async () => {
+    const makeRecord = (id: string): JobRecord => ({
+      id,
+      name: id,
+      input: null,
+      status: 'STALE',
+      result: null,
+      error: null,
+      eventCount: 0,
+      createdAt: new Date(0),
+      startedAt: new Date(0),
+      completedAt: null,
+      ownerId: `owner-${id}`,
+      heartbeatEnabled: true,
+      heartbeatAt: new Date(0),
+    });
+    const pages = [
+      Array.from({ length: 100 }, (_, index) => makeRecord(`first-${index}`)),
+      Array.from({ length: 5 }, (_, index) => makeRecord(`second-${index}`)),
+      [],
+    ];
+    let fakeNow = 10_000;
+    const expectedCutoff = fakeNow - 1_000;
+    const listingCutoffs: number[] = [];
+    let page = 0;
+    const fakeStore = new Proxy(store, {
+      get(target, property) {
+        if (property === 'listJobs') {
+          return async (options: { staleAfterMs?: number } = {}) => {
+            listingCutoffs.push(fakeNow - (options.staleAfterMs ?? 0));
+            const listed = pages[page++] ?? [];
+            fakeNow += 5_000;
+            return listed;
+          };
+        }
+        if (property === 'finalizeAbandonedIfStale') {
+          return async (jobId: string, _before: Date, reason: string): Promise<EventRecord> => ({
+            id: page * 1000 + Number(jobId.split('-').at(-1) ?? 0),
+            jobId,
+            eventType: 'abandoned',
+            data: { type: 'abandoned', reason },
+            createdAt: new Date(0),
+          });
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as JobStore;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => fakeNow);
+
+    try {
+      const reconciled = await new JobRunner(fakeStore).reconcileAbandoned(1_000);
+      expect(reconciled).toHaveLength(105);
+      expect(listingCutoffs).toHaveLength(2);
+      expect(listingCutoffs.every((cutoff) => cutoff === expectedCutoff)).toBe(true);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('stops after a custom store repeats one wholly rejected stale page', async () => {
+    const record: JobRecord = {
+      id: 'unchanged',
+      name: 'unchanged',
+      input: null,
+      status: 'STALE',
+      result: null,
+      error: null,
+      eventCount: 0,
+      createdAt: new Date(0),
+      startedAt: new Date(0),
+      completedAt: null,
+      ownerId: 'owner-unchanged',
+      heartbeatEnabled: true,
+      heartbeatAt: new Date(0),
+    };
+    let listCalls = 0;
+    const fakeStore = new Proxy(store, {
+      get(target, property) {
+        if (property === 'listJobs') return async () => { listCalls += 1; return [record]; };
+        if (property === 'finalizeAbandonedIfStale') return async () => null;
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as JobStore;
+
+    await expect(new JobRunner(fakeStore).reconcileAbandoned(1_000)).resolves.toEqual([]);
+    expect(listCalls).toBe(2);
   });
 
   it('re-queries after a recovered first page and reconciles later stale jobs', async () => {
