@@ -23,6 +23,13 @@ export interface LiveEvent {
   createdAt: string;
 }
 
+export interface LiveEventListenerFailure {
+  /** The immutable live event whose observer failed. */
+  readonly event: LiveEvent;
+  /** The observer's thrown or rejected value, normalized to an Error. */
+  readonly error: Error;
+}
+
 export interface JobRunnerOptions {
   /** Automatic heartbeat interval for active runs. */
   heartbeatMs?: number;
@@ -34,6 +41,11 @@ export interface JobRunnerOptions {
    * store's underlying I/O.
    */
   heartbeatTimeoutMs?: number;
+  /**
+   * Observe isolated failures from `job:${jobId}` live-event listeners.
+   * Observer failures are contained and never affect authoritative lifecycle.
+   */
+  onLiveEventError?: (failure: LiveEventListenerFailure) => void | Promise<void>;
 }
 
 export type JobRunDrain = () => void | PromiseLike<void>;
@@ -80,6 +92,7 @@ export class JobRunner extends EventEmitter {
   private activeContexts = new WeakSet<object>();
   private readonly heartbeatMs?: number;
   private readonly heartbeatTimeoutMs?: number;
+  private readonly onLiveEventError?: JobRunnerOptions['onLiveEventError'];
 
   constructor(private readonly store: JobStore, options: JobRunnerOptions = {}) {
     super();
@@ -101,6 +114,7 @@ export class JobRunner extends EventEmitter {
     }
     this.heartbeatMs = options.heartbeatMs;
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? options.heartbeatMs;
+    this.onLiveEventError = options.onLiveEventError;
   }
 
   /** Explicit unscoped heartbeat for operator-driven recovery workflows. */
@@ -601,13 +615,40 @@ export class JobRunner extends EventEmitter {
   }
 
   private emitRecord(record: { id: number; jobId: string; eventType: string; data: PipelineEvent; createdAt: Date }): void {
-    this.emit(`job:${record.jobId}`, {
+    const event: LiveEvent = Object.freeze({
       id: record.id,
       jobId: record.jobId,
       eventType: record.eventType,
       data: record.data,
       createdAt: record.createdAt.toISOString(),
-    } satisfies LiveEvent);
+    });
+    // EventEmitter's default dispatch lets listener failures escape. Lifecycle
+    // observation is best-effort: snapshot listeners, isolate synchronous
+    // throws, and observe returned promise rejections without granting either
+    // authority over persisted state or pipeline results.
+    for (const listener of this.rawListeners(`job:${record.jobId}`)) {
+      try {
+        const result = Reflect.apply(listener, this, [event]) as unknown;
+        void Promise.resolve(result).catch((error: unknown) => {
+          this.reportLiveListenerError(event, error);
+        });
+      } catch (error: unknown) {
+        this.reportLiveListenerError(event, error);
+      }
+    }
+  }
+
+  private reportLiveListenerError(event: LiveEvent, error: unknown): void {
+    if (!this.onLiveEventError) return;
+    const failure: LiveEventListenerFailure = Object.freeze({
+      event,
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    try {
+      void Promise.resolve(this.onLiveEventError(failure)).catch(() => undefined);
+    } catch {
+      // The failure observer is a terminal diagnostic sink.
+    }
   }
 }
 

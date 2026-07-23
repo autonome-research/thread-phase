@@ -88,6 +88,7 @@ export {
   type JobRunDrain,
   type JobRunHandle,
   type LiveEvent,
+  type LiveEventListenerFailure,
 } from './session/index.js';
 
 // Tools — registry with optional ajv arg validation. Implements

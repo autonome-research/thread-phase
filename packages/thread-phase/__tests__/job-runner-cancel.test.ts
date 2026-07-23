@@ -369,6 +369,88 @@ describe('JobRunner.cancel', () => {
     ]);
   });
 
+  it('isolates synchronous live listeners from intermediate and completed lifecycle results', async () => {
+    const failures: string[] = [];
+    const isolatedRunner = new JobRunner(store, {
+      onLiveEventError: (failure) => {
+        expect(Object.isFrozen(failure)).toBe(true);
+        expect(Object.isFrozen(failure.event)).toBe(true);
+        failures.push(failure.event.eventType);
+      },
+    });
+    const phase: Phase<Ctx> = {
+      name: 'work',
+      async *run() {
+        yield { type: 'phase', phase: 'work' };
+      },
+    };
+    const jobId = await isolatedRunner.create('throwing-live-listener', null);
+    isolatedRunner.on(`job:${jobId}`, () => {
+      throw new Error('live observer failed');
+    });
+
+    await expect(isolatedRunner.run(jobId, [phase], { cache: new PipelineCache() })).resolves.toMatchObject({
+      status: 'completed',
+    });
+    expect((await store.getJob(jobId))?.status).toBe('COMPLETED');
+    expect(failures).toEqual(['phase', 'done']);
+  });
+
+  it('observes rejected live listeners without an unhandled rejection', async () => {
+    const observed: string[] = [];
+    const isolatedRunner = new JobRunner(store, {
+      onLiveEventError: async (failure) => { observed.push(failure.event.eventType); },
+    });
+    const phase: Phase<Ctx> = {
+      name: 'work',
+      async *run() {
+        yield { type: 'phase', phase: 'work' };
+      },
+    };
+    const jobId = await isolatedRunner.create('rejecting-live-listener', null);
+    isolatedRunner.on(`job:${jobId}`, async () => {
+      throw new Error('live observer rejected');
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      await expect(isolatedRunner.run(jobId, [phase], { cache: new PipelineCache() })).resolves.toMatchObject({
+        status: 'completed',
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(observed).toEqual(['phase', 'done']);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('snapshots live listeners so callback mutations affect only later records', async () => {
+    const isolatedRunner = new JobRunner(store);
+    const phase: Phase<Ctx> = {
+      name: 'work',
+      async *run() {
+        yield { type: 'phase', phase: 'work' };
+      },
+    };
+    const jobId = await isolatedRunner.create('live-listener-snapshot', null);
+    const eventName = `job:${jobId}`;
+    const seen: string[] = [];
+    const second = () => { seen.push('second'); };
+    const third = () => { seen.push('third'); };
+    isolatedRunner.on(eventName, () => {
+      seen.push('first');
+      isolatedRunner.off(eventName, second);
+      isolatedRunner.on(eventName, third);
+    });
+    isolatedRunner.on(eventName, second);
+
+    await isolatedRunner.run(jobId, [phase], { cache: new PipelineCache() });
+    expect(seen).toEqual(['first', 'second', 'first', 'third']);
+  });
+
   it('start() exposes an immediate handle for deterministic subagent deployment', async () => {
     const phase: Phase<Ctx> = {
       name: 'work',

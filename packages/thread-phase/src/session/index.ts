@@ -19,6 +19,7 @@ export {
   type JobRunDrain,
   type JobRunHandle,
   type LiveEvent,
+  type LiveEventListenerFailure,
 } from './job-runner.js';
 
 export {

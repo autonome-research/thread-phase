@@ -876,6 +876,55 @@ describe('read-time staleness', () => {
     expect(listCalls).toBe(2);
   });
 
+  it('keeps reconciling after a live abandonment listener throws', async () => {
+    const records: JobRecord[] = ['first', 'second'].map((id) => ({
+      id,
+      name: id,
+      input: null,
+      status: 'STALE',
+      result: null,
+      error: null,
+      eventCount: 0,
+      createdAt: new Date(0),
+      startedAt: new Date(0),
+      completedAt: null,
+      ownerId: `owner-${id}`,
+      heartbeatEnabled: true,
+      heartbeatAt: new Date(0),
+    }));
+    let listed = false;
+    const fakeStore = new Proxy(store, {
+      get(target, property) {
+        if (property === 'listJobs') return async () => {
+          if (listed) return [];
+          listed = true;
+          return records;
+        };
+        if (property === 'finalizeAbandonedIfStale') {
+          return async (jobId: string, _before: Date, reason: string): Promise<EventRecord> => ({
+            id: jobId === 'first' ? 1 : 2,
+            jobId,
+            eventType: 'abandoned',
+            data: { type: 'abandoned', reason },
+            createdAt: new Date(0),
+          });
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as JobStore;
+    const failures: string[] = [];
+    const isolatedRunner = new JobRunner(fakeStore, {
+      onLiveEventError: (failure) => { failures.push(failure.event.jobId); },
+    });
+    for (const record of records) {
+      isolatedRunner.on(`job:${record.id}`, () => { throw new Error('observer failed'); });
+    }
+
+    await expect(isolatedRunner.reconcileAbandoned(1_000)).resolves.toEqual(['first', 'second']);
+    expect(failures).toEqual(['first', 'second']);
+  });
+
   it('re-queries after a recovered first page and reconciles later stale jobs', async () => {
     const runner = new JobRunner(store);
     const ids: string[] = [];

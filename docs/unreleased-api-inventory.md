@@ -54,6 +54,8 @@ Added stable types/fields:
 - `JobRunDrain`
 - `JobRunOptions.drains?: ReadonlyArray<JobRunDrain>`
 - `JobRunnerOptions.heartbeatTimeoutMs?: number`
+- `JobRunnerOptions.onLiveEventError?: (failure: LiveEventListenerFailure) => void | Promise<void>`
+- `LiveEventListenerFailure`
 
 Added stable value and methods:
 
@@ -102,6 +104,7 @@ No declaration file is missing or newly added relative to the published v6.0.0 p
 - Migration/schema verification and future-version rejection on the v6 `node:sqlite` backend.
 - Serialized, bounded, owner-observable heartbeat supervision.
 - Cancellation, heartbeat, pipeline, drain, setup, terminal-write, and completion precedence fixes.
+- Isolated snapshot dispatch for live job-event listeners so observer failures cannot affect lifecycle.
 - Subscriber throw/rejection isolation.
 - Sparse-array fanout attribution correctness.
 - Consistent Node.js 22.5+ engine requirements across the locked package set.

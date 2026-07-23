@@ -110,7 +110,7 @@ for await (const event of runPipeline([phaseA, phaseB, phaseC], ctx)) {
 
 ```ts
 const runner = new JobRunner(new SqliteJobStore('./jobs.db'));
-const jobId = runner.create('my-pipeline', input);
+const jobId = await runner.create('my-pipeline', input);
 
 // wire SIGTERM to runner.cancel so a stuck inference call exits cleanly
 process.on('SIGTERM', () => runner.cancel(jobId, 'systemd timeout'));
@@ -121,6 +121,8 @@ await runner.run(jobId, [phaseA, phaseB], ctx);
 ```
 
 `JobRunner` automatically composes its cancellation signal with any caller-provided signal and installs the result as `ctx.signal`. Phase code passes `ctx.signal` into `runAgentWithTools`, adapters, HTTP calls, or other abortable work. `runner.start(...)` returns an immediate run handle with `signal`, `cancel()`, and `result`; `signalFor(jobId)` remains available for existing integrations.
+
+Live `job:${jobId}` listeners are observational and cannot change authoritative lifecycle results: dispatch snapshots listeners, contains synchronous throws, and observes returned-promise rejections. Configure `onLiveEventError` on `JobRunner` to receive immutable `LiveEventListenerFailure` diagnostics; failures from that diagnostic callback are also contained.
 
 `JobStore` is asynchronous so SQLite, Postgres, Redis, and network-backed implementations share one consistency contract. The bundled `SqliteJobStore` uses Node's synchronous built-in `node:sqlite` hot path internally and exposes it through the same Promise-based interface. Node.js 22.5 or newer is required.
 
