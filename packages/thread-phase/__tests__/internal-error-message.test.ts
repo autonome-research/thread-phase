@@ -26,6 +26,16 @@ describe('toErrorMessage', () => {
   it('does not throw on objects with non-string .message fields', () => {
     expect(toErrorMessage({ message: 42 })).toBe('[object Object]');
   });
+
+  it('does not throw on hostile message access or coercion', () => {
+    const hostile = new Proxy(Object.create(null), {
+      get() { throw new Error('getter failed'); },
+      getPrototypeOf() { throw new Error('prototype failed'); },
+    });
+    expect(() => toErrorMessage(hostile)).not.toThrow();
+    expect(toErrorMessage(hostile)).toBe('<unserializable>');
+    expect(toErrorMessage(Object.create(null))).toBe('[object Object]');
+  });
 });
 
 describe('signalReasonToString', () => {

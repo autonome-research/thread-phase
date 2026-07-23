@@ -371,11 +371,13 @@ describe('JobRunner.cancel', () => {
 
   it('isolates synchronous live listeners from intermediate and completed lifecycle results', async () => {
     const failures: string[] = [];
+    const errors: Error[] = [];
     const isolatedRunner = new JobRunner(store, {
       onLiveEventError: (failure) => {
         expect(Object.isFrozen(failure)).toBe(true);
         expect(Object.isFrozen(failure.event)).toBe(true);
         failures.push(failure.event.eventType);
+        errors.push(failure.error);
       },
     });
     const phase: Phase<Ctx> = {
@@ -386,7 +388,7 @@ describe('JobRunner.cancel', () => {
     };
     const jobId = await isolatedRunner.create('throwing-live-listener', null);
     isolatedRunner.on(`job:${jobId}`, () => {
-      throw new Error('live observer failed');
+      throw Object.create(null);
     });
 
     await expect(isolatedRunner.run(jobId, [phase], { cache: new PipelineCache() })).resolves.toMatchObject({
@@ -394,6 +396,8 @@ describe('JobRunner.cancel', () => {
     });
     expect((await store.getJob(jobId))?.status).toBe('COMPLETED');
     expect(failures).toEqual(['phase', 'done']);
+    expect(errors).toHaveLength(2);
+    expect(errors.every((error) => error instanceof Error)).toBe(true);
   });
 
   it('observes rejected live listeners without an unhandled rejection', async () => {
@@ -438,10 +442,19 @@ describe('JobRunner.cancel', () => {
     const jobId = await isolatedRunner.create('live-listener-snapshot', null);
     const eventName = `job:${jobId}`;
     const seen: string[] = [];
-    const second = () => { seen.push('second'); };
-    const third = () => { seen.push('third'); };
-    isolatedRunner.on(eventName, () => {
+    const eventTypes: string[] = [];
+    const mutationResults: boolean[] = [];
+    const second = (event: { data: { type: string } }) => {
+      seen.push('second');
+      eventTypes.push(event.data.type);
+    };
+    const third = (event: { data: { type: string } }) => {
+      seen.push('third');
+      eventTypes.push(event.data.type);
+    };
+    isolatedRunner.on(eventName, (event: { data: Record<string, unknown> }) => {
       seen.push('first');
+      mutationResults.push(Reflect.set(event.data, 'type', 'mutated'));
       isolatedRunner.off(eventName, second);
       isolatedRunner.on(eventName, third);
     });
@@ -449,6 +462,8 @@ describe('JobRunner.cancel', () => {
 
     await isolatedRunner.run(jobId, [phase], { cache: new PipelineCache() });
     expect(seen).toEqual(['first', 'second', 'first', 'third']);
+    expect(mutationResults).toEqual([false, false]);
+    expect(eventTypes).toEqual(['phase', 'done']);
   });
 
   it('start() exposes an immediate handle for deterministic subagent deployment', async () => {

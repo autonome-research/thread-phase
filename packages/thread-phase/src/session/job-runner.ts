@@ -13,7 +13,7 @@ import * as os from 'node:os';
 import type { BasePipelineContext, Phase, PipelineEvent } from '../phase.js';
 import { runPipeline, type PipelineSummary } from '../orchestrator.js';
 import { JobOwnershipLostError, type JobOwnership, type JobStore } from './job-store.js';
-import { signalReasonToString } from '../internal/error-message.js';
+import { signalReasonToString, toErrorMessage } from '../internal/error-message.js';
 
 export interface LiveEvent {
   id: number;
@@ -348,7 +348,7 @@ export class JobRunner extends EventEmitter {
     };
 
     const recordHeartbeatFailure = (error: unknown): void => {
-      const failure = error instanceof Error ? error : new Error(String(error));
+      const failure = normalizeError(error);
       heartbeatStopped = true;
       if (heartbeatTimer !== null) {
         clearTimeout(heartbeatTimer);
@@ -480,7 +480,7 @@ export class JobRunner extends EventEmitter {
             `Heartbeat for job ${jobId} timed out after ${this.heartbeatTimeoutMs}ms`,
           );
         } catch (error: unknown) {
-          const failure = error instanceof Error ? error : new Error(String(error));
+          const failure = normalizeError(error);
           recordHeartbeatFailure(failure);
           throw failure;
         }
@@ -576,9 +576,7 @@ export class JobRunner extends EventEmitter {
       const primaryError = effectiveError instanceof LifecycleDrainAggregateError
         ? effectiveError
         : combineLifecycleErrors(effectiveError, drainFailures);
-      const message = effectiveError instanceof Error
-        ? effectiveError.message
-        : String(effectiveError);
+      const message = toErrorMessage(effectiveError);
       const persistenceFailures = await persistFailure(message);
       throw appendLifecycleErrors(primaryError, persistenceFailures);
     } finally {
@@ -615,11 +613,20 @@ export class JobRunner extends EventEmitter {
   }
 
   private emitRecord(record: { id: number; jobId: string; eventType: string; data: PipelineEvent; createdAt: Date }): void {
+    let data = record.data;
+    try {
+      // Freeze a shallow envelope clone so one listener cannot rewrite fields
+      // seen by later listeners, without freezing caller-owned nested payloads.
+      data = Object.freeze({ ...record.data }) as PipelineEvent;
+    } catch {
+      // PipelineEvent is contractually a plain object. If hostile reflection
+      // defeats cloning, retain the persisted value without affecting lifecycle.
+    }
     const event: LiveEvent = Object.freeze({
       id: record.id,
       jobId: record.jobId,
       eventType: record.eventType,
-      data: record.data,
+      data,
       createdAt: record.createdAt.toISOString(),
     });
     // EventEmitter's default dispatch lets listener failures escape. Lifecycle
@@ -642,7 +649,7 @@ export class JobRunner extends EventEmitter {
     if (!this.onLiveEventError) return;
     const failure: LiveEventListenerFailure = Object.freeze({
       event,
-      error: error instanceof Error ? error : new Error(String(error)),
+      error: normalizeError(error),
     });
     try {
       void Promise.resolve(this.onLiveEventError(failure)).catch(() => undefined);
@@ -660,7 +667,7 @@ class LifecycleDrainAggregateError extends AggregateError {
 
 function combineLifecycleErrors(primary: unknown, drainFailures: ReadonlyArray<unknown>): unknown {
   if (drainFailures.length === 0) return primary;
-  const message = primary instanceof Error ? primary.message : String(primary);
+  const message = toErrorMessage(primary);
   const combined = new AggregateError([primary, ...drainFailures], message);
   if (primary instanceof Error && primary.name === 'AbortError') combined.name = 'AbortError';
   return combined;
@@ -674,6 +681,15 @@ function appendLifecycleErrors(primary: unknown, additional: ReadonlyArray<unkno
     return combined;
   }
   return combineLifecycleErrors(primary, additional);
+}
+
+function normalizeError(value: unknown): Error {
+  try {
+    if (value instanceof Error) return value;
+  } catch {
+    // Hostile proxies may throw from instanceof; normalize them below.
+  }
+  return new Error(toErrorMessage(value));
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

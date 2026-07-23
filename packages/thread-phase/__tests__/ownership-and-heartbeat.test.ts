@@ -440,6 +440,38 @@ describe('heartbeat', () => {
     expect((await store.getEvents(id)).filter((event) => event.eventType === 'error')).toHaveLength(1);
   });
 
+  it('normalizes an unstringifiable automatic heartbeat rejection without orphaning it', async () => {
+    const runner = new JobRunner(store, { heartbeatMs: 10 });
+    const id = await runner.create('unstringifiable-heartbeat-failure', null);
+    vi.spyOn(store, 'refreshHeartbeat').mockRejectedValue(Object.create(null));
+    const phase: Phase<BasePipelineContext> = {
+      name: 'wait-for-abort',
+      async *run(ctx) {
+        await new Promise<void>((_resolve, reject) => {
+          ctx.signal?.addEventListener('abort', () => reject(ctx.signal?.reason), { once: true });
+        });
+      },
+    };
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      const error = await runner.run(id, [phase], { cache: new PipelineCache() })
+        .catch((caught: unknown) => caught);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('[object Object]');
+      expect(await store.getJob(id)).toMatchObject({
+        status: 'FAILED',
+        error: '[object Object]',
+      });
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('keeps heartbeat failure primary when FAILED finalization also rejects', async () => {
     const runner = new JobRunner(store, { heartbeatMs: 10 });
     const id = await runner.create('heartbeat-and-finalization-failure', null);
