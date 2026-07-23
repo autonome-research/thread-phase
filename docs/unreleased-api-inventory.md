@@ -91,6 +91,7 @@ Compared with the exact published v6.0.0 tarball, generated declaration bytes di
 - `agents/job-store-bridge.d.ts`
 - `agents/protocol.d.ts`
 - `index.d.ts`
+- `internal/error-message.d.ts` (internal, non-exported defensive normalization)
 - `patterns/bounded-fanout-of.d.ts`
 - `session/index.d.ts`
 - `session/job-runner.d.ts`
