@@ -185,9 +185,14 @@ export class JobRunner extends EventEmitter {
     }
     const staleBefore = new Date(Date.now() - staleAfterMs);
     const reconciled: string[] = [];
+    let previousRejectedPage: string | undefined;
     while (true) {
       const stale = await this.store.listJobs({ status: 'STALE', staleAfterMs, limit: 100 });
       if (stale.length === 0) break;
+      const pageIdentity = stale
+        .map((job) => `${job.id}\u0000${job.ownerId ?? ''}`)
+        .sort()
+        .join('\u0001');
       let transitioned = 0;
       for (const job of stale) {
         const terminal = await this.store.finalizeAbandonedIfStale(
@@ -201,9 +206,16 @@ export class JobRunner extends EventEmitter {
         this.emitRecord(terminal);
         reconciled.push(job.id);
       }
-      // Avoid an infinite loop with a backend whose stale snapshot is not
-      // refreshed or whose conditional transition rejects every candidate.
-      if (transitioned === 0 || stale.length < 100) break;
+      if (transitioned === 0) {
+        // A listed page may recover before its guarded transition. Re-query so
+        // those rows can disappear and expose later stale pages, but stop when
+        // a backend returns the same wholly rejected page twice.
+        if (previousRejectedPage === pageIdentity) break;
+        previousRejectedPage = pageIdentity;
+        continue;
+      }
+      previousRejectedPage = undefined;
+      if (stale.length < 100) break;
     }
     return reconciled;
   }

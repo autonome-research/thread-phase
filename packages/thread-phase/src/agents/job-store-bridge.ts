@@ -182,7 +182,9 @@ export function createAgentEventPersistenceBridge(
     }) satisfies AgentEventPersistenceFailure;
 
     const observations: Promise<void>[] = [];
-    for (const handler of failureHandlers) {
+    // Subscription changes made by an observer apply only to later failure
+    // notifications, matching AgentEventBus snapshot dispatch semantics.
+    for (const handler of [...failureHandlers]) {
       try {
         observations.push(
           Promise.resolve(observerContext.run(batch, () => handler(failure))).then(

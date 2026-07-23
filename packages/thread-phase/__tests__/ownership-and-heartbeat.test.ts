@@ -781,6 +781,41 @@ describe('read-time staleness', () => {
     expect((await store.listJobs({ status: 'STALE', staleAfterMs: 1000, limit: 200 }))).toHaveLength(0);
   });
 
+  it('re-queries after a recovered first page and reconciles later stale jobs', async () => {
+    const runner = new JobRunner(store);
+    const ids: string[] = [];
+    for (let index = 0; index < 105; index++) {
+      const id = await store.createJob(`recover-page-${index}`, null);
+      await store.setRunning(id, { ownerId: `owner-${index}`, heartbeatEnabled: true });
+      ids.push(id);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2100));
+
+    const originalList = store.listJobs.bind(store);
+    const refreshed = new Set<string>();
+    let firstPage = true;
+    vi.spyOn(store, 'listJobs').mockImplementation(async (options) => {
+      const listed = await originalList(options);
+      if (firstPage) {
+        firstPage = false;
+        for (const job of listed) {
+          refreshed.add(job.id);
+          await store.heartbeat(job.id, job.ownerId);
+        }
+      }
+      return listed;
+    });
+
+    const reconciled = await runner.reconcileAbandoned(1000);
+    const expected = ids.filter((id) => !refreshed.has(id));
+    expect(refreshed.size).toBe(100);
+    expect(new Set(reconciled)).toEqual(new Set(expected));
+    expect(reconciled).toHaveLength(5);
+    for (const id of expected) {
+      expect((await store.getJob(id))?.status).toBe('ABANDONED');
+    }
+  });
+
   it('does not abandon a stale-listed owner that heartbeats before the atomic transition', async () => {
     const runner = new JobRunner(store);
     const id = await store.createJob('recovered-owner', null);

@@ -150,6 +150,36 @@ describe('persistAgentEventsToJobStore', () => {
     store.close();
   });
 
+  it('snapshots failure observers so callback mutations affect only later notifications', async () => {
+    const store = newStore();
+    const jobId = await store.createJob('observer-snapshot', null);
+    const bus = createEventBus();
+    store.appendEvent = async () => { throw new Error('append failed'); };
+    const bridge = persistAgentEventsToJobStore(bus, store, jobId, { capacity: 1 });
+    const seen: string[] = [];
+    const third = () => { seen.push('third'); };
+    let removeSecond = () => {};
+
+    bridge.onFailure(() => {
+      seen.push('first');
+      removeSecond();
+      bridge.onFailure(third);
+    });
+    removeSecond = bridge.onFailure(() => { seen.push('second'); });
+
+    bus.emit({ type: 'text', source: 'mock', delta: 'one' });
+    await bridge.flush();
+    expect(seen).toEqual(['first', 'second']);
+
+    seen.length = 0;
+    bus.emit({ type: 'text', source: 'mock', delta: 'two' });
+    await bridge.flush();
+    expect(seen).toEqual(['first', 'third']);
+
+    await bridge.close();
+    store.close();
+  });
+
   it('delivers an overflow storm as bounded immutable batches and flushes pending observation', async () => {
     const store = newStore();
     const jobId = await store.createJob('observer-backpressure', null);
