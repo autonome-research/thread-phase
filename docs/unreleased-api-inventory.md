@@ -63,6 +63,8 @@ Added stable value and methods:
 - `JobRunner.heartbeatAsOperator(jobId)`
 - optional `JobStore.refreshHeartbeat?(jobId, ownerId): Promise<boolean>`
 - `SqliteJobStore.refreshHeartbeat(jobId, ownerId): Promise<boolean>` implementation
+- `JobListCursor`, `ListJobsPageOptions`, and `CursorJobStore` as an additive cursor capability that leaves the published base `JobStore` contract unchanged
+- `SqliteJobStore.listJobsPage(...)` for deterministic bounded continuation of newest-first scans
 
 Compatibility note: `JobRunner.heartbeat(jobId)` remains as a deprecated alias. Existing structural stores remain compatible through one-time `enableHeartbeat()` plus owner-scoped `heartbeat()` fallback; their legacy boolean semantics are not strengthened retroactively.
 

@@ -138,6 +138,22 @@ describe('AgentEventBus handler-failure contract', () => {
     expect(observed[0]?.error.message).toBe('<unserializable>');
   });
 
+  it('clones a hostile Error proxy before reporting it', () => {
+    const bus = createEventBus();
+    const observed: AgentEventHandlerFailure[] = [];
+    const hostileError = new Proxy(new Error('hidden'), {
+      get() { throw new Error('error getter failed'); },
+    });
+    bus.onHandlerError((failure) => observed.push(failure));
+    bus.on(() => { throw hostileError; });
+
+    expect(() => bus.emit(event)).not.toThrow();
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.error).toBeInstanceOf(Error);
+    expect(Object.is(observed[0]?.error, hostileError)).toBe(false);
+    expect(typeof observed[0]?.error.message).toBe('string');
+  });
+
   it('normalizes a hostile asynchronous rejection without an unhandled rejection', async () => {
     const bus = createEventBus();
     const observed = deferred<AgentEventHandlerFailure>();

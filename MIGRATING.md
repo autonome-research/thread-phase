@@ -53,6 +53,7 @@ Terminal setters return `boolean`; `false` means another owner or terminal trans
 - The runner automatically composes and installs `ctx.signal`.
 - Cancellation persists `cancellation_requested` followed by atomic `CANCELLED` + `cancelled` terminal state/event.
 - `reconcileAbandoned(...)` atomically verifies the heartbeat cutoff and owner identity.
+- `CursorJobStore.listJobsPage(...)` is an additive capability using an optional `{ createdAt, id }` cursor for deterministic `createdAt DESC, id DESC` continuation. The base `JobStore` contract is unchanged; custom stores remain structurally compatible, but should implement `CursorJobStore` to let reconciliation advance past a full page of rows that lose their guarded transition.
 - Automatic staleness is opt-in through `heartbeatMs`; calling manual `ctx.heartbeat()` opts the run in on first use.
 
 ## Fanout and SSE

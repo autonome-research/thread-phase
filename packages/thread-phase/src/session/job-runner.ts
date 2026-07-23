@@ -12,7 +12,13 @@ import { EventEmitter } from 'events';
 import * as os from 'node:os';
 import type { BasePipelineContext, Phase, PipelineEvent } from '../phase.js';
 import { runPipeline, type PipelineSummary } from '../orchestrator.js';
-import { JobOwnershipLostError, type JobOwnership, type JobStore } from './job-store.js';
+import {
+  JobOwnershipLostError,
+  type CursorJobStore,
+  type JobListCursor,
+  type JobOwnership,
+  type JobStore,
+} from './job-store.js';
 import { signalReasonToString, toError, toErrorMessage } from '../internal/error-message.js';
 
 export interface LiveEvent {
@@ -200,16 +206,21 @@ export class JobRunner extends EventEmitter {
     const staleBefore = new Date(Date.now() - staleAfterMs);
     const reconciled: string[] = [];
     let previousRejectedPage: string | undefined;
+    let before: JobListCursor | undefined;
+    const cursorStore = asCursorJobStore(this.store);
     while (true) {
       // Keep listing and guarded finalization on the same invocation-time
       // cutoff. Expressing that fixed cutoff through the duration-based store
       // API requires increasing staleAfterMs as the scan itself ages.
       const listingStaleAfterMs = Math.max(1, Date.now() - staleBefore.getTime());
-      const stale = await this.store.listJobs({
-        status: 'STALE',
+      const listOptions = {
+        status: 'STALE' as const,
         staleAfterMs: listingStaleAfterMs,
         limit: 100,
-      });
+      };
+      const stale = cursorStore
+        ? await cursorStore.listJobsPage({ ...listOptions, before })
+        : await this.store.listJobs(listOptions);
       if (stale.length === 0) break;
       const pageIdentity = stale
         .map((job) => `${job.id}\u0000${job.ownerId ?? ''}`)
@@ -229,14 +240,22 @@ export class JobRunner extends EventEmitter {
         reconciled.push(job.id);
       }
       if (transitioned === 0) {
-        // A listed page may recover before its guarded transition. Re-query so
-        // those rows can disappear and expose later stale pages, but stop when
-        // a backend returns the same wholly rejected page twice.
+        // A listed page may recover before its guarded transition. Advance a
+        // stable cursor so rejected rows cannot hide actionable later pages.
+        // Stores with the additive cursor capability advance past rejected
+        // rows. Base-contract stores re-query once; repeated-page detection
+        // keeps that compatibility fallback bounded instead of spinning.
         if (previousRejectedPage === pageIdentity) break;
         previousRejectedPage = pageIdentity;
+        if (cursorStore) {
+          if (stale.length < 100) break;
+          const last = stale[stale.length - 1]!;
+          before = { createdAt: last.createdAt, id: last.id };
+        }
         continue;
       }
       previousRejectedPage = undefined;
+      before = undefined;
       if (stale.length < 100) break;
     }
     return reconciled;
@@ -685,6 +704,13 @@ function appendLifecycleErrors(primary: unknown, additional: ReadonlyArray<unkno
     // Hostile errors fall back to ordinary safe aggregation.
   }
   return combineLifecycleErrors(primary, additional);
+}
+
+function asCursorJobStore(store: JobStore): CursorJobStore | undefined {
+  const candidate = store as Partial<CursorJobStore>;
+  return typeof candidate.listJobsPage === 'function'
+    ? candidate as CursorJobStore
+    : undefined;
 }
 
 function isErrorNamed(value: unknown, name: string): value is Error {

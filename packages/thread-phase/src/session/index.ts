@@ -7,6 +7,9 @@ export {
   type JobStatus,
   type JobOwnership,
   type ListJobsOptions,
+  type JobListCursor,
+  type ListJobsPageOptions,
+  type CursorJobStore,
   type GetJobOptions,
 } from './job-store.js';
 

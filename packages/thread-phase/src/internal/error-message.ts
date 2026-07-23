@@ -20,7 +20,8 @@
 export function toErrorMessage(err: unknown): string {
   try {
     if (err instanceof Error) {
-      return err.message;
+      const message: unknown = err.message;
+      if (typeof message === 'string') return message;
     }
   } catch {
     // Hostile proxies may throw from instanceof or message access.
@@ -57,9 +58,22 @@ export function toErrorMessage(err: unknown): string {
  */
 export function toError(err: unknown): Error {
   try {
-    if (err instanceof Error) return err;
+    if (err instanceof Error) {
+      // Preserve identity only for ordinary, safely inspectable Errors. A Proxy
+      // can pass instanceof while throwing from any later diagnostic access.
+      const message: unknown = err.message;
+      const name: unknown = err.name;
+      const stack: unknown = err.stack;
+      if (
+        typeof message === 'string' &&
+        typeof name === 'string' &&
+        (stack === undefined || typeof stack === 'string')
+      ) {
+        return err;
+      }
+    }
   } catch {
-    // Hostile proxies may throw from instanceof; normalize them below.
+    // Hostile proxies and accessors are cloned into a plain Error below.
   }
   return new Error(toErrorMessage(err));
 }

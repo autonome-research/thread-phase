@@ -845,7 +845,7 @@ describe('read-time staleness', () => {
     let page = 0;
     const fakeStore = new Proxy(store, {
       get(target, property) {
-        if (property === 'listJobs') {
+        if (property === 'listJobs' || property === 'listJobsPage') {
           return async (options: { staleAfterMs?: number } = {}) => {
             listingCutoffs.push(fakeNow - (options.staleAfterMs ?? 0));
             const listed = pages[page++] ?? [];
@@ -897,6 +897,7 @@ describe('read-time staleness', () => {
     let listCalls = 0;
     const fakeStore = new Proxy(store, {
       get(target, property) {
+        if (property === 'listJobsPage') return undefined;
         if (property === 'listJobs') return async () => { listCalls += 1; return [record]; };
         if (property === 'finalizeAbandonedIfStale') return async () => null;
         const value = Reflect.get(target, property, target) as unknown;
@@ -927,7 +928,7 @@ describe('read-time staleness', () => {
     let listed = false;
     const fakeStore = new Proxy(store, {
       get(target, property) {
-        if (property === 'listJobs') return async () => {
+        if (property === 'listJobs' || property === 'listJobsPage') return async () => {
           if (listed) return [];
           listed = true;
           return records;

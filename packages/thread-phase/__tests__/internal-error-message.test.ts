@@ -36,6 +36,20 @@ describe('toErrorMessage', () => {
     expect(() => toErrorMessage(hostile)).not.toThrow();
     expect(toErrorMessage(hostile)).toBe('<unserializable>');
     expect(toError(hostile)).toMatchObject({ message: '<unserializable>' });
+
+    const hostileError = new Proxy(new Error('hidden'), {
+      get() { throw new Error('error getter failed'); },
+    });
+    const normalized = toError(hostileError);
+    expect(normalized).toBeInstanceOf(Error);
+    expect(Object.is(normalized, hostileError)).toBe(false);
+    expect(typeof normalized.message).toBe('string');
+
+    const nonStringMessage = new Error('original');
+    Object.defineProperty(nonStringMessage, 'message', { value: 42 });
+    expect(typeof toErrorMessage(nonStringMessage)).toBe('string');
+    expect(typeof toError(nonStringMessage).message).toBe('string');
+
     expect(toErrorMessage(Object.create(null))).toBe('[object Object]');
   });
 });

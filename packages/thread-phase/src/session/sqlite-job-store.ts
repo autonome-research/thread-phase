@@ -18,14 +18,15 @@ import { randomUUID } from 'crypto';
 import type { PipelineEvent } from '../phase.js';
 import { JobOwnershipLostError } from './job-store.js';
 import type {
+  CursorJobStore,
   EventRecord,
   GetJobOptions,
   JobFinalization,
   JobOwnership,
   JobRecord,
   JobStatus,
-  JobStore,
   ListJobsOptions,
+  ListJobsPageOptions,
 } from './job-store.js';
 
 /**
@@ -308,7 +309,7 @@ function verifyExclusivityIndex(db: SqliteDriver): void {
   }
 }
 
-export class SqliteJobStore implements JobStore {
+export class SqliteJobStore implements CursorJobStore {
   private db: SqliteDriver;
 
   constructor(dbPath: string = defaultDbPath()) {
@@ -627,6 +628,17 @@ export class SqliteJobStore implements JobStore {
   }
 
   async listJobs(options: ListJobsOptions = {}): Promise<JobRecord[]> {
+    return this.queryJobs(options);
+  }
+
+  async listJobsPage(options: ListJobsPageOptions = {}): Promise<JobRecord[]> {
+    // Route the first page through the ordinary method so wrappers and test
+    // doubles that intentionally observe/override listJobs retain that hook.
+    if (options.before === undefined) return this.listJobs(options);
+    return this.queryJobs(options);
+  }
+
+  private async queryJobs(options: ListJobsPageOptions): Promise<JobRecord[]> {
     const limit = options.limit ?? 50;
     // Status filter handling: 'STALE' is read-computed, never persisted,
     // so we translate a STALE filter into "RUNNING with old heartbeat" at
@@ -639,6 +651,11 @@ export class SqliteJobStore implements JobStore {
       WHERE (? IS NULL OR j.name = ?)
         AND (
           ? IS NULL
+          OR j.created_at < ?
+          OR (j.created_at = ? AND j.id < ?)
+        )
+        AND (
+          ? IS NULL
           OR (? = 'STALE'
               AND j.status = 'RUNNING'
               AND ? IS NOT NULL
@@ -646,10 +663,14 @@ export class SqliteJobStore implements JobStore {
               AND (j.heartbeat_at IS NULL OR j.heartbeat_at < datetime('now', ? || ' seconds')))
           OR (? != 'STALE' AND j.status = ?)
         )
-      ORDER BY j.created_at DESC
+      ORDER BY j.created_at DESC, j.id DESC
       LIMIT ?
     `;
     const name = options.name ?? null;
+    const beforeCreatedAt = options.before
+      ? options.before.createdAt.toISOString().slice(0, 19).replace('T', ' ')
+      : null;
+    const beforeId = options.before?.id ?? null;
     const staleSeconds = staleAfterMs !== undefined ? `-${staleAfterMs / 1000}` : null;
     const staleAfterMsParam = staleAfterMs !== undefined ? staleAfterMs : null;
     const rows = this.db
@@ -657,6 +678,10 @@ export class SqliteJobStore implements JobStore {
       .all(
         name,
         name,
+        beforeCreatedAt,
+        beforeCreatedAt,
+        beforeCreatedAt,
+        beforeId,
         status,
         status,
         staleAfterMsParam,

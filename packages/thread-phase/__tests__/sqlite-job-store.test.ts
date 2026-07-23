@@ -923,4 +923,18 @@ describe('SqliteJobStore — listJobs', () => {
     for (let i = 0; i < 5; i++) await store.createJob('p', null);
     expect(await store.listJobs({ limit: 2 })).toHaveLength(2);
   });
+
+  it('continues a deterministic scan with the before cursor', async () => {
+    for (let i = 0; i < 5; i++) await store.createJob('cursor', null);
+    const all = await store.listJobs({ name: 'cursor', limit: 10 });
+    const first = await store.listJobs({ name: 'cursor', limit: 2 });
+    const boundary = first.at(-1)!;
+    const rest = await store.listJobsPage({
+      name: 'cursor',
+      limit: 10,
+      before: { createdAt: boundary.createdAt, id: boundary.id },
+    });
+
+    expect([...first, ...rest].map((job) => job.id)).toEqual(all.map((job) => job.id));
+  });
 });

@@ -149,6 +149,27 @@ export interface ListJobsOptions {
   staleAfterMs?: number;
 }
 
+/** Stable cursor for deterministic newest-first job scans. */
+export interface JobListCursor {
+  readonly createdAt: Date;
+  readonly id: string;
+}
+
+/** Options for cursor-capable job-store scans. */
+export interface ListJobsPageOptions extends ListJobsOptions {
+  /** Return records strictly after this `createdAt DESC, id DESC` boundary. */
+  before?: JobListCursor;
+}
+
+/**
+ * Additive cursor capability used by complete bounded lifecycle reconciliation.
+ * The base {@link JobStore} contract remains unchanged for published-store
+ * compatibility; custom stores may implement this interface incrementally.
+ */
+export interface CursorJobStore extends JobStore {
+  listJobsPage(options?: ListJobsPageOptions): Promise<JobRecord[]>;
+}
+
 /** Options for {@link JobStore.getJob}. */
 export interface GetJobOptions {
   /** See {@link ListJobsOptions.staleAfterMs}. */

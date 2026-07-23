@@ -185,11 +185,10 @@ export interface AgentEventHandlerFailure {
 
 export interface AgentEventBus {
   /**
-   * Dispatch synchronously to a snapshot of current subscribers. Subscriptions
-   * added or removed during dispatch affect only later events.
-   *
-   * Returned promises are observed but never awaited. Subscriber failures do
-   * not escape from emit or stop fan-out to the remaining subscribers.
+   * Dispatch an event to subscribers. This minimal structural protocol does
+   * not prescribe snapshot or failure-isolation behavior for third-party and
+   * legacy implementations; use {@link createEventBus} when those guarantees
+   * are required.
    */
   emit(event: AgentEvent): void;
   on(handler: AgentEventHandler): () => void;
@@ -200,6 +199,9 @@ export interface AgentEventBus {
  *
  * `AgentEventBus` intentionally remains the emit/on-only protocol so legacy
  * and third-party bus implementations stay structurally assignable.
+ * `createEventBus()` dispatches synchronously to a subscriber snapshot,
+ * observes returned promises without awaiting them, and contains subscriber
+ * failures so they neither escape `emit()` nor stop remaining subscribers.
  */
 export interface ObservableAgentEventBus extends AgentEventBus {
   /**
