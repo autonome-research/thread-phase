@@ -45,7 +45,10 @@ Locked versions across all three.
 
 - [`AGENTS.md`](./AGENTS.md) — full guide for LLM agents generating thread-phase code.
 - [`EXTENDING.md`](./EXTENDING.md) — extension contract (triggers, adapters, pipelines), three discovery tiers, and the `thread-phase.extensions` manifest format for extensions that need their own npm deps.
-- [`MIGRATING.md`](./MIGRATING.md) — v2 → v3 upgrade notes.
+- [`MIGRATING.md`](./MIGRATING.md) — version-by-version upgrade notes.
+- [`ROADMAP.md`](./ROADMAP.md) — project direction and release priorities.
+- [`docs/developer-experience-roadmap.md`](./docs/developer-experience-roadmap.md) — known lifecycle/DX shortcomings, adoption priorities, and acceptance criteria.
+- [`docs/unreleased-api-inventory.md`](./docs/unreleased-api-inventory.md) — stable API additions since published v6.0.0 and release-line evidence.
 - [`packages/thread-phase/docs/`](./packages/thread-phase/docs) — patterns, recipes, cancellation.
 
 ## License

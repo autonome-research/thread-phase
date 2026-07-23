@@ -14,6 +14,8 @@
  * timer-trigger, agent runner) consume it directly.
  */
 
+import { toError, toErrorMessage } from './error-message.js';
+
 export function abortableSleep(
   ms: number,
   signal?: AbortSignal,
@@ -35,24 +37,18 @@ export function abortableSleep(
 }
 
 function toAbortError(reason: unknown): Error {
+  const normalized = toError(reason);
+  const message = typeof reason === 'string'
+    ? reason
+    : normalized === reason
+      ? toErrorMessage(normalized)
+      : 'aborted';
   // Prefer the native DOMException(AbortError) so callers using
   // `e.name === 'AbortError'` (the platform idiom) keep working.
   if (typeof DOMException === 'function') {
-    const message =
-      typeof reason === 'string'
-        ? reason
-        : reason instanceof Error
-          ? reason.message
-          : 'aborted';
     return new DOMException(message, 'AbortError');
   }
-  const err = new Error(
-    typeof reason === 'string'
-      ? reason
-      : reason instanceof Error
-        ? reason.message
-        : 'aborted',
-  );
+  const err = new Error(message);
   err.name = 'AbortError';
   return err;
 }

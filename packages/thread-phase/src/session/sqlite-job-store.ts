@@ -16,15 +16,17 @@
 import { SqliteDriver } from './sqlite-driver.js';
 import { randomUUID } from 'crypto';
 import type { PipelineEvent } from '../phase.js';
+import { JobOwnershipLostError } from './job-store.js';
 import type {
+  CursorJobStore,
   EventRecord,
   GetJobOptions,
   JobFinalization,
   JobOwnership,
   JobRecord,
   JobStatus,
-  JobStore,
   ListJobsOptions,
+  ListJobsPageOptions,
 } from './job-store.js';
 
 /**
@@ -36,11 +38,13 @@ import type {
  *
  * To add a migration: append a new entry with version = (last + 1). NEVER
  * edit a previously-shipped migration — that would leave older databases in
- * an inconsistent state.
+ * an inconsistent state. Versions 1–4 are the published v5.0.0 history.
+ * Version 5 is the first v5.1.0 migration; unpublished candidate migrations
+ * were collapsed before release and are intentionally unsupported.
  */
 interface Migration {
   version: number;
-  up: string;
+  up: string | ((db: SqliteDriver) => void);
 }
 
 const MIGRATIONS: Migration[] = [
@@ -109,7 +113,57 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE job ADD COLUMN heartbeat_enabled INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    // Database-enforced invariant for jobs created through acquireExclusive.
+    // Ordinary createJob/setRunning jobs remain unconstrained and may share a
+    // name; exclusivity is opt-in rather than a global pipeline-name lock.
+    version: 5,
+    up: migrateExclusivity,
+  },
 ];
+
+const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
+
+function assertSupportedSchemaVersion(version: number): void {
+  if (version > LATEST_SCHEMA_VERSION) {
+    throw new Error(
+      `SQLite schema version ${version} is newer than supported version ${LATEST_SCHEMA_VERSION}`,
+    );
+  }
+}
+
+function enableWalWithRetry(db: SqliteDriver, timeoutMs = 5_000): void {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      db.pragma('journal_mode = WAL');
+      return;
+    } catch (error: unknown) {
+      const details = error as {
+        code?: unknown;
+        errcode?: unknown;
+        errstr?: unknown;
+        message?: unknown;
+      };
+      const code = String(details?.code ?? '');
+      const errcode = Number(details?.errcode);
+      const message = `${String(details?.message ?? '')} ${String(details?.errstr ?? '')}`;
+      const busy =
+        code === 'SQLITE_BUSY' ||
+        code === 'SQLITE_LOCKED' ||
+        errcode === 5 ||
+        errcode === 6 ||
+        /database\s+(?:is\s+)?(?:busy|locked)/i.test(message);
+      if (!busy || Date.now() >= deadline) {
+        throw error;
+      }
+      // journal_mode changes do not consistently honor SQLite's busy handler.
+      // Constructor initialization is synchronous, so use a bounded blocking
+      // wait before retrying rather than racing fresh-database openers.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+}
 
 interface JobRow {
   id: string;
@@ -149,14 +203,128 @@ function parseDate(s: string | null): Date | null {
   return s ? new Date(s + 'Z') : null;
 }
 
-export class SqliteJobStore implements JobStore {
+const EXCLUSIVITY_INDEX = 'idx_job_one_running_per_name';
+
+function migrateExclusivity(db: SqliteDriver): void {
+  db.exec(`
+    ALTER TABLE job ADD COLUMN is_exclusive INTEGER NOT NULL DEFAULT 0
+      CHECK (is_exclusive IN (0, 1));
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_job_one_running_per_name
+      ON job (name)
+      WHERE status = 'RUNNING' AND is_exclusive = 1;
+  `);
+  verifyExclusivityColumn(db);
+  verifyExclusivityIndex(db);
+}
+
+function verifyExclusivityColumn(db: SqliteDriver): void {
+  const columns = db.pragma('table_info(job)') as Array<{
+    name: string;
+    type: string;
+    notnull: number;
+    dflt_value: string | null;
+  }>;
+  const matches = columns.filter((column) => column.name === 'is_exclusive');
+  const column = matches.length === 1 ? matches[0] : undefined;
+  const table = db.prepare(
+    `SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'job'`,
+  ).get() as { sql: string | null } | undefined;
+  const hasExpectedCheck = table?.sql !== null && table?.sql !== undefined &&
+    /(?:is_exclusive|"is_exclusive"|`is_exclusive`|\[is_exclusive\])\s+INTEGER\s+NOT\s+NULL\s+DEFAULT\s+0\s+CHECK\s*\(\s*(?:is_exclusive|"is_exclusive"|`is_exclusive`|\[is_exclusive\])\s+IN\s*\(\s*0\s*,\s*1\s*\)\s*\)/i.test(table.sql);
+  const invalidValue = column
+    ? db.prepare(
+        `SELECT 1 FROM job WHERE is_exclusive IS NULL OR is_exclusive NOT IN (0, 1) LIMIT 1`,
+      ).get()
+    : undefined;
+  if (
+    !column ||
+    column.type.toUpperCase() !== 'INTEGER' ||
+    column.notnull !== 1 ||
+    column.dflt_value !== '0' ||
+    !hasExpectedCheck ||
+    invalidValue !== undefined
+  ) {
+    throw new Error(
+      'SQLite migration 5 schema collision: job.is_exclusive is not the expected constrained flag',
+    );
+  }
+}
+
+/**
+ * CREATE INDEX IF NOT EXISTS is intentionally paired with verification: SQLite
+ * otherwise treats any same-named index as success, even when it is non-unique,
+ * targets another column, or has a different partial predicate.
+ */
+function verifyExclusivityIndex(db: SqliteDriver): void {
+  // Trigger names occupy a separate SQLite namespace and can collide with an
+  // index name. Inspect every matching schema object so row order can never
+  // make a collision look authoritative.
+  const schemaObjects = db
+    .prepare(`SELECT type, tbl_name, sql FROM sqlite_schema WHERE name = ?`)
+    .all(EXCLUSIVITY_INDEX) as Array<{
+      type: string;
+      tbl_name: string;
+      sql: string | null;
+    }>;
+  const schema = schemaObjects.length === 1 ? schemaObjects[0] : undefined;
+  const listed = (db.pragma('index_list(job)') as Array<{
+    name: string;
+    unique: number;
+    partial: number;
+  }>).find((index) => index.name === EXCLUSIVITY_INDEX);
+  const keyColumns = schema?.type === 'index'
+    ? (db.pragma(`index_xinfo('${EXCLUSIVITY_INDEX}')`) as Array<{
+        name: string | null;
+        coll: string;
+        desc: number;
+        key: number;
+      }>).filter((column) => column.key === 1)
+    : [];
+  const predicate = schema?.sql?.match(/\bWHERE\b([\s\S]*)$/i)?.[1]
+    ?.replace(/;\s*$/, '')
+    .trim();
+  // SQLite identifiers and keywords are case-insensitive. Accept harmless
+  // identifier quoting and parenthesization, but retain exact BINARY matching
+  // for the RUNNING value and reject any wider or narrower predicate.
+  const predicateMatch = predicate?.match(
+    /^\(*\s*(?:status|"status"|`status`|\[status\])\s*=\s*'([^']*)'\s*\)*\s+AND\s+\(*\s*(?:is_exclusive|"is_exclusive"|`is_exclusive`|\[is_exclusive\])\s*=\s*1\s*\)*$/i,
+  );
+  const expectedPredicate = predicateMatch?.[1] === 'RUNNING';
+
+  const valid =
+    schema?.type === 'index' &&
+    schema.tbl_name === 'job' &&
+    listed?.unique === 1 &&
+    listed.partial === 1 &&
+    keyColumns.length === 1 &&
+    keyColumns[0]?.name === 'name' &&
+    keyColumns[0].coll === 'BINARY' &&
+    keyColumns[0].desc === 0 &&
+    expectedPredicate;
+  if (!valid) {
+    throw new Error(
+      `SQLite migration 5 schema collision: ${EXCLUSIVITY_INDEX} is not the expected unique partial index`,
+    );
+  }
+}
+
+export class SqliteJobStore implements CursorJobStore {
   private db: SqliteDriver;
 
   constructor(dbPath: string = defaultDbPath()) {
     this.db = new SqliteDriver(dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
-    this.runMigrations();
+    try {
+      const initialVersion =
+        (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+      assertSupportedSchemaVersion(initialVersion);
+      enableWalWithRetry(this.db);
+      this.db.pragma('foreign_keys = ON');
+      this.runMigrations();
+    } catch (error: unknown) {
+      this.db.close();
+      throw error;
+    }
   }
 
   /**
@@ -167,16 +335,42 @@ export class SqliteJobStore implements JobStore {
    * Idempotent: running twice is a no-op once the schema is current.
    */
   private runMigrations(): void {
-    const current = (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+    let observedVersion =
+      (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+    assertSupportedSchemaVersion(observedVersion);
     for (const m of MIGRATIONS) {
-      if (m.version <= current) continue;
+      if (m.version <= observedVersion) continue;
+      // Take the write lock before deciding to apply a pending migration. A
+      // concurrent opener may have completed it while this connection waited,
+      // so user_version must be checked again inside the transaction.
       this.db.transaction(() => {
-        this.db.exec(m.up);
+        const lockedVersion =
+          (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+        assertSupportedSchemaVersion(lockedVersion);
+        if (m.version <= lockedVersion) return;
+        if (typeof m.up === 'string') this.db.exec(m.up);
+        else m.up(this.db);
         // user_version is an integer pragma; pragmas don't support parameter
         // binding, so interpolate the integer directly.
         this.db.pragma(`user_version = ${m.version}`);
-      })();
+      }).immediate();
+      observedVersion = m.version;
     }
+
+    // user_version is not proof that the invariant still exists: an operator,
+    // older binary, or interrupted manual repair may have removed or replaced
+    // the index after migration. Verify the current schema on every open while
+    // holding the write lock so concurrent schema changes cannot race this
+    // initialization check.
+    this.db.transaction(() => {
+      const finalVersion =
+        (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+      assertSupportedSchemaVersion(finalVersion);
+      if (finalVersion >= 5) {
+        verifyExclusivityColumn(this.db);
+        verifyExclusivityIndex(this.db);
+      }
+    }).immediate();
   }
 
   // -------------------------------------------------------------------------
@@ -192,12 +386,11 @@ export class SqliteJobStore implements JobStore {
   }
 
   async acquireExclusive(name: string, input: unknown): Promise<string | null> {
-    // SqliteDriver's `transaction(fn)` wraps the callback in BEGIN…COMMIT
-    // (deferred, but sqlite upgrades to a write lock the moment we INSERT,
-    // which serializes concurrent acquireExclusive calls on the same DB
-    // file). The check + insert therefore happens atomically:
-    // a second caller racing on the same name will see the row we just
-    // inserted (status='RUNNING') and return null.
+    // Take the write lock before reading. A deferred transaction can let two
+    // processes both observe no RUNNING row and then make one fail while
+    // upgrading its stale read transaction. BEGIN IMMEDIATE serializes the
+    // check + insert, so the loser observes the committed winner and returns
+    // the contractually promised null rather than leaking SQLITE_BUSY.
     const tx = this.db.transaction((n: string, i: unknown): string | null => {
       const existing = this.db
         .prepare(`SELECT id FROM job WHERE name = ? AND status = 'RUNNING' LIMIT 1`)
@@ -206,13 +399,13 @@ export class SqliteJobStore implements JobStore {
       const id = randomUUID();
       this.db
         .prepare(
-          `INSERT INTO job (id, name, input, status, started_at)
-           VALUES (?, ?, ?, 'RUNNING', datetime('now'))`,
+          `INSERT INTO job (id, name, input, status, started_at, is_exclusive)
+           VALUES (?, ?, ?, 'RUNNING', datetime('now'), 1)`,
         )
         .run(id, n, JSON.stringify(i));
       return id;
     });
-    return tx(name, input);
+    return tx.immediate(name, input);
   }
 
   async setRunning(jobId: string, ownership?: JobOwnership): Promise<boolean> {
@@ -222,7 +415,7 @@ export class SqliteJobStore implements JobStore {
     // null out previously-recorded values.
     const result = this.db
       .prepare(
-        `UPDATE job SET status       = 'RUNNING',
+        `UPDATE job AS target SET status       = 'RUNNING',
                         started_at   = COALESCE(started_at, datetime('now')),
                         session_id   = COALESCE(?, session_id),
                         pid          = COALESCE(?, pid),
@@ -233,10 +426,17 @@ export class SqliteJobStore implements JobStore {
                         launch_source = COALESCE(?, launch_source),
                         heartbeat_enabled = COALESCE(?, heartbeat_enabled),
                         heartbeat_at = COALESCE(heartbeat_at, datetime('now'))
-         WHERE id = ?
-           AND (status = 'PENDING'
-                OR (status = 'RUNNING' AND owner_id IS NULL)
-                OR (status = 'RUNNING' AND owner_id = ?))`,
+         WHERE target.id = ?
+           AND (target.status = 'PENDING'
+                OR (target.status = 'RUNNING' AND target.owner_id IS NULL)
+                OR (target.status = 'RUNNING' AND target.owner_id = ?))
+           AND NOT EXISTS (
+             SELECT 1 FROM job AS exclusive_job
+              WHERE exclusive_job.name = target.name
+                AND exclusive_job.status = 'RUNNING'
+                AND exclusive_job.is_exclusive = 1
+                AND exclusive_job.id <> target.id
+           )`,
       )
       .run(
         ownership?.sessionId ?? null,
@@ -256,19 +456,32 @@ export class SqliteJobStore implements JobStore {
   async heartbeat(jobId: string, ownerId?: string): Promise<void> {
     // Owner-aware when called by JobRunner; unguarded calls remain available
     // for operators and backwards-compatible direct store integrations.
-    this.db
+    const result = this.db
       .prepare(
         `UPDATE job SET heartbeat_at = datetime('now')
          WHERE id = ? AND status = 'RUNNING'
            AND (? IS NULL OR owner_id = ?)`,
       )
       .run(jobId, ownerId ?? null, ownerId ?? null);
+    if (ownerId !== undefined && result.changes !== 1) {
+      throw new JobOwnershipLostError(jobId, ownerId);
+    }
   }
 
   async enableHeartbeat(jobId: string, ownerId: string): Promise<boolean> {
     const result = this.db
       .prepare(
         `UPDATE job SET heartbeat_enabled = 1, heartbeat_at = datetime('now')
+         WHERE id = ? AND status = 'RUNNING' AND owner_id = ?`,
+      )
+      .run(jobId, ownerId);
+    return result.changes === 1;
+  }
+
+  async refreshHeartbeat(jobId: string, ownerId: string): Promise<boolean> {
+    const result = this.db
+      .prepare(
+        `UPDATE job SET heartbeat_at = datetime('now')
          WHERE id = ? AND status = 'RUNNING' AND owner_id = ?`,
       )
       .run(jobId, ownerId);
@@ -415,6 +628,17 @@ export class SqliteJobStore implements JobStore {
   }
 
   async listJobs(options: ListJobsOptions = {}): Promise<JobRecord[]> {
+    return this.queryJobs(options);
+  }
+
+  async listJobsPage(options: ListJobsPageOptions = {}): Promise<JobRecord[]> {
+    // Route the first page through the ordinary method so wrappers and test
+    // doubles that intentionally observe/override listJobs retain that hook.
+    if (options.before === undefined) return this.listJobs(options);
+    return this.queryJobs(options);
+  }
+
+  private async queryJobs(options: ListJobsPageOptions): Promise<JobRecord[]> {
     const limit = options.limit ?? 50;
     // Status filter handling: 'STALE' is read-computed, never persisted,
     // so we translate a STALE filter into "RUNNING with old heartbeat" at
@@ -427,6 +651,11 @@ export class SqliteJobStore implements JobStore {
       WHERE (? IS NULL OR j.name = ?)
         AND (
           ? IS NULL
+          OR j.created_at < ?
+          OR (j.created_at = ? AND j.id < ?)
+        )
+        AND (
+          ? IS NULL
           OR (? = 'STALE'
               AND j.status = 'RUNNING'
               AND ? IS NOT NULL
@@ -434,10 +663,14 @@ export class SqliteJobStore implements JobStore {
               AND (j.heartbeat_at IS NULL OR j.heartbeat_at < datetime('now', ? || ' seconds')))
           OR (? != 'STALE' AND j.status = ?)
         )
-      ORDER BY j.created_at DESC
+      ORDER BY j.created_at DESC, j.id DESC
       LIMIT ?
     `;
     const name = options.name ?? null;
+    const beforeCreatedAt = options.before
+      ? options.before.createdAt.toISOString().slice(0, 19).replace('T', ' ')
+      : null;
+    const beforeId = options.before?.id ?? null;
     const staleSeconds = staleAfterMs !== undefined ? `-${staleAfterMs / 1000}` : null;
     const staleAfterMsParam = staleAfterMs !== undefined ? staleAfterMs : null;
     const rows = this.db
@@ -445,6 +678,10 @@ export class SqliteJobStore implements JobStore {
       .all(
         name,
         name,
+        beforeCreatedAt,
+        beforeCreatedAt,
+        beforeCreatedAt,
+        beforeId,
         status,
         status,
         staleAfterMsParam,

@@ -53,6 +53,8 @@
  * completion order, before the final result array is returned).
  */
 
+import { toError } from '../internal/error-message.js';
+
 export interface ItemDoneEvent<TItem, TResult> {
   item: TItem;
   index: number;
@@ -329,14 +331,9 @@ function fillAbortedSlots<TResult>(
   return out;
 }
 
-function toError(e: unknown): Error {
-  return e instanceof Error ? e : new Error(typeof e === 'string' ? e : JSON.stringify(e));
-}
-
 function signalAbortError(signal: AbortSignal): Error {
   const reason = signal.reason;
-  if (reason instanceof Error) return reason;
-  const err = new Error(typeof reason === 'string' ? reason : 'aborted');
-  err.name = 'AbortError';
+  const err = toError(reason === undefined ? 'aborted' : reason);
+  if (err !== reason) err.name = 'AbortError';
   return err;
 }

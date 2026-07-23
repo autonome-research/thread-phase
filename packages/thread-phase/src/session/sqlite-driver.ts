@@ -17,16 +17,48 @@
 
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
+type StatementAllResult = ReturnType<StatementSync['all']>;
+type StatementRunResult = ReturnType<StatementSync['run']>;
+
+/** Stable subset of StatementSync used by SqliteJobStore. */
+export interface SqliteStatement {
+  all(...params: any[]): StatementAllResult;
+  get(...params: any[]): StatementAllResult[number] | undefined;
+  run(...params: any[]): StatementRunResult;
+}
+
+function wrapStatement(statement: StatementSync): SqliteStatement {
+  const all = (...params: any[]): StatementAllResult =>
+    (statement.all as (...args: any[]) => StatementAllResult)(...params);
+  return {
+    all,
+    // Node 22.5's early node:sqlite implementation can return an object whose
+    // projected fields are all null from StatementSync.get() when no row
+    // matched. Deriving get from all gives stable undefined-on-no-row behavior
+    // across the entire supported Node range.
+    get: (...params: any[]) => all(...params)[0],
+    run: (...params: any[]): StatementRunResult =>
+      (statement.run as (...args: any[]) => StatementRunResult)(...params),
+  };
+}
+
+interface SqliteTransaction<TArgs extends unknown[], TReturn> {
+  (...args: TArgs): TReturn;
+  immediate(...args: TArgs): TReturn;
+}
+
 /** @internal */
 export class SqliteDriver {
   private readonly db: DatabaseSync;
 
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath);
+    // Match the bounded lock waiting previously provided by better-sqlite3.
+    this.db.exec('PRAGMA busy_timeout = 5000');
   }
 
-  prepare(sql: string): StatementSync {
-    return this.db.prepare(sql);
+  prepare(sql: string): SqliteStatement {
+    return wrapStatement(this.db.prepare(sql));
   }
 
   exec(sql: string): void {
@@ -39,32 +71,33 @@ export class SqliteDriver {
 
   /**
    * better-sqlite3-compatible pragma helper. Assignments (`journal_mode =
-   * WAL`) execute and return undefined; reads return the first column of the
-   * first row when `{ simple: true }`, else the whole row.
+   * WAL`) execute and return undefined; `{ simple: true }` returns the first
+   * column of the first row, while ordinary reads return every result row.
    */
   pragma(stmt: string, opts?: { simple?: boolean }): unknown {
     if (stmt.includes('=')) {
       this.db.exec(`PRAGMA ${stmt}`);
       return undefined;
     }
-    const row = this.db.prepare(`PRAGMA ${stmt}`).get() as
-      | Record<string, unknown>
-      | undefined;
-    if (row === undefined) return undefined;
-    return opts?.simple ? Object.values(row)[0] : row;
+    const rows = this.db.prepare(`PRAGMA ${stmt}`).all();
+    if (opts?.simple) {
+      const row = rows[0] as Record<string, unknown> | undefined;
+      return row === undefined ? undefined : Object.values(row)[0];
+    }
+    return rows;
   }
 
   /**
-   * better-sqlite3-compatible transaction wrapper: returns a function that
-   * runs `fn` inside BEGIN…COMMIT, rolling back on throw. Like the original,
-   * the transaction starts deferred and upgrades to a write lock at the
-   * first write, which is what serializes concurrent acquireExclusive calls.
+   * better-sqlite3-compatible transaction wrapper with both deferred and
+   * immediate entry points. Immediate mode acquires the write reservation
+   * before a read/modify/write sequence, preventing stale-read lock upgrades
+   * across processes.
    */
   transaction<TArgs extends unknown[], TReturn>(
     fn: (...args: TArgs) => TReturn,
-  ): (...args: TArgs) => TReturn {
-    return (...args: TArgs): TReturn => {
-      this.db.exec('BEGIN');
+  ): SqliteTransaction<TArgs, TReturn> {
+    const run = (mode: '' | ' IMMEDIATE', args: TArgs): TReturn => {
+      this.db.exec(`BEGIN${mode}`);
       try {
         const result = fn(...args);
         this.db.exec('COMMIT');
@@ -78,5 +111,8 @@ export class SqliteDriver {
         throw err;
       }
     };
+    const transaction = ((...args: TArgs) => run('', args)) as SqliteTransaction<TArgs, TReturn>;
+    transaction.immediate = (...args: TArgs) => run(' IMMEDIATE', args);
+    return transaction;
   }
 }

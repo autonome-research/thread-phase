@@ -18,8 +18,13 @@
  */
 
 export function toErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
+  try {
+    if (err instanceof Error) {
+      const message: unknown = err.message;
+      if (typeof message === 'string') return message;
+    }
+  } catch {
+    // Hostile proxies may throw from instanceof or message access.
   }
   if (typeof err === 'string') {
     return err;
@@ -27,8 +32,12 @@ export function toErrorMessage(err: unknown): string {
   // Object with a string-ish `.message` field — the common shape for
   // SDK errors and wrapped throws across the JS ecosystem.
   if (typeof err === 'object' && err !== null) {
-    const m = (err as { message?: unknown }).message;
-    if (typeof m === 'string') return m;
+    try {
+      const m = (err as { message?: unknown }).message;
+      if (typeof m === 'string') return m;
+    } catch {
+      // Proxies and hostile accessors must fall through to safe stringification.
+    }
   }
   return safeStringify(err);
 }
@@ -47,6 +56,28 @@ export function toErrorMessage(err: unknown): string {
  * @param fallback String to return when `signal.reason` is undefined.
  *                 Defaults to `'aborted'`.
  */
+export function toError(err: unknown): Error {
+  try {
+    if (err instanceof Error) {
+      // Preserve identity only for ordinary, safely inspectable Errors. A Proxy
+      // can pass instanceof while throwing from any later diagnostic access.
+      const message: unknown = err.message;
+      const name: unknown = err.name;
+      const stack: unknown = err.stack;
+      if (
+        typeof message === 'string' &&
+        typeof name === 'string' &&
+        (stack === undefined || typeof stack === 'string')
+      ) {
+        return err;
+      }
+    }
+  } catch {
+    // Hostile proxies and accessors are cloned into a plain Error below.
+  }
+  return new Error(toErrorMessage(err));
+}
+
 export function signalReasonToString(
   signal: AbortSignal,
   fallback = 'aborted',

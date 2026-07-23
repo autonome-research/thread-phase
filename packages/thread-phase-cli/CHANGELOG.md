@@ -4,7 +4,14 @@ All notable changes to this package are documented here.
 
 ## [Unreleased]
 
-- Locked-version v5 release consuming the core reliable run-lifecycle APIs. CLI behavior is unchanged.
+## [6.1.0] — 2026-07-22
+
+- Locked-version release consuming the additive core v6.1 lifecycle APIs. CLI behavior is unchanged.
+- Aligned the CLI Node requirement with the v6 core `node:sqlite` runtime: Node.js 22.5 or newer.
+
+## [6.0.0] — 2026-07-17
+
+- Locked-version release consuming the core v6 `node:sqlite` backend and fanout/helper updates.
 
 ## [3.2.2] — 2026-05-21
 

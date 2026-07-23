@@ -21,6 +21,8 @@
  * nesting and bail to fallback before calling `JSON.parse` when nesting
  * is adversarially deep. Realistic agent output never approaches this.
  */
+import { toError } from '../internal/error-message.js';
+
 const MAX_PARSE_DEPTH = 1000;
 
 export function parseJSON<T>(
@@ -31,7 +33,7 @@ export function parseJSON<T>(
   try {
     return parseCandidate<T>(text);
   } catch (err) {
-    const errObj = err instanceof Error ? err : new Error(String(err));
+    const errObj = toError(err);
     return report(text, errObj, fallback, onError);
   }
 }

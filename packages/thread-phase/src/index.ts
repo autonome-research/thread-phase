@@ -73,6 +73,7 @@ export {
 // local and network-backed stores share one consistency contract.
 export {
   type JobStore,
+  JobOwnershipLostError,
   SqliteJobStore,
   JobRunner,
   type JobRecord,
@@ -81,11 +82,16 @@ export {
   type JobStatus,
   type JobOwnership,
   type ListJobsOptions,
+  type JobListCursor,
+  type ListJobsPageOptions,
+  type CursorJobStore,
   type GetJobOptions,
   type JobRunnerOptions,
   type JobRunOptions,
+  type JobRunDrain,
   type JobRunHandle,
   type LiveEvent,
+  type LiveEventListenerFailure,
 } from './session/index.js';
 
 // Tools — registry with optional ajv arg validation. Implements

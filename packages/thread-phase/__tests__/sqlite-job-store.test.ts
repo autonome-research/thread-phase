@@ -3,6 +3,9 @@ import { SqliteJobStore } from '../src/session/sqlite-job-store.js';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { fork, type ChildProcess } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { SqliteDriver as Database } from '../src/session/sqlite-driver.js';
 
 let dir: string;
 let store: SqliteJobStore;
@@ -158,11 +161,38 @@ describe('SqliteJobStore — acquireExclusive', () => {
     expect(job.startedAt).toBeInstanceOf(Date);
   });
 
+  it('marks acquired rows and database-enforces exclusivity only for them', async () => {
+    const first = await store.acquireExclusive('exclusive-marker', null);
+    expect(first).not.toBeNull();
+    const inspect = new Database(join(dir, 'test.db'));
+    expect(inspect.prepare(
+      `SELECT is_exclusive FROM job WHERE id = ?`,
+    ).get(first)).toEqual({ is_exclusive: 1 });
+    expect(() => inspect.prepare(
+      `INSERT INTO job (id, name, input, status, started_at, is_exclusive)
+       VALUES ('forced-exclusive', 'exclusive-marker', '{}', 'RUNNING', datetime('now'), 1)`,
+    ).run()).toThrow(/UNIQUE constraint failed/);
+    inspect.close();
+  });
+
   it('returns null when a job with this name is already RUNNING', async () => {
     const first = await store.acquireExclusive('librarian', null);
     expect(first).not.toBeNull();
     const second = await store.acquireExclusive('librarian', null);
     expect(second).toBeNull();
+  });
+
+  it('blocks an ordinary same-name job after an exclusive acquisition', async () => {
+    expect(await store.acquireExclusive('exclusive-owner', null)).not.toBeNull();
+    const ordinary = await store.createJob('exclusive-owner', null);
+    await expect(store.setRunning(ordinary)).resolves.toBe(false);
+    expect(await store.getJob(ordinary)).toMatchObject({ status: 'PENDING' });
+  });
+
+  it('does not acquire exclusively while an ordinary same-name job is running', async () => {
+    const ordinary = await store.createJob('ordinary-owner', null);
+    await expect(store.setRunning(ordinary)).resolves.toBe(true);
+    await expect(store.acquireExclusive('ordinary-owner', null)).resolves.toBeNull();
   });
 
   it('lets a different name acquire even when one is running', async () => {
@@ -202,6 +232,104 @@ describe('SqliteJobStore — acquireExclusive', () => {
     const second = (await store.getJob(id))!.startedAt!;
     expect(second.getTime()).toBe(first.getTime());
   });
+
+  it('returns one winner and one null across contending child processes', async () => {
+    const path = join(dir, 'cross-process-acquire.db');
+    const initialized = new SqliteJobStore(path);
+    initialized.close();
+    const children = [spawnAcquisitionChild(), spawnAcquisitionChild()];
+    let locker: InstanceType<typeof Database> | undefined;
+
+    try {
+      await Promise.all(children.map((child) => child.waitFor('ready')));
+      for (const child of children) child.process.send?.({ type: 'open', dbPath: path });
+      const opened = await Promise.all(children.map((child) => child.waitFor('opened')));
+      expect(opened).toEqual([
+        expect.not.objectContaining({ ok: false }),
+        expect.not.objectContaining({ ok: false }),
+      ]);
+
+      // Hold an explicit write barrier so both real processes begin acquisition
+      // before either can win. No scheduler timing or sleep triggers contention.
+      locker = new Database(path);
+      locker.exec('BEGIN IMMEDIATE');
+      children.forEach((child, index) => child.process.send?.({
+        type: 'acquire',
+        name: 'shared-name',
+        input: { contender: index },
+      }));
+      await Promise.all(children.map((child) => child.waitFor('acquiring')));
+      locker.exec('COMMIT');
+
+      const results = await Promise.all(children.map((child) => child.waitFor('result')));
+      expect(results.filter((result) => typeof result.jobId === 'string')).toHaveLength(1);
+      expect(results.filter((result) => result.jobId === null)).toHaveLength(1);
+      expect(results.every((result) => result.ok === true)).toBe(true);
+      await Promise.all(children.map((child) => child.closeNormally()));
+    } finally {
+      if (locker?.inTransaction) locker.exec('ROLLBACK');
+      locker?.close();
+      await Promise.all(children.map((child) => child.cleanupAfterFailure()));
+    }
+
+    const inspect = new Database(path);
+    expect(
+      inspect.prepare(
+        `SELECT COUNT(*) AS count FROM job WHERE name = ? AND status = 'RUNNING'`,
+      ).get('shared-name'),
+    ).toEqual({ count: 1 });
+    inspect.close();
+  }, 15_000);
+
+  it('serializes cross-process exclusive acquisition against ordinary startup', async () => {
+    const path = join(dir, 'cross-process-exclusive-vs-ordinary.db');
+    const initialized = new SqliteJobStore(path);
+    const ordinaryId = await initialized.createJob('contended-name', null);
+    initialized.close();
+    const acquireChild = spawnAcquisitionChild();
+    const ordinaryChild = spawnAcquisitionChild();
+    const children = [acquireChild, ordinaryChild];
+    let locker: InstanceType<typeof Database> | undefined;
+
+    try {
+      await Promise.all(children.map((child) => child.waitFor('ready')));
+      for (const child of children) child.process.send?.({ type: 'open', dbPath: path });
+      await Promise.all(children.map((child) => child.waitFor('opened')));
+
+      locker = new Database(path);
+      locker.exec('BEGIN IMMEDIATE');
+      acquireChild.process.send?.({ type: 'acquire', name: 'contended-name', input: null });
+      ordinaryChild.process.send?.({ type: 'set-running', jobId: ordinaryId });
+      await Promise.all([
+        acquireChild.waitFor('acquiring'),
+        ordinaryChild.waitFor('starting'),
+      ]);
+      locker.exec('COMMIT');
+
+      const [acquired, started] = await Promise.all([
+        acquireChild.waitFor('result'),
+        ordinaryChild.waitFor('result'),
+      ]);
+      expect(acquired.ok).toBe(true);
+      expect(started.ok).toBe(true);
+      expect([
+        [typeof acquired.jobId === 'string', started.started === false],
+        [acquired.jobId === null, started.started === true],
+      ].some(([acquireWon, ordinaryLost]) => acquireWon && ordinaryLost)).toBe(true);
+      await Promise.all(children.map((child) => child.closeNormally()));
+    } finally {
+      if (locker?.inTransaction) locker.exec('ROLLBACK');
+      locker?.close();
+      await Promise.all(children.map((child) => child.cleanupAfterFailure()));
+    }
+
+    const inspect = new Database(path);
+    expect(inspect.prepare(
+      `SELECT COUNT(*) AS count FROM job
+       WHERE name = 'contended-name' AND status = 'RUNNING'`,
+    ).get()).toEqual({ count: 1 });
+    inspect.close();
+  }, 15_000);
 });
 
 describe('SqliteJobStore — events', () => {
@@ -257,15 +385,417 @@ describe('SqliteJobStore — migrations', () => {
   it('sets PRAGMA user_version after first init', async () => {
     const path = join(dir, 'mig.db');
     const s = new SqliteJobStore(path);
-    // Re-open with raw sqlite to peek at user_version.
     s.close();
-    // Open via SqliteJobStore again — second open should be idempotent.
+
+    const raw = new Database(path);
+    expect(raw.pragma('user_version', { simple: true })).toBe(5);
+    raw.close();
+
+    // A repeated open is an idempotent no-op.
     const s2 = new SqliteJobStore(path);
-    // Sanity: tables exist and CRUD works after re-open.
     const id = await s2.createJob('p', null);
     expect(await s2.getJob(id)).not.toBeNull();
     s2.close();
   });
+
+  it('fails closed on a future schema version without mutating journal mode', () => {
+    const path = join(dir, 'future-version.db');
+    const seed = new Database(path);
+    seed.pragma('journal_mode = DELETE');
+    seed.pragma('user_version = 6');
+    expect(seed.pragma('journal_mode', { simple: true })).toBe('delete');
+    seed.close();
+
+    expect(() => new SqliteJobStore(path)).toThrow(/version 6 is newer than supported version 5/);
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(6);
+    expect(inspect.pragma('journal_mode', { simple: true })).toBe('delete');
+    inspect.close();
+  });
+
+  it('fails closed when a current-version database is missing the exclusivity index', () => {
+    const path = join(dir, 'missing-index-v5.db');
+    const initialized = new SqliteJobStore(path);
+    initialized.close();
+
+    const seed = new Database(path);
+    seed.exec('DROP INDEX idx_job_one_running_per_name');
+    expect(seed.pragma('user_version', { simple: true })).toBe(5);
+    seed.close();
+
+    expect(() => new SqliteJobStore(path)).toThrow(/migration 5 schema collision/);
+
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
+    expect(inspect.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'index' AND name = 'idx_job_one_running_per_name'`,
+    ).get()).toBeUndefined();
+    inspect.close();
+  });
+
+  it('fails closed when a current-version database has an incompatible exclusivity index', () => {
+    const path = join(dir, 'wrong-index-v5.db');
+    const initialized = new SqliteJobStore(path);
+    initialized.close();
+
+    const seed = new Database(path);
+    seed.exec(`
+      DROP INDEX idx_job_one_running_per_name;
+      CREATE INDEX idx_job_one_running_per_name ON job (name);
+    `);
+    const before = seed.prepare(
+      `SELECT type, tbl_name, sql FROM sqlite_master
+       WHERE name = 'idx_job_one_running_per_name'`,
+    ).get();
+    expect(seed.pragma('user_version', { simple: true })).toBe(5);
+    seed.close();
+
+    expect(() => new SqliteJobStore(path)).toThrow(/migration 5 schema collision/);
+
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
+    expect(inspect.prepare(
+      `SELECT type, tbl_name, sql FROM sqlite_master
+       WHERE name = 'idx_job_one_running_per_name'`,
+    ).get()).toEqual(before);
+    inspect.close();
+  });
+
+  it('allows ordinary same-name jobs to run concurrently', async () => {
+    const first = await store.createJob('same-name', null);
+    const second = await store.createJob('same-name', null);
+    const caseDistinct = await store.createJob('SAME-NAME', null);
+
+    await expect(store.setRunning(first)).resolves.toBe(true);
+    await expect(store.setRunning(second)).resolves.toBe(true);
+    await expect(store.setRunning(caseDistinct)).resolves.toBe(true);
+    expect(await store.getJob(second)).toMatchObject({ status: 'RUNNING' });
+  });
+
+  it('rejects the unpublished candidate-v5 global-index schema', () => {
+    const path = join(dir, 'unsupported-candidate-v5.db');
+    const initialized = new SqliteJobStore(path);
+    initialized.close();
+
+    const seed = new Database(path);
+    seed.exec(`
+      DROP INDEX idx_job_one_running_per_name;
+      ALTER TABLE job DROP COLUMN is_exclusive;
+      CREATE UNIQUE INDEX idx_job_one_running_per_name
+        ON job (name) WHERE status = 'RUNNING';
+      PRAGMA user_version = 5;
+    `);
+    seed.close();
+
+    expect(() => new SqliteJobStore(path)).toThrow(/migration 5 schema collision/);
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
+    expect(inspect.prepare(
+      `SELECT name FROM pragma_table_info('job') WHERE name = 'is_exclusive'`,
+    ).get()).toBeUndefined();
+    inspect.close();
+  });
+
+  it('fails closed on an incompatible current-version exclusivity column', () => {
+    const path = join(dir, 'candidate-invalid-column-v5.db');
+    const initialized = new SqliteJobStore(path);
+    initialized.close();
+
+    const seed = new Database(path);
+    seed.exec(`
+      DROP INDEX idx_job_one_running_per_name;
+      ALTER TABLE job DROP COLUMN is_exclusive;
+      ALTER TABLE job ADD COLUMN is_exclusive INTEGER NOT NULL DEFAULT 1
+        CHECK (is_exclusive IN (0, 1));
+      PRAGMA user_version = 5;
+    `);
+    seed.close();
+
+    expect(() => new SqliteJobStore(path)).toThrow(/is_exclusive is not the expected constrained flag/);
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
+    expect(inspect.prepare(
+      `SELECT dflt_value FROM pragma_table_info('job') WHERE name = 'is_exclusive'`,
+    ).get()).toEqual({ dflt_value: '1' });
+    expect(inspect.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'index' AND name = 'idx_job_one_running_per_name'`,
+    ).get()).toBeUndefined();
+    inspect.close();
+  });
+
+  it('verifies the exclusivity column on every current-version open', () => {
+    const path = join(dir, 'current-invalid-column-v5.db');
+    const initialized = new SqliteJobStore(path);
+    initialized.close();
+
+    const seed = new Database(path);
+    seed.exec(`
+      DROP INDEX idx_job_one_running_per_name;
+      ALTER TABLE job DROP COLUMN is_exclusive;
+      ALTER TABLE job ADD COLUMN is_exclusive TEXT NOT NULL DEFAULT 0
+        CHECK (is_exclusive IN (0, 1));
+      CREATE UNIQUE INDEX idx_job_one_running_per_name
+        ON job (name) WHERE status = 'RUNNING' AND is_exclusive = 1;
+    `);
+    seed.close();
+
+    expect(() => new SqliteJobStore(path)).toThrow(/is_exclusive is not the expected constrained flag/);
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
+    inspect.close();
+  });
+
+  it('transactionally verifies an already-installed compatible current-version index on open', () => {
+    const path = join(dir, 'verified-v5.db');
+    const initialized = new SqliteJobStore(path);
+    initialized.close();
+
+    const seed = new Database(path);
+    seed.exec(`
+      DROP INDEX idx_job_one_running_per_name;
+      CREATE UNIQUE INDEX idx_job_one_running_per_name
+        ON job ("name")
+        WHERE (("STATUS" = 'RUNNING')) AND (("is_exclusive" = 1));
+      PRAGMA user_version = 5;
+    `);
+    seed.close();
+
+    const migrated = new SqliteJobStore(path);
+    migrated.close();
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
+    expect(
+      inspect.prepare(
+        `SELECT COUNT(*) AS count FROM sqlite_master
+         WHERE type = 'index' AND name = 'idx_job_one_running_per_name'`,
+      ).get(),
+    ).toEqual({ count: 1 });
+    inspect.close();
+  });
+
+  it('fails closed when a trigger shares the selected index name', () => {
+    const path = join(dir, 'trigger-collision-v5.db');
+    const initialized = new SqliteJobStore(path);
+    initialized.close();
+
+    const seed = new Database(path);
+    seed.exec(`
+      DROP INDEX idx_job_one_running_per_name;
+      CREATE TRIGGER idx_job_one_running_per_name
+        AFTER INSERT ON event BEGIN SELECT 1; END;
+      PRAGMA user_version = 5;
+    `);
+    const before = seed.prepare(
+      `SELECT type, tbl_name, sql FROM sqlite_master
+       WHERE name = 'idx_job_one_running_per_name'`,
+    ).all();
+    seed.close();
+
+    expect(() => new SqliteJobStore(path)).toThrow(/migration 5 schema collision/);
+
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
+    expect(inspect.prepare(
+      `SELECT type, tbl_name, sql FROM sqlite_master
+       WHERE name = 'idx_job_one_running_per_name'`,
+    ).all()).toEqual(before);
+    expect(inspect.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'index' AND name = 'idx_job_one_running_per_name'`,
+    ).get()).toBeUndefined();
+    inspect.close();
+  });
+
+  it('fails closed when a same-named non-unique index exists without conflicting rows', () => {
+    const path = join(dir, 'non-unique-index-v5.db');
+    const initialized = new SqliteJobStore(path);
+    initialized.close();
+
+    const seed = new Database(path);
+    seed.exec(`
+      DROP INDEX idx_job_one_running_per_name;
+      CREATE INDEX idx_job_one_running_per_name ON job (name);
+      PRAGMA user_version = 5;
+    `);
+    const before = seed.prepare(
+      `SELECT type, tbl_name, sql FROM sqlite_master
+       WHERE name = 'idx_job_one_running_per_name'`,
+    ).get();
+    seed.close();
+
+    expect(() => new SqliteJobStore(path)).toThrow(/migration 5 schema collision/);
+
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
+    expect(inspect.prepare(
+      `SELECT type, tbl_name, sql FROM sqlite_master
+       WHERE name = 'idx_job_one_running_per_name'`,
+    ).get()).toEqual(before);
+    expect(inspect.prepare('SELECT COUNT(*) AS count FROM job').get()).toEqual({ count: 0 });
+    inspect.close();
+  });
+
+  it('rejects a same-named index whose predicate value differs only by case', () => {
+    const path = join(dir, 'lowercase-predicate-v5.db');
+    const initialized = new SqliteJobStore(path);
+    initialized.close();
+
+    const seed = new Database(path);
+    seed.exec(`
+      DROP INDEX idx_job_one_running_per_name;
+      CREATE UNIQUE INDEX idx_job_one_running_per_name
+        ON job (name) WHERE status = 'running' AND is_exclusive = 1;
+      PRAGMA user_version = 5;
+    `);
+    seed.close();
+
+    expect(() => new SqliteJobStore(path)).toThrow(/migration 5 schema collision/);
+
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
+    expect(inspect.prepare(
+      `SELECT sql FROM sqlite_master
+       WHERE type = 'index' AND name = 'idx_job_one_running_per_name'`,
+    ).get()).toEqual(expect.objectContaining({ sql: expect.stringContaining("'running'") }));
+    inspect.close();
+  });
+
+  it('fails closed on a wrong-predicate same-named index and preserves conflicting rows', () => {
+    const path = join(dir, 'wrong-predicate-index-v5.db');
+    const initialized = new SqliteJobStore(path);
+    initialized.close();
+
+    const seed = new Database(path);
+    seed.exec(`
+      DROP INDEX idx_job_one_running_per_name;
+      CREATE UNIQUE INDEX idx_job_one_running_per_name
+        ON job (name) WHERE status = 'PENDING' AND is_exclusive = 1;
+      PRAGMA user_version = 5;
+      INSERT INTO job (id, name, input, status, started_at)
+        VALUES ('collision-a', 'duplicate', '{}', 'RUNNING', '2025-01-01 00:00:00');
+      INSERT INTO job (id, name, input, status, started_at)
+        VALUES ('collision-b', 'duplicate', '{}', 'RUNNING', '2025-01-02 00:00:00');
+    `);
+    const beforeRows = seed.prepare('SELECT * FROM job ORDER BY id').all();
+    const beforeIndex = seed.prepare(
+      `SELECT type, tbl_name, sql FROM sqlite_master
+       WHERE name = 'idx_job_one_running_per_name'`,
+    ).get();
+    seed.close();
+
+    expect(() => new SqliteJobStore(path)).toThrow(/migration 5 schema collision/);
+
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
+    expect(inspect.prepare('SELECT * FROM job ORDER BY id').all()).toEqual(beforeRows);
+    expect(inspect.prepare(
+      `SELECT type, tbl_name, sql FROM sqlite_master
+       WHERE name = 'idx_job_one_running_per_name'`,
+    ).get()).toEqual(beforeIndex);
+    inspect.close();
+  });
+
+  it('upgrades an authentic v4-shaped database with ordinary same-name RUNNING rows', () => {
+    const path = join(dir, 'historical-same-name-v4.db');
+    const initialized = new SqliteJobStore(path);
+    initialized.close();
+
+    const seed = new Database(path);
+    seed.exec(`
+      DROP INDEX idx_job_one_running_per_name;
+      ALTER TABLE job DROP COLUMN is_exclusive;
+      PRAGMA user_version = 4;
+      INSERT INTO job (id, name, input, status, started_at)
+        VALUES ('historical-a', 'duplicate', '{"source":"a"}', 'RUNNING', '2025-01-01 00:00:00');
+      INSERT INTO job (id, name, input, status, started_at)
+        VALUES ('historical-b', 'duplicate', '{"source":"b"}', 'RUNNING', '2025-01-02 00:00:00');
+    `);
+    const before = seed.prepare(
+      `SELECT id, name, input, status, started_at FROM job ORDER BY id`,
+    ).all();
+    seed.close();
+
+    const migrated = new SqliteJobStore(path);
+    migrated.close();
+
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
+    expect(inspect.prepare(
+      `SELECT id, name, input, status, started_at FROM job ORDER BY id`,
+    ).all()).toEqual(before);
+    expect(inspect.prepare(
+      `SELECT COUNT(*) AS count FROM job WHERE is_exclusive = 1`,
+    ).get()).toEqual({ count: 0 });
+    inspect.close();
+  });
+
+  it('opens and migrates a nonexistent database concurrently across processes', async () => {
+    const path = join(dir, 'concurrent-fresh.db');
+    const children = Array.from({ length: 4 }, () => spawnMigrationChild());
+    try {
+      await Promise.all(children.map((child) => child.waitFor('ready')));
+      for (const child of children) child.process.send?.({ type: 'start', dbPath: path });
+      await Promise.all(children.map((child) => child.waitFor('opening')));
+      const results = await Promise.all(children.map((child) => child.waitFor('result')));
+      expect(results).toEqual(Array.from(
+        { length: children.length },
+        () => expect.objectContaining({ ok: true }),
+      ));
+      await Promise.all(children.map((child) => child.closeNormally()));
+    } finally {
+      await Promise.all(children.map((child) => child.cleanupAfterFailure()));
+    }
+
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
+    expect(inspect.prepare(
+      `SELECT COUNT(*) AS count FROM sqlite_master
+       WHERE type = 'index' AND name = 'idx_job_one_running_per_name'`,
+    ).get()).toEqual({ count: 1 });
+    inspect.close();
+  }, 15_000);
+
+  it('serializes concurrent process initialization and applies the migration once', async () => {
+    const path = join(dir, 'concurrent-v5.db');
+    const initialized = new SqliteJobStore(path);
+    initialized.close();
+    const locker = new Database(path);
+    locker.exec('DROP INDEX idx_job_one_running_per_name; ALTER TABLE job DROP COLUMN is_exclusive; PRAGMA user_version = 4; BEGIN IMMEDIATE');
+
+    const children = [spawnMigrationChild(), spawnMigrationChild()];
+    try {
+      await Promise.all(children.map((child) => child.waitFor('ready')));
+      for (const child of children) child.process.send?.({ type: 'start', dbPath: path });
+      await Promise.all(children.map((child) => child.waitFor('opening')));
+
+      // Both independent open attempts are active behind an explicit database
+      // write barrier; releasing it lets the migration transactions serialize.
+      locker.exec('COMMIT');
+      const results = await Promise.all(children.map((child) => child.waitFor('result')));
+      expect(results).toEqual([
+        expect.objectContaining({ ok: true }),
+        expect.objectContaining({ ok: true }),
+      ]);
+
+      await Promise.all(children.map((child) => child.closeNormally()));
+    } finally {
+      if (locker.inTransaction) locker.exec('ROLLBACK');
+      locker.close();
+      await Promise.all(children.map((child) => child.cleanupAfterFailure()));
+    }
+
+    const inspect = new Database(path);
+    expect(inspect.pragma('user_version', { simple: true })).toBe(5);
+    expect(
+      inspect.prepare(
+        `SELECT COUNT(*) AS count FROM sqlite_master
+         WHERE type = 'index' AND name = 'idx_job_one_running_per_name'`,
+      ).get(),
+    ).toEqual({ count: 1 });
+    inspect.close();
+  }, 15_000);
 
   it('preserves data across re-open (no DROP/recreate)', async () => {
     const path = join(dir, 'persist.db');
@@ -280,6 +810,95 @@ describe('SqliteJobStore — migrations', () => {
     b.close();
   });
 });
+
+interface SqliteChild {
+  process: ChildProcess;
+  waitFor(type: string): Promise<Record<string, unknown>>;
+  closeNormally(): Promise<void>;
+  cleanupAfterFailure(): Promise<void>;
+}
+
+function spawnMigrationChild(): SqliteChild {
+  return spawnSqliteChild('./fixtures/sqlite-migration-child.ts');
+}
+
+function spawnAcquisitionChild(): SqliteChild {
+  return spawnSqliteChild('./fixtures/sqlite-acquire-child.ts');
+}
+
+function spawnSqliteChild(relativeFixture: string): SqliteChild {
+  const fixture = fileURLToPath(new URL(relativeFixture, import.meta.url));
+  const child = fork(fixture, [], {
+    execArgv: ['--import', 'tsx'],
+    stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+  });
+  const messages: Array<Record<string, unknown>> = [];
+  const waiters = new Map<string, (message: Record<string, unknown>) => void>();
+  child.on('message', (value: unknown) => {
+    const message = value as Record<string, unknown>;
+    const type = String(message.type);
+    const waiter = waiters.get(type);
+    if (waiter) {
+      waiters.delete(type);
+      waiter(message);
+    } else {
+      messages.push(message);
+    }
+  });
+  const exited = new Promise<number | null>((resolve) => child.once('exit', resolve));
+  const waitForExit = (timeoutMs: number): Promise<number | null | 'timeout'> =>
+    new Promise((resolve) => {
+      if (child.exitCode !== null) {
+        resolve(child.exitCode);
+        return;
+      }
+      const timeout = setTimeout(() => resolve('timeout'), timeoutMs);
+      void exited.then((code) => {
+        clearTimeout(timeout);
+        resolve(code);
+      });
+    });
+
+  const waitFor = (type: string): Promise<Record<string, unknown>> => {
+    const queued = messages.findIndex((message) => message.type === type);
+    if (queued >= 0) return Promise.resolve(messages.splice(queued, 1)[0]!);
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        waiters.delete(type);
+        reject(new Error(`SQLite child did not report ${type}`));
+      }, 5_000);
+      waiters.set(type, (message) => {
+        clearTimeout(timeout);
+        resolve(message);
+      });
+    });
+  };
+
+  return {
+    process: child,
+    waitFor,
+    async closeNormally() {
+      child.send({ type: 'close' });
+      await waitFor('closed');
+      const exitCode = await waitForExit(5_000);
+      if (exitCode === 'timeout') {
+        throw new Error(`SQLite child ${child.pid ?? 'unknown'} did not exit after close`);
+      }
+      expect(exitCode).toBe(0);
+    },
+    async cleanupAfterFailure() {
+      if (child.exitCode !== null) return;
+      if (child.connected) child.send({ type: 'close' });
+      const graceful = await waitForExit(1_000);
+      if (graceful !== 'timeout') return;
+      // Forced termination is only a last-resort safeguard and explicitly
+      // fails the test rather than masquerading as normal lifecycle control.
+      child.kill('SIGKILL');
+      await waitForExit(1_000);
+      throw new Error(`SQLite child ${child.pid ?? 'unknown'} did not exit gracefully`);
+    },
+  };
+}
 
 describe('SqliteJobStore — listJobs', () => {
   it('returns most-recent first', async () => {
@@ -303,5 +922,19 @@ describe('SqliteJobStore — listJobs', () => {
   it('respects limit', async () => {
     for (let i = 0; i < 5; i++) await store.createJob('p', null);
     expect(await store.listJobs({ limit: 2 })).toHaveLength(2);
+  });
+
+  it('continues a deterministic scan with the before cursor', async () => {
+    for (let i = 0; i < 5; i++) await store.createJob('cursor', null);
+    const all = await store.listJobs({ name: 'cursor', limit: 10 });
+    const first = await store.listJobs({ name: 'cursor', limit: 2 });
+    const boundary = first.at(-1)!;
+    const rest = await store.listJobsPage({
+      name: 'cursor',
+      limit: 10,
+      before: { createdAt: boundary.createdAt, id: boundary.id },
+    });
+
+    expect([...first, ...rest].map((job) => job.id)).toEqual(all.map((job) => job.id));
   });
 });

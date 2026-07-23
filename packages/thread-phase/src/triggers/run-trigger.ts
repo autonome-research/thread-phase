@@ -32,6 +32,7 @@
  * before the user-supplied factory runs.
  */
 
+import { toError } from '../internal/error-message.js';
 import type { JobRunner } from '../session/index.js';
 import { runPipelineToSummary } from '../orchestrator.js';
 import type {
@@ -164,7 +165,7 @@ export function runTrigger<TInput, TCtx extends BasePipelineContext>(
         }
         options.onComplete?.(event, jobId);
       } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
+        const error = toError(err);
         onError(event, error, jobId);
       }
     })();

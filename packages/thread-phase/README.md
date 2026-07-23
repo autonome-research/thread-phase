@@ -110,7 +110,7 @@ for await (const event of runPipeline([phaseA, phaseB, phaseC], ctx)) {
 
 ```ts
 const runner = new JobRunner(new SqliteJobStore('./jobs.db'));
-const jobId = runner.create('my-pipeline', input);
+const jobId = await runner.create('my-pipeline', input);
 
 // wire SIGTERM to runner.cancel so a stuck inference call exits cleanly
 process.on('SIGTERM', () => runner.cancel(jobId, 'systemd timeout'));
@@ -122,7 +122,13 @@ await runner.run(jobId, [phaseA, phaseB], ctx);
 
 `JobRunner` automatically composes its cancellation signal with any caller-provided signal and installs the result as `ctx.signal`. Phase code passes `ctx.signal` into `runAgentWithTools`, adapters, HTTP calls, or other abortable work. `runner.start(...)` returns an immediate run handle with `signal`, `cancel()`, and `result`; `signalFor(jobId)` remains available for existing integrations.
 
-`JobStore` is asynchronous so SQLite, Postgres, Redis, and network-backed implementations share one consistency contract. The bundled `SqliteJobStore` keeps better-sqlite3's synchronous hot path internally and exposes it through the same Promise-based interface.
+Live `job:${jobId}` listeners are observational and cannot change authoritative lifecycle results: dispatch snapshots listeners, contains synchronous throws, and observes returned-promise rejections. Configure `onLiveEventError` on `JobRunner` to receive immutable `LiveEventListenerFailure` diagnostics; failures from that diagnostic callback are also contained.
+
+`JobStore` is asynchronous so SQLite, Postgres, Redis, and network-backed implementations share one consistency contract. The bundled `SqliteJobStore` uses Node's synchronous built-in `node:sqlite` hot path internally and exposes it through the same Promise-based interface. Node.js 22.5 or newer is required. On Node 22.5–22.12, start Node with `--experimental-sqlite` (for example, `NODE_OPTIONS=--experimental-sqlite`); Node 22.13+ exposes the module without that flag.
+
+The v5.0.0 `JobStore` contract remains unchanged. The published contract already includes atomic owner-aware claiming and finalization, cancellation and abandonment transitions, owner-scoped heartbeat, and heartbeat enablement. Custom stores must implement that released interface. The provenance-backed declaration fixture under `test-d/fixtures/v5.0.0/` verifies the exact published shape.
+
+With `heartbeatMs`, `JobRunner` schedules at most one automatic owner-scoped heartbeat at a time. `heartbeatTimeoutMs` requires and defaults to `heartbeatMs`; once configured, it bounds how long the runner waits for automatic attempts and manual `ctx.heartbeat()` calls. Manual-only runs cannot currently configure a timeout. Custom stores must still bound or cancel their own underlying I/O because the Promise-based `JobStore` contract has no abort parameter. Manual calls are caller-controlled and may overlap an automatic attempt. Ownership loss, timeout, or backend failure stops scheduling and fails the run without being misclassified as cancellation. Cancellation that was requested first—through either the caller signal or `runner.cancel()`—remains authoritative; otherwise the first pipeline or heartbeat failure wins. Bundled SQLite and updated custom stores use optional `refreshHeartbeat(jobId, ownerId)` for owner-observable repeated refresh, converting `false` into `JobOwnershipLostError`. Published-v5 stores instead use one-time `enableHeartbeat()` plus owner-scoped `heartbeat()` fallback; because v5 did not define repeated-enable boolean semantics and permitted mismatch no-ops, those legacy stores cannot always report ownership loss until upgraded. Unscoped refresh bypasses ownership checks; hosts should reserve `runner.heartbeatAsOperator(jobId)` for explicit recovery operations. The older `runner.heartbeat(jobId)` name remains as a deprecated compatibility alias.
 
 ### `AgentAdapter` — the extension surface
 
@@ -139,6 +145,47 @@ interface AgentRun {
 ```
 
 Canonical events: `agent_start | text | thinking | tool_call | tool_result | turn_end | agent_end | error | native`. Every event carries a `source` field (the adapter's id) so heterogeneous adapter events flow through one `AgentEventBus` without losing provenance.
+
+`AgentEventBus.emit(event)` is synchronous and always returns `void`; it starts each subscriber in registration order without awaiting returned promises, so use the bus for observation rather than sequencing. A subscriber throw or rejection does not escape `emit` or stop healthy subscribers. The stable `AgentEventBus` contract remains emit/on-only so legacy implementations stay structurally compatible; `createEventBus()` returns the additive `ObservableAgentEventBus` subtype. Register `bus.onHandlerError(({ handler, event, error }) => ...)` on that factory-created bus to observe failures; non-`Error` values are normalized to `Error`. Error observers are also fire-and-forget, and their own failures are contained rather than recursively reported. Both `on` and `onHandlerError` return idempotent unsubscribe callbacks.
+
+Adapter-event persistence has two deliberately different bridges:
+
+```ts
+import {
+  createAgentEventPersistenceBridge,
+  pipeAgentEventsToJobStore,
+} from '@autonome-research/thread-phase/agents';
+
+// Existing best-effort API: unchanged signature and unsubscribe return value.
+// Appends are fire-and-forget; sync throws and rejected appends are swallowed.
+const unsubscribe = pipeAgentEventsToJobStore(bus, store, jobId, {
+  dropTypes: ['text'],
+});
+
+// Durable opt-in: finite ordered queue, deterministic drain, and failures.
+const persistence = createAgentEventPersistenceBridge(bus, store, jobId, {
+  capacity: 256,
+  onFailure: ({ kind, event, error, occurrences }) =>
+    logPersistenceFailure(kind, event, error, occurrences),
+});
+await persistence.flush(); // all events accepted before this call have settled
+await persistence.close(); // unsubscribe and drain; safe to call repeatedly
+```
+
+Use `pipeAgentEventsToJobStore` only when best-effort telemetry is sufficient: it preserves the existing synchronous call shape but offers no delivery barrier or failure signal. Use `createAgentEventPersistenceBridge` when shutdown or terminal work must wait for accepted events. Its capacity counts queued and currently appending events; events emitted while full are rejected and reported as `overflow`, append failures are reported as `append`, and later accepted events continue draining in input order. Failure observers active or pending when `flush()` or `close()` is invoked are included in that barrier. Later failures cannot add another observer delivery to an existing barrier, though they may coalesce into the same already-required pending notification. Synchronous same-kind bursts are aggregated before delivery; if an asynchronous observer remains active, further failures of that kind are coalesced into at most one pending immutable notification. A notification already passed to an observer never changes, and repeated barriers never force concurrent same-kind observer calls. This keeps observer work finitely bounded even during an overflow storm while preserving stable `occurrences` values. Append and overflow failures use separate batches. Install `onFailure` when failures must be acted on.
+
+Register generic asynchronous cleanup with `JobRunOptions.drains` when accepted work must settle before the job's terminal event and state are persisted:
+
+```ts
+await runner.run(jobId, phases, ctx, finalResult, {
+  drains: [
+    () => persistence.close(),
+    () => outputWriter.flush(),
+  ],
+});
+```
+
+Drains run sequentially in registration order, and every drain is attempted, including when ownership acquisition returns false or rejects. They are callbacks rather than AgentEventBus-specific objects, so `JobRunner` remains independent of adapters and event delivery. A drain failure turns an otherwise successful run into `FAILED`. If pipeline or ownership-acquisition failure and drain failure coincide, the original failure remains primary; cancellation similarly takes precedence over drain failures. The rejected `AggregateError` exposes all accompanying drain failures, so cleanup loss is not silent. Terminal persistence and runner hook shutdown happen only after draining finishes.
 
 Conversation state across phases lives in the `Thread` primitive — canonical events plus per-adapter resume tokens. Same-adapter chains (claude-code → claude-code) resume natively via the adapter's session; cross-adapter chains render events back to text via `threadToMessages`.
 

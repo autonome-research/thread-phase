@@ -53,6 +53,8 @@ For removed patterns, see [`recipes.md`](./recipes.md):
 
 **Failure semantics:** `'fail-fast'` aborts all in-flight runs on the first failure via `controller.abort()` and `run.abort()` (belt-and-suspenders) and rejects with `BoundedFanoutOfError { itemIndex, result }`. `'collect'` continues through failures; items not dispatched before a signal abort get synthetic `'aborted'` slots in the result array to preserve position stability.
 
+**Attribution:** `traceId` applies one shared ID to every adapter call. Use `traceIdFor(item, index)` for stable per-item attribution; it overrides the shared ID. Every derived ID is resolved before config construction or adapter dispatch and must be a unique, non-empty string without ASCII control characters. A throwing callback or invalid/duplicate ID rejects with zero adapter side effects.
+
 ```ts
 import { boundedFanoutOf } from 'thread-phase/patterns';
 import { claudeCodeAgent } from 'thread-phase-agents';
@@ -62,6 +64,7 @@ const results = await boundedFanoutOf({
   concurrency: 3,
   adapter: claudeCodeAgent,
   buildConfig: (file) => ({ cwd: '/repo', prompt: `Review ${file}` }),
+  traceIdFor: (file, index) => `review-${index}-${file}`,
   eventBus: ctx.bus,
   signal: ctx.signal,
   mode: 'collect',

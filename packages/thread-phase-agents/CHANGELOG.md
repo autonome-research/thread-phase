@@ -4,8 +4,15 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
-- Locked-version v5 release alongside the core reliable run-lifecycle APIs.
+## [6.1.0] — 2026-07-22
+
+- Locked-version release alongside the additive core v6.1 lifecycle and event APIs.
 - Migrated the Pi adapter and optional peer dependency from deprecated `@mariozechner/pi-coding-agent` to `@earendil-works/pi-coding-agent`.
+- Aligned the package Node requirement with the v6 core `node:sqlite` runtime: Node.js 22.5 or newer.
+
+## [6.0.0] — 2026-07-17
+
+- Locked-version release alongside the core v6 `node:sqlite` migration.
 
 ## [3.2.2] — 2026-05-21
 

@@ -31,7 +31,10 @@ export {
   type AgentCapabilities,
   type AgentEvent,
   type AgentEventBus,
+  type AgentEventHandler,
+  type AgentEventHandlerFailure,
   type AgentFinishReason,
+  type ObservableAgentEventBus,
   type AgentRun,
   type AgentRunOptions,
   type AgentRunResult,
@@ -78,6 +81,13 @@ export { withThread, type WithThreadOptions } from './with-thread.js';
 
 // Bridge adapter events to a JobStore event log.
 export {
+  createAgentEventPersistenceBridge,
+  persistAgentEventsToJobStore,
   pipeAgentEventsToJobStore,
+  type AgentEventPersistenceBridge,
+  type AgentEventPersistenceFailure,
+  type AgentEventPersistenceFailureHandler,
+  type AgentEventPersistenceFailureKind,
+  type AgentEventPersistenceOptions,
   type PipeAgentEventsOptions,
 } from './job-store-bridge.js';

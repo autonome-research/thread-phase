@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  toError,
   toErrorMessage,
   signalReasonToString,
 } from '../src/internal/error-message.js';
@@ -25,6 +26,31 @@ describe('toErrorMessage', () => {
 
   it('does not throw on objects with non-string .message fields', () => {
     expect(toErrorMessage({ message: 42 })).toBe('[object Object]');
+  });
+
+  it('does not throw on hostile message access or coercion', () => {
+    const hostile = new Proxy(Object.create(null), {
+      get() { throw new Error('getter failed'); },
+      getPrototypeOf() { throw new Error('prototype failed'); },
+    });
+    expect(() => toErrorMessage(hostile)).not.toThrow();
+    expect(toErrorMessage(hostile)).toBe('<unserializable>');
+    expect(toError(hostile)).toMatchObject({ message: '<unserializable>' });
+
+    const hostileError = new Proxy(new Error('hidden'), {
+      get() { throw new Error('error getter failed'); },
+    });
+    const normalized = toError(hostileError);
+    expect(normalized).toBeInstanceOf(Error);
+    expect(Object.is(normalized, hostileError)).toBe(false);
+    expect(typeof normalized.message).toBe('string');
+
+    const nonStringMessage = new Error('original');
+    Object.defineProperty(nonStringMessage, 'message', { value: 42 });
+    expect(typeof toErrorMessage(nonStringMessage)).toBe('string');
+    expect(typeof toError(nonStringMessage).message).toBe('string');
+
+    expect(toErrorMessage(Object.create(null))).toBe('[object Object]');
   });
 });
 
