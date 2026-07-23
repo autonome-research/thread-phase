@@ -30,7 +30,7 @@ export interface LiveEvent {
 }
 
 export interface LiveEventListenerFailure {
-  /** The immutable live event whose observer failed. */
+  /** Snapshot of the live event whose observer failed. */
   readonly event: LiveEvent;
   /** The observer's thrown or rejected value, normalized to an Error. */
   readonly error: Error;
@@ -204,6 +204,9 @@ export class JobRunner extends EventEmitter {
       throw new RangeError('staleAfterMs must be a finite positive number');
     }
     const staleBefore = new Date(Date.now() - staleAfterMs);
+    if (Number.isNaN(staleBefore.getTime())) {
+      throw new RangeError('staleAfterMs must produce a valid staleness cutoff date');
+    }
     const reconciled: string[] = [];
     let previousRejectedPage: string | undefined;
     let before: JobListCursor | undefined;

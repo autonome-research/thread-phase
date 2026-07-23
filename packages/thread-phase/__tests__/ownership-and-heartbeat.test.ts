@@ -730,6 +730,11 @@ describe('heartbeat', () => {
 });
 
 describe('read-time staleness', () => {
+  it('rejects thresholds that cannot produce a valid cutoff date', async () => {
+    await expect(new JobRunner(store).reconcileAbandoned(Number.MAX_VALUE))
+      .rejects.toThrow('valid staleness cutoff date');
+  });
+
   it('does not classify default non-heartbeating runs as stale', async () => {
     const id = await store.createJob('no-heartbeat', null);
     await store.setRunning(id);
