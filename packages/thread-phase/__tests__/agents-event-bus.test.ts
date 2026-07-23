@@ -210,6 +210,31 @@ describe('AgentEventBus handler-failure contract', () => {
     expect(failures[0]?.error.message).toBe('non-error failure');
   });
 
+  it('shares an immutable failure notification across error observers', () => {
+    const bus = createEventBus();
+    const originalError = new Error('immutable subscriber failure');
+    const replacementError = new Error('observer mutation');
+    const observed: AgentEventHandlerFailure[] = [];
+    const mutationResults: boolean[] = [];
+
+    bus.onHandlerError((failure) => {
+      mutationResults.push(Reflect.set(
+        failure as unknown as Record<string, unknown>,
+        'error',
+        replacementError,
+      ));
+    });
+    bus.onHandlerError((failure) => observed.push(failure));
+    bus.on(() => { throw originalError; });
+
+    bus.emit(event);
+
+    expect(mutationResults).toEqual([false]);
+    expect(observed).toHaveLength(1);
+    expect(Object.isFrozen(observed[0])).toBe(true);
+    expect(observed[0]?.error).toBe(originalError);
+  });
+
   it('reports delayed asynchronous rejection through the same observable path', async () => {
     const bus = createEventBus();
     const release = deferred();

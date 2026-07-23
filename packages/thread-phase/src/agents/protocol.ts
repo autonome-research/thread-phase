@@ -176,11 +176,11 @@ export type AgentEventHandler = (event: AgentEvent) => void | Promise<void>;
 /** Details reported when an event subscriber throws or rejects. */
 export interface AgentEventHandlerFailure {
   /** The exact subscriber function that failed. */
-  handler: AgentEventHandler;
+  readonly handler: AgentEventHandler;
   /** The exact event passed to the subscriber. */
-  event: AgentEvent;
+  readonly event: AgentEvent;
   /** The thrown or rejected value, normalized to an Error. */
-  error: Error;
+  readonly error: Error;
 }
 
 export interface AgentEventBus {

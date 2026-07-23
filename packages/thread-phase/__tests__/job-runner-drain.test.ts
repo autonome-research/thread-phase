@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PipelineCache } from '../src/cache.js';
 import type { BasePipelineContext, Phase } from '../src/phase.js';
-import { JobRunner } from '../src/session/job-runner.js';
+import { JobRunner, type JobRunOptions } from '../src/session/job-runner.js';
 import type { JobStore } from '../src/session/job-store.js';
 import { SqliteJobStore } from '../src/session/sqlite-job-store.js';
 import { V5CustomJobStore } from '../test-d/job-store-v5.js';
@@ -153,6 +153,90 @@ describe('JobRunner lifecycle drains', () => {
     expect(secondDrain).toHaveBeenCalledOnce();
     expect(ctx.signal).toBeUndefined();
     expect(rejectingRunner.signalFor('claim-rejected')).toBeUndefined();
+  });
+
+  it('preserves a pre-registration setup error and allows context reuse through run()', async () => {
+    const setupError = new Error('drain getter failed');
+    const drains: JobRunOptions['drains'] = [];
+    Object.defineProperty(drains, 0, {
+      configurable: true,
+      enumerable: true,
+      get() { throw setupError; },
+    });
+    Object.defineProperty(drains, 'length', { value: 1 });
+    const previousController = new AbortController();
+    const previousHeartbeat = vi.fn(async () => undefined);
+    const ctx: Ctx = {
+      cache: new PipelineCache(),
+      signal: previousController.signal,
+      heartbeat: previousHeartbeat,
+    };
+    const failedJobId = await runner.create('setup-getter-run', null);
+
+    const error = await runner.run(
+      failedJobId,
+      [successfulPhase],
+      ctx,
+      undefined,
+      { drains },
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBe(setupError);
+    expect(ctx.signal).toBe(previousController.signal);
+    expect(ctx.heartbeat).toBe(previousHeartbeat);
+    expect(runner.signalFor(failedJobId)).toBeUndefined();
+
+    const retryJobId = await runner.create('after-setup-getter-run', null);
+    await expect(runner.run(retryJobId, [successfulPhase], ctx)).resolves.toMatchObject({
+      status: 'completed',
+    });
+  });
+
+  it('returns the original pre-registration setup rejection from start() without an orphan', async () => {
+    const setupError = new Error('start drain getter failed');
+    const drains: JobRunOptions['drains'] = [];
+    Object.defineProperty(drains, 0, {
+      configurable: true,
+      enumerable: true,
+      get() { throw setupError; },
+    });
+    Object.defineProperty(drains, 'length', { value: 1 });
+    const previousController = new AbortController();
+    const previousHeartbeat = vi.fn(async () => undefined);
+    const ctx: Ctx = {
+      cache: new PipelineCache(),
+      signal: previousController.signal,
+      heartbeat: previousHeartbeat,
+    };
+    const failedJobId = await runner.create('setup-getter-start', null);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      const handle = runner.start(
+        failedJobId,
+        [successfulPhase],
+        ctx,
+        undefined,
+        { drains },
+      );
+      expect(handle.signal.aborted).toBe(true);
+      expect(await handle.result.catch((caught: unknown) => caught)).toBe(setupError);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(unhandled).toEqual([]);
+      expect(ctx.signal).toBe(previousController.signal);
+      expect(ctx.heartbeat).toBe(previousHeartbeat);
+      expect(runner.signalFor(failedJobId)).toBeUndefined();
+
+      const retryJobId = await runner.create('after-setup-getter-start', null);
+      await expect(runner.run(retryJobId, [successfulPhase], ctx)).resolves.toMatchObject({
+        status: 'completed',
+      });
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 
   it.each([

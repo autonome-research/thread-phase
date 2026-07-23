@@ -9,7 +9,7 @@ All notable changes to thread-phase will be documented here. The format is based
 ### Agent event dispatch
 
 - `AgentEventBus` now isolates both subscriber throws and returned-promise rejections while preserving synchronous, non-blocking `emit` fan-out. Each dispatch snapshots its subscribers, so add/remove operations during a callback affect only later events.
-- Factory-created buses expose additive `ObservableAgentEventBus.onHandlerError` for non-recursive observation of the failed handler, original event, and normalized `Error`; the emit/on-only `AgentEventBus` contract remains structurally compatible with legacy implementations.
+- Factory-created buses expose additive `ObservableAgentEventBus.onHandlerError` for non-recursive observation of the failed handler, original event, and normalized `Error`; the emit/on-only `AgentEventBus` contract remains structurally compatible with legacy implementations. Handler-failure notifications are readonly and frozen so one observer cannot alter diagnostics seen by later observers.
 
 ### Agent event persistence
 
@@ -29,7 +29,7 @@ All notable changes to thread-phase will be documented here. The format is based
 - Rejection of `FAILED` terminal persistence no longer hides the originating pipeline or heartbeat error; primary, drain, and persistence failures remain observable in deterministic order.
 - Clarified that `heartbeatTimeoutMs` requires `heartbeatMs`; once configured it covers both automatic and manual refreshes, while manual-only timeout configuration remains future work.
 - Added distinct persisted `CANCELLED` and `ABANDONED` states. The bundled SQLite store exposes additive atomic owner-claim, owner-guarded transition, stale-finalization, and terminal status+event capabilities that `JobRunner` uses when available.
-- Added `JobRunner.start()` and `JobRunHandle` for immediate run identity, signal, cancellation, and result access.
+- Added `JobRunner.start()` and `JobRunHandle` for immediate run identity, signal, cancellation, and result access. Pre-registration setup failures retain their original rejection, return an already-aborted handle signal from `start()`, and cannot leak job/context registrations.
 - `JobRunner` now composes its controller with caller `ctx.signal`, restores context hooks after execution, records cancellation request acknowledgement, and prevents late terminal writes from replacing the first terminal state.
 - Added owner IDs, launch-source metadata, and stale-run reconciliation through `JobRunner.reconcileAbandoned()`.
 - Fail-fast `boundedFanout` now aborts and awaits sibling workers before rejecting; unsafe concurrency and item-limit values are rejected before dispatch.

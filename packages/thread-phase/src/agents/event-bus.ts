@@ -41,7 +41,11 @@ export function createEventBus(): ObservableAgentEventBus {
     event: AgentEvent,
     error: unknown,
   ): void => {
-    const failure = { handler, event, error: normalizeError(error) };
+    const failure: AgentEventHandlerFailure = Object.freeze({
+      handler,
+      event,
+      error: normalizeError(error),
+    });
     for (const observer of [...errorHandlers]) {
       try {
         void Promise.resolve(observer(failure)).catch(() => {});

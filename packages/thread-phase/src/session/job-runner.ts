@@ -123,7 +123,9 @@ export class JobRunner extends EventEmitter {
 
   /**
    * Start a run and return its cancellation signal/result immediately.
-   * The job row must already exist; call {@link create} first.
+   * The job row must already exist; call {@link create} first. If synchronous
+   * option/context inspection rejects setup, the handle contains an already
+   * aborted signal and `result` retains that original rejection.
    */
   start<TCtx extends BasePipelineContext, TEvent extends PipelineEvent = PipelineEvent>(
     jobId: string,
@@ -134,8 +136,11 @@ export class JobRunner extends EventEmitter {
   ): JobRunHandle {
     this.assertLocalAvailability(jobId, ctx);
     const result = this.run(jobId, phases, ctx, finalResult, options);
-    const signal = this.signalFor(jobId);
-    if (!signal) throw new Error(`JobRunner failed to initialize run ${jobId}`);
+    // run() performs setup synchronously until its first await. A rejected
+    // setup is represented by its result promise, so preserve that promise
+    // instead of replacing the original error with an initialization throw.
+    const signal = this.signalFor(jobId)
+      ?? AbortSignal.abort(new Error(`JobRunner failed to initialize run ${jobId}`));
     return {
       jobId,
       signal,
@@ -211,7 +216,6 @@ export class JobRunner extends EventEmitter {
     options: JobRunOptions = {},
   ): Promise<PipelineSummary> {
     this.assertLocalAvailability(jobId, ctx);
-    this.activeContexts.add(ctx);
 
     const controller = new AbortController();
     const previousSignal = ctx.signal;
@@ -243,10 +247,31 @@ export class JobRunner extends EventEmitter {
     const markCallerCancellation = (): void => {
       if (!entry.terminationCause) entry.terminationCause = 'cancellation';
     };
-    if (previousSignal?.aborted) markCallerCancellation();
-    else previousSignal?.addEventListener('abort', markCallerCancellation, { once: true });
-    this.inflight.set(jobId, entry);
-    ctx.signal = signal;
+    let callerCancellationListenerAttached = false;
+    let activeContextRegistered = false;
+    let inflightRegistered = false;
+    try {
+      if (previousSignal?.aborted) markCallerCancellation();
+      else if (previousSignal) {
+        previousSignal.addEventListener('abort', markCallerCancellation, { once: true });
+        callerCancellationListenerAttached = true;
+      }
+      this.activeContexts.add(ctx);
+      activeContextRegistered = true;
+      this.inflight.set(jobId, entry);
+      inflightRegistered = true;
+      ctx.signal = signal;
+    } catch (error: unknown) {
+      if (inflightRegistered) this.inflight.delete(jobId);
+      if (activeContextRegistered) this.activeContexts.delete(ctx);
+      if (callerCancellationListenerAttached) {
+        try { previousSignal?.removeEventListener('abort', markCallerCancellation); }
+        catch { /* Preserve the original setup failure. */ }
+      }
+      try { ctx.signal = previousSignal; }
+      catch { /* Preserve the original setup failure. */ }
+      throw error;
+    }
 
     let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
     let heartbeatInFlight: Promise<void> | null = null;

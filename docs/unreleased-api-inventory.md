@@ -23,6 +23,7 @@ Added behavior/surface:
 
 - `createEventBus()` now returns `ObservableAgentEventBus`.
 - Factory-created buses expose `onHandlerError(handler)`.
+- `AgentEventHandlerFailure` fields are readonly and factory notifications are frozen before observation.
 - `@autonome-research/thread-phase-agents` re-exports `AgentEventHandler` and `AgentEventHandlerFailure`.
 
 Compatibility note: the base `AgentEventBus` protocol remains emit/on-only so existing structural implementations remain assignable.

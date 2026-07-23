@@ -3,6 +3,7 @@ import {
   type AgentEvent,
   type AgentEventBus,
   type AgentEventHandler,
+  type AgentEventHandlerFailure,
   type AgentEventPersistenceFailure,
   type ObservableAgentEventBus,
 } from '@autonome-research/thread-phase/agents';
@@ -22,6 +23,14 @@ const factoryBusAsLegacy: AgentEventBus = factoryBus;
 factoryBus.onHandlerError(() => {});
 legacyBus.emit({ type: 'text', source: 'legacy', delta: 'compatible' });
 factoryBusAsLegacy.on(() => {});
+
+declare const handlerFailure: AgentEventHandlerFailure;
+// @ts-expect-error handler-failure notifications are immutable
+handlerFailure.handler = () => {};
+// @ts-expect-error handler-failure notifications are immutable
+handlerFailure.event = { type: 'text', source: 'mutated', delta: 'nope' };
+// @ts-expect-error handler-failure notifications are immutable
+handlerFailure.error = new Error('nope');
 
 declare const persistenceFailure: AgentEventPersistenceFailure;
 // @ts-expect-error persistence notifications are immutable
