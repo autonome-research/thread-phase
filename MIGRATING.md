@@ -25,7 +25,7 @@ All locked packages now consistently require Node.js 22.5 or newer because core 
 
 # Migrating from v5.x to v6.0.0
 
-v6 replaces `better-sqlite3` with Node's built-in `node:sqlite` implementation. Remove any dependency installed solely for the bundled store and upgrade to Node.js 22.5 or newer. Existing schema-version-4 databases remain readable and are upgraded by v6.1 migration 5.
+v6 replaces `better-sqlite3` with Node's built-in `node:sqlite` implementation. Remove any dependency installed solely for the bundled store and upgrade to Node.js 22.5 or newer. Node 22.5–22.12 requires `--experimental-sqlite` (for example, `NODE_OPTIONS=--experimental-sqlite`); Node 22.13+ does not. Existing schema-version-4 databases remain readable and are upgraded by v6.1 migration 5.
 
 v6 also adds `skip` and `retryItem` hooks to `boundedFanout` and fixes `oneShot` so dispatch input reaches its handler.
 

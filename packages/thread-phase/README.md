@@ -124,7 +124,7 @@ await runner.run(jobId, [phaseA, phaseB], ctx);
 
 Live `job:${jobId}` listeners are observational and cannot change authoritative lifecycle results: dispatch snapshots listeners, contains synchronous throws, and observes returned-promise rejections. Configure `onLiveEventError` on `JobRunner` to receive immutable `LiveEventListenerFailure` diagnostics; failures from that diagnostic callback are also contained.
 
-`JobStore` is asynchronous so SQLite, Postgres, Redis, and network-backed implementations share one consistency contract. The bundled `SqliteJobStore` uses Node's synchronous built-in `node:sqlite` hot path internally and exposes it through the same Promise-based interface. Node.js 22.5 or newer is required.
+`JobStore` is asynchronous so SQLite, Postgres, Redis, and network-backed implementations share one consistency contract. The bundled `SqliteJobStore` uses Node's synchronous built-in `node:sqlite` hot path internally and exposes it through the same Promise-based interface. Node.js 22.5 or newer is required. On Node 22.5–22.12, start Node with `--experimental-sqlite` (for example, `NODE_OPTIONS=--experimental-sqlite`); Node 22.13+ exposes the module without that flag.
 
 The v5.0.0 `JobStore` contract remains unchanged. The published contract already includes atomic owner-aware claiming and finalization, cancellation and abandonment transitions, owner-scoped heartbeat, and heartbeat enablement. Custom stores must implement that released interface. The provenance-backed declaration fixture under `test-d/fixtures/v5.0.0/` verifies the exact published shape.
 

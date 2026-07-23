@@ -34,7 +34,7 @@ All notable changes to thread-phase will be documented here. The format is based
 - Live `job:${jobId}` listeners are isolated snapshot observers: synchronous throws and returned-promise rejections cannot alter lifecycle state or results. Added optional `JobRunnerOptions.onLiveEventError` and readonly, shallow-frozen `LiveEventListenerFailure` diagnostic envelopes.
 - Added owner IDs, launch-source metadata, and stale-run reconciliation through `JobRunner.reconcileAbandoned()`. The additive `CursorJobStore.listJobsPage(...)` capability provides stable newest-first continuation so rejected stale rows cannot hide actionable later pages; the published base `JobStore` contract remains unchanged and legacy stores remain bounded by repeated-page detection.
 - Fail-fast `boundedFanout` now aborts and awaits sibling workers before rejecting; unsafe concurrency and item-limit values are rejected before dispatch.
-- Forward-ported lifecycle and migration guarantees onto the v6 `node:sqlite` backend; Node.js 22.5 or newer is required across the locked package set.
+- Forward-ported lifecycle and migration guarantees onto the v6 `node:sqlite` backend; Node.js 22.5 or newer is required across the locked package set. Node 22.5–22.12 requires the runtime's `--experimental-sqlite` flag; Node 22.13+ does not.
 - Upgraded the OpenAI runtime dependency to 6.x and the development test stack to Vitest 4.
 
 The released v5.0.0 `JobStore` interface remains preserved as compatibility evidence. Its published declaration already requires boolean-returning ownership and terminal transitions, atomic finalization, cancellation and abandonment methods, owner-aware heartbeat, and heartbeat enablement. A provenance-backed declaration fixture verifies that exact contract.
