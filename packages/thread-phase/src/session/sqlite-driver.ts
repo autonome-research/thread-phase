@@ -17,6 +17,31 @@
 
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
+type StatementAllResult = ReturnType<StatementSync['all']>;
+type StatementRunResult = ReturnType<StatementSync['run']>;
+
+/** Stable subset of StatementSync used by SqliteJobStore. */
+export interface SqliteStatement {
+  all(...params: any[]): StatementAllResult;
+  get(...params: any[]): StatementAllResult[number] | undefined;
+  run(...params: any[]): StatementRunResult;
+}
+
+function wrapStatement(statement: StatementSync): SqliteStatement {
+  const all = (...params: any[]): StatementAllResult =>
+    (statement.all as (...args: any[]) => StatementAllResult)(...params);
+  return {
+    all,
+    // Node 22.5's early node:sqlite implementation can return an object whose
+    // projected fields are all null from StatementSync.get() when no row
+    // matched. Deriving get from all gives stable undefined-on-no-row behavior
+    // across the entire supported Node range.
+    get: (...params: any[]) => all(...params)[0],
+    run: (...params: any[]): StatementRunResult =>
+      (statement.run as (...args: any[]) => StatementRunResult)(...params),
+  };
+}
+
 interface SqliteTransaction<TArgs extends unknown[], TReturn> {
   (...args: TArgs): TReturn;
   immediate(...args: TArgs): TReturn;
@@ -32,8 +57,8 @@ export class SqliteDriver {
     this.db.exec('PRAGMA busy_timeout = 5000');
   }
 
-  prepare(sql: string): StatementSync {
-    return this.db.prepare(sql);
+  prepare(sql: string): SqliteStatement {
+    return wrapStatement(this.db.prepare(sql));
   }
 
   exec(sql: string): void {
@@ -54,12 +79,12 @@ export class SqliteDriver {
       this.db.exec(`PRAGMA ${stmt}`);
       return undefined;
     }
-    const statement = this.db.prepare(`PRAGMA ${stmt}`);
+    const rows = this.db.prepare(`PRAGMA ${stmt}`).all();
     if (opts?.simple) {
-      const row = statement.get() as Record<string, unknown> | undefined;
+      const row = rows[0] as Record<string, unknown> | undefined;
       return row === undefined ? undefined : Object.values(row)[0];
     }
-    return statement.all();
+    return rows;
   }
 
   /**
