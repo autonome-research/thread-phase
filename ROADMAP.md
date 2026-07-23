@@ -23,7 +23,7 @@ The clean candidate branch contains:
 - stable prevalidated per-item fanout attribution;
 - published-v5 declaration provenance and compatibility tests.
 
-As of the 2026-07-22 checkpoint, the candidate passed build, typecheck, full tests, `git diff --check`, and an integrated low-risk review. Canonical master, merge, push, tag, and publication remain separate decisions.
+At validated code/package checkpoint `f24d28a`, the candidate passed clean-install build, typecheck, full tests, `git diff --check`, production audit, package inspection, and exact-tarball smoke tests on Node 20, 22, and 26. The final integrated review remains the last technical gate. Canonical master, merge, push, tag, and publication remain separate decisions.
 
 ## P0 — release preparation
 
@@ -32,20 +32,17 @@ Resolved release decisions:
 - v5.1.0 is the approved release line.
 - unpublished candidate migrations are collapsed into the single v5.1.0 migration 5; development candidate databases are intentionally unsupported.
 
+Completed release preparation:
+
+- aligned root/core/agents/CLI versions, internal ranges, lockfile, changelogs, migration notes, API inventory, and release checklist;
+- validated clean installs, build, typecheck, full tests, package contents, exact tarballs, SQLite, CLI, supported Node 20/22/26 runtimes, and the Pi adapter;
+- preserved exact package artifacts and hashes outside git for the validated checkpoint.
+
 Remaining release work:
 
-1. **Align and review release metadata.**
-   - root/core/agents/CLI versions;
-   - internal dependency ranges and lockfile;
-   - changelogs, migration notes, API inventory, and release checklist.
-2. **Validate the exact packages.**
-   - clean install;
-   - build, typecheck, and full tests;
-   - package dry-runs and content inspection;
-   - isolated local-tarball import and CLI smoke tests;
-   - supported Node/Pi matrix with explicit skips;
-   - provenance and human release checklist.
-3. **Obtain final release-candidate review.**
+1. Obtain a final release-candidate review.
+2. Confirm candidate cleanliness and canonical-master isolation.
+3. Obtain separate human decisions for merge, push, tag, and publication.
 
 ## P1 — adoption-critical developer experience
 

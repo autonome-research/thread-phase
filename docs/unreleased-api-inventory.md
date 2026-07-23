@@ -7,7 +7,7 @@ Repository evidence:
 - Published declaration fixture: `packages/thread-phase/test-d/fixtures/v5.0.0/published/`
 - Fixture provenance: `packages/thread-phase/test-d/fixtures/v5.0.0/provenance.json`
 - Published-contract restoration checkpoint: `942df3e804d7301d2897e2f429ee284a99de137e`
-- Current candidate checkpoint when this inventory was reviewed: `512742741c8a0e9c31b3ae61e095be1656bbc860`
+- Final validated code/package checkpoint: `f24d28a5d4ee7d3066ca7720959e97d4d3664a9d`
 
 This inventory records the evidence for the approved v5.1.0 release line. It lists stable additive surfaces, not internal implementation changes. Retaining these additions requires a minor release; v5.1.0 was selected rather than removing them for a fix-only v5.0.1.
 
@@ -67,6 +67,7 @@ Added public methods/capabilities:
 
 - `JobRunner.heartbeatAsOperator(jobId)`
 - optional `JobStore.refreshHeartbeat?(jobId, ownerId): Promise<boolean>`
+- `SqliteJobStore.refreshHeartbeat(jobId, ownerId): Promise<boolean>` implementation
 
 Compatibility note: `JobRunner.heartbeat(jobId)` remains as a deprecated alias. The optional v5.1 capability defines repeated owner-observable refresh semantics. Published-v5 stores remain compatible through one-time `enableHeartbeat()` plus owner-scoped `heartbeat()` fallback; their legacy boolean and mismatch semantics are not strengthened retroactively.
 
