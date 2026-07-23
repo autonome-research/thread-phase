@@ -10,6 +10,7 @@
  * @internal
  */
 
+import { toErrorMessage } from '../internal/error-message.js';
 import type { SerializableError } from './protocol.js';
 
 /**
@@ -33,40 +34,25 @@ function serializeInner(
   err: unknown,
   seen: WeakSet<object>,
 ): SerializableError {
-  if (err instanceof Error) {
-    if (seen.has(err)) {
+  try {
+    if (err instanceof Error) {
+      if (seen.has(err)) {
+        return {
+          name: 'CycleDetected',
+          message: `cyclic Error.cause reference back to ${err.name}: ${err.message}`,
+        };
+      }
+      seen.add(err);
       return {
-        name: 'CycleDetected',
-        message: `cyclic Error.cause reference back to ${err.name}: ${err.message}`,
+        name: err.name,
+        message: err.message,
+        stack: err.stack,
+        cause:
+          err.cause !== undefined ? serializeInner(err.cause, seen) : undefined,
       };
     }
-    seen.add(err);
-    return {
-      name: err.name,
-      message: err.message,
-      stack: err.stack,
-      cause:
-        err.cause !== undefined ? serializeInner(err.cause, seen) : undefined,
-    };
-  }
-  return { name: 'NonError', message: safeStringify(err) };
-}
-
-/**
- * Stringify an arbitrary value without ever propagating an exception.
- *
- * Hostile inputs — Proxies whose traps throw, objects with throwing
- * `Symbol.toPrimitive` or `toString`, getter chains that recurse — would
- * otherwise crash this function and break the adapter safety-net invariant.
- */
-function safeStringify(v: unknown): string {
-  try {
-    return String(v);
   } catch {
-    try {
-      return Object.prototype.toString.call(v);
-    } catch {
-      return '<unserializable>';
-    }
+    // Hostile proxies and Error accessors fall through to safe normalization.
   }
+  return { name: 'NonError', message: toErrorMessage(err) };
 }

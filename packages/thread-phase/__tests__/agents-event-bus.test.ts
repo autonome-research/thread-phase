@@ -36,6 +36,13 @@ async function recordUnhandled(action: () => Promise<void>): Promise<unknown[]> 
   }
 }
 
+function hostileThrownValue(): object {
+  return new Proxy(Object.create(null), {
+    get() { throw new Error('getter failed'); },
+    getPrototypeOf() { throw new Error('prototype failed'); },
+  });
+}
+
 const event: AgentEvent = {
   type: 'native',
   source: 'event-bus-contract',
@@ -114,6 +121,36 @@ describe('AgentEventBus handler-failure contract', () => {
 
     expect(() => bus.emit(event)).not.toThrow();
     expect(seen).toEqual(['before-throw', 'after-throw']);
+  });
+
+  it('normalizes a hostile synchronous throw and continues healthy fanout', () => {
+    const bus = createEventBus();
+    const observed: AgentEventHandlerFailure[] = [];
+    const seen: string[] = [];
+    bus.onHandlerError((failure) => observed.push(failure));
+    bus.on(() => { throw hostileThrownValue(); });
+    bus.on(() => { seen.push('healthy'); });
+
+    expect(() => bus.emit(event)).not.toThrow();
+    expect(seen).toEqual(['healthy']);
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.error).toBeInstanceOf(Error);
+    expect(observed[0]?.error.message).toBe('<unserializable>');
+  });
+
+  it('normalizes a hostile asynchronous rejection without an unhandled rejection', async () => {
+    const bus = createEventBus();
+    const observed = deferred<AgentEventHandlerFailure>();
+    bus.onHandlerError((failure) => observed.resolve(failure));
+    bus.on(async () => { throw hostileThrownValue(); });
+
+    const unhandled = await recordUnhandled(async () => {
+      bus.emit(event);
+      const failure = await observed.promise;
+      expect(failure.error).toBeInstanceOf(Error);
+      expect(failure.error.message).toBe('<unserializable>');
+    });
+    expect(unhandled).toEqual([]);
   });
 
   it('contains a delayed asynchronous rejection without interrupting healthy fanout', async () => {

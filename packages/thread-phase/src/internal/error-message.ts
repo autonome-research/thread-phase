@@ -55,6 +55,15 @@ export function toErrorMessage(err: unknown): string {
  * @param fallback String to return when `signal.reason` is undefined.
  *                 Defaults to `'aborted'`.
  */
+export function toError(err: unknown): Error {
+  try {
+    if (err instanceof Error) return err;
+  } catch {
+    // Hostile proxies may throw from instanceof; normalize them below.
+  }
+  return new Error(toErrorMessage(err));
+}
+
 export function signalReasonToString(
   signal: AbortSignal,
   fallback = 'aborted',

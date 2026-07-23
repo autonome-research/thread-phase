@@ -12,6 +12,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { toError } from '../internal/error-message.js';
 import type { PipelineEvent } from '../phase.js';
 import type { JobStore } from '../session/index.js';
 import type { AgentEvent, AgentEventBus } from './protocol.js';
@@ -75,15 +76,6 @@ export interface AgentEventPersistenceBridge {
   close(): Promise<void>;
   /** Observe append failures and events rejected because the queue is full. */
   onFailure(handler: AgentEventPersistenceFailureHandler): () => void;
-}
-
-function errorFrom(value: unknown): Error {
-  if (value instanceof Error) return value;
-  try {
-    return new Error(String(value));
-  } catch {
-    return new Error('Unknown persistence failure');
-  }
 }
 
 function eventKey(
@@ -264,7 +256,7 @@ export function createAgentEventPersistenceBridge(
     const batch = newBatch();
     state.pending = {
       ...batch,
-      accumulator: { event, error: errorFrom(error), occurrences: 1 },
+      accumulator: { event, error: toError(error), occurrences: 1 },
     };
     if (!state.active) {
       // Defer initial delivery so a synchronous failure burst is aggregated

@@ -9,12 +9,12 @@ All notable changes to thread-phase will be documented here. The format is based
 ### Agent event dispatch
 
 - `AgentEventBus` now isolates both subscriber throws and returned-promise rejections while preserving synchronous, non-blocking `emit` fan-out. Each dispatch snapshots its subscribers, so add/remove operations during a callback affect only later events.
-- Factory-created buses expose additive `ObservableAgentEventBus.onHandlerError` for non-recursive observation of the failed handler, original event, and normalized `Error`; the emit/on-only `AgentEventBus` contract remains structurally compatible with legacy implementations. Handler-failure notifications are readonly and frozen so one observer cannot alter diagnostics seen by later observers.
+- Factory-created buses expose additive `ObservableAgentEventBus.onHandlerError` for non-recursive observation of the failed handler, original event, and normalized `Error`; the emit/on-only `AgentEventBus` contract remains structurally compatible with legacy implementations. Handler-failure notifications are readonly and frozen so one observer cannot alter diagnostics seen by later observers. Shared defensive normalization contains even hostile thrown/rejected values whose reflection or coercion traps throw.
 
 ### Agent event persistence
 
 - Added an opt-in, finitely bounded persistence bridge that serializes accepted adapter events, reports append and overflow failures, and provides deterministic `flush()` and idempotent draining `close()` barriers. Asynchronous failure observation is also bounded: synchronous same-kind bursts aggregate before delivery; a barrier can seal one serial successor while later failures coalesce into one remaining pending notification. Append and overflow batches remain separate, observer callbacks stay serial per kind, and flush/close wait for every invocation-time covered batch to settle. Failure observers may safely await reentrant `flush()` or `close()` calls, including after an asynchronous boundary; callback-local barriers exclude the observer's own active delivery to avoid self-deadlock, while the canonical external close barrier still waits for that observer to settle.
-- Preserved `pipeAgentEventsToJobStore(bus, store, jobId, options?)` unchanged as the best-effort alternative: it still returns an unsubscribe callback, performs fire-and-forget appends, and isolates both synchronous store throws and asynchronous append rejections.
+- Preserved `pipeAgentEventsToJobStore(bus, store, jobId, options?)` unchanged as the best-effort alternative: it still returns an unsubscribe callback, performs fire-and-forget appends, and isolates both synchronous store throws and asynchronous append rejections. Persistence failure normalization is non-throwing for arbitrary backend rejection values.
 
 ### Fanout attribution
 

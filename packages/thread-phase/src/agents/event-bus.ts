@@ -9,21 +9,13 @@
  *
  */
 
+import { toError } from '../internal/error-message.js';
 import type {
   AgentEvent,
   AgentEventHandler,
   AgentEventHandlerFailure,
   ObservableAgentEventBus,
 } from './protocol.js';
-
-function normalizeError(value: unknown): Error {
-  if (value instanceof Error) return value;
-  try {
-    return new Error(String(value));
-  } catch {
-    return new Error('Unknown handler failure');
-  }
-}
 
 /**
  * Construct a new event bus. Each adapter that receives one via
@@ -44,7 +36,7 @@ export function createEventBus(): ObservableAgentEventBus {
     const failure: AgentEventHandlerFailure = Object.freeze({
       handler,
       event,
-      error: normalizeError(error),
+      error: toError(error),
     });
     for (const observer of [...errorHandlers]) {
       try {

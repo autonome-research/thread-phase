@@ -150,6 +150,39 @@ describe('persistAgentEventsToJobStore', () => {
     store.close();
   });
 
+  it('normalizes a hostile append rejection and drains without an orphan', async () => {
+    const store = newStore();
+    const jobId = await store.createJob('hostile-append-rejection', null);
+    const bus = createEventBus();
+    const hostile = new Proxy(Object.create(null), {
+      get() { throw new Error('getter failed'); },
+      getPrototypeOf() { throw new Error('prototype failed'); },
+    });
+    store.appendEvent = async () => { throw hostile; };
+    const failures: AgentEventPersistenceFailure[] = [];
+    const bridge = persistAgentEventsToJobStore(bus, store, jobId, {
+      onFailure: (failure) => failures.push(failure),
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      bus.emit({ type: 'text', source: 'mock', delta: 'failure' });
+      await bridge.flush();
+      await bridge.close();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.kind).toBe('append');
+      expect(failures[0]?.error).toBeInstanceOf(Error);
+      expect(failures[0]?.error.message).toBe('<unserializable>');
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      store.close();
+    }
+  });
+
   it('snapshots failure observers so callback mutations affect only later notifications', async () => {
     const store = newStore();
     const jobId = await store.createJob('observer-snapshot', null);

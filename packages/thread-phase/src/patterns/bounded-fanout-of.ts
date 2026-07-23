@@ -22,6 +22,7 @@
  * Stable surface — exported via thread-phase/patterns; covered by semver.
  */
 
+import { toError } from '../internal/error-message.js';
 import type {
   AgentAdapterMeta,
   AgentEventBus,
@@ -101,7 +102,7 @@ export async function boundedFanoutOf<TItem, TConfig>(
 
   const fail = async (error: unknown): Promise<void> => {
     if (firstFailure) return;
-    firstFailure = error instanceof Error ? error : new Error(String(error));
+    firstFailure = toError(error);
     await abortAndSettle();
   };
 
@@ -153,7 +154,7 @@ export async function boundedFanoutOf<TItem, TConfig>(
     const rejected = settlements.find(
       (settlement): settlement is PromiseRejectedResult => settlement.status === 'rejected',
     );
-    if (rejected) firstFailure = rejected.reason instanceof Error ? rejected.reason : new Error(String(rejected.reason));
+    if (rejected) firstFailure = toError(rejected.reason);
   }
 
   if (opts.signal?.aborted && mode === 'fail-fast') throw signalAbortError(opts.signal);
@@ -206,9 +207,9 @@ export class BoundedFanoutOfError extends Error {
 }
 
 function signalAbortError(signal: AbortSignal): Error {
-  if (signal.reason instanceof Error) return signal.reason;
-  const error = new Error(typeof signal.reason === 'string' ? signal.reason : 'aborted');
-  error.name = 'AbortError';
+  const reason = signal.reason;
+  const error = toError(reason === undefined ? 'aborted' : reason);
+  if (error !== reason) error.name = 'AbortError';
   return error;
 }
 

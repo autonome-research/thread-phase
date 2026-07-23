@@ -13,7 +13,7 @@ import * as os from 'node:os';
 import type { BasePipelineContext, Phase, PipelineEvent } from '../phase.js';
 import { runPipeline, type PipelineSummary } from '../orchestrator.js';
 import { JobOwnershipLostError, type JobOwnership, type JobStore } from './job-store.js';
-import { signalReasonToString, toErrorMessage } from '../internal/error-message.js';
+import { signalReasonToString, toError, toErrorMessage } from '../internal/error-message.js';
 
 export interface LiveEvent {
   id: number;
@@ -348,7 +348,7 @@ export class JobRunner extends EventEmitter {
     };
 
     const recordHeartbeatFailure = (error: unknown): void => {
-      const failure = normalizeError(error);
+      const failure = toError(error);
       heartbeatStopped = true;
       if (heartbeatTimer !== null) {
         clearTimeout(heartbeatTimer);
@@ -480,7 +480,7 @@ export class JobRunner extends EventEmitter {
             `Heartbeat for job ${jobId} timed out after ${this.heartbeatTimeoutMs}ms`,
           );
         } catch (error: unknown) {
-          const failure = normalizeError(error);
+          const failure = toError(error);
           recordHeartbeatFailure(failure);
           throw failure;
         }
@@ -565,7 +565,7 @@ export class JobRunner extends EventEmitter {
       if (entry.terminationCause === 'cancellation') {
         const reason = signalReasonToString(signal, entry.cancelReason ?? 'cancelled');
         const persistenceFailures = await persistCancellation(reason);
-        const abort = error instanceof Error && error.name === 'AbortError'
+        const abort = isErrorNamed(error, 'AbortError')
           ? error
           : Object.assign(new Error(`cancelled: ${reason}`), { name: 'AbortError' });
         throw combineLifecycleErrors(abort, [...persistenceFailures, ...drainFailures]);
@@ -573,7 +573,7 @@ export class JobRunner extends EventEmitter {
       const effectiveError = entry.terminationCause === 'heartbeat'
         ? heartbeatFailure
         : error;
-      const primaryError = effectiveError instanceof LifecycleDrainAggregateError
+      const primaryError = isLifecycleDrainAggregateError(effectiveError)
         ? effectiveError
         : combineLifecycleErrors(effectiveError, drainFailures);
       const message = toErrorMessage(effectiveError);
@@ -649,7 +649,7 @@ export class JobRunner extends EventEmitter {
     if (!this.onLiveEventError) return;
     const failure: LiveEventListenerFailure = Object.freeze({
       event,
-      error: normalizeError(error),
+      error: toError(error),
     });
     try {
       void Promise.resolve(this.onLiveEventError(failure)).catch(() => undefined);
@@ -669,27 +669,38 @@ function combineLifecycleErrors(primary: unknown, drainFailures: ReadonlyArray<u
   if (drainFailures.length === 0) return primary;
   const message = toErrorMessage(primary);
   const combined = new AggregateError([primary, ...drainFailures], message);
-  if (primary instanceof Error && primary.name === 'AbortError') combined.name = 'AbortError';
+  if (isErrorNamed(primary, 'AbortError')) combined.name = 'AbortError';
   return combined;
 }
 
 function appendLifecycleErrors(primary: unknown, additional: ReadonlyArray<unknown>): unknown {
   if (additional.length === 0) return primary;
-  if (primary instanceof AggregateError) {
-    const combined = new AggregateError([...primary.errors, ...additional], primary.message);
-    combined.name = primary.name;
-    return combined;
+  try {
+    if (primary instanceof AggregateError) {
+      const combined = new AggregateError([...primary.errors, ...additional], primary.message);
+      combined.name = primary.name;
+      return combined;
+    }
+  } catch {
+    // Hostile errors fall back to ordinary safe aggregation.
   }
   return combineLifecycleErrors(primary, additional);
 }
 
-function normalizeError(value: unknown): Error {
+function isErrorNamed(value: unknown, name: string): value is Error {
   try {
-    if (value instanceof Error) return value;
+    return value instanceof Error && value.name === name;
   } catch {
-    // Hostile proxies may throw from instanceof; normalize them below.
+    return false;
   }
-  return new Error(toErrorMessage(value));
+}
+
+function isLifecycleDrainAggregateError(value: unknown): value is LifecycleDrainAggregateError {
+  try {
+    return value instanceof LifecycleDrainAggregateError;
+  } catch {
+    return false;
+  }
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

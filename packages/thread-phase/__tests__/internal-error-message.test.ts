@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  toError,
   toErrorMessage,
   signalReasonToString,
 } from '../src/internal/error-message.js';
@@ -34,6 +35,7 @@ describe('toErrorMessage', () => {
     });
     expect(() => toErrorMessage(hostile)).not.toThrow();
     expect(toErrorMessage(hostile)).toBe('<unserializable>');
+    expect(toError(hostile)).toMatchObject({ message: '<unserializable>' });
     expect(toErrorMessage(Object.create(null))).toBe('[object Object]');
   });
 });

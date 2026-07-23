@@ -23,7 +23,7 @@ import { PipelineCache } from '../cache.js';
 import type { BasePipelineContext, Phase } from '../phase.js';
 import type { Trigger, TriggerEvent } from '../triggers/types.js';
 import { deriveNameFromCaller } from './caller.js';
-import { toErrorMessage } from '../internal/error-message.js';
+import { toError, toErrorMessage } from '../internal/error-message.js';
 import type {
   ExtensionRegisterFn,
   HelperHandler,
@@ -380,7 +380,7 @@ export function hook<TBody = unknown, TResult = unknown>(
       } catch (err) {
         httpTrig.rejectResponse(
           eventId,
-          err instanceof Error ? err : new Error(toErrorMessage(err)),
+          toError(err),
         );
         throw err;
       }

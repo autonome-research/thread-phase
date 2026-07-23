@@ -16,6 +16,7 @@
  */
 
 import { Ajv, type ValidateFunction } from 'ajv';
+import { toErrorMessage } from '../internal/error-message.js';
 import type { ToolDefinition, ToolExecutor, ToolResult } from '../messages.js';
 
 /**
@@ -106,7 +107,7 @@ export class ToolRegistry implements ToolExecutor {
       const content = await entry.handler(args, { toolCallId, signal });
       return { toolCallId, content };
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = toErrorMessage(err);
       return { toolCallId, content: `Error: tool "${name}" threw: ${message}` };
     }
   }
