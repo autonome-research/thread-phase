@@ -54,11 +54,11 @@ We're unlikely to merge:
 
 ## Versioning
 
-Once v1.0.0 ships, the project follows semver:
+The project follows semver on the published 6.x line (`@autonome-research/thread-phase@6.1.0` is on npm):
 
-- **patch (1.0.x)** — bug fixes, no API changes
-- **minor (1.x.0)** — additive only — new exports, new optional fields, new patterns
-- **major (x.0.0)** — breaking changes
+- **patch (6.1.x)** — bug fixes, no stable API changes
+- **minor (6.x.0)** — additive only — new exports, new optional fields, new patterns
+- **major (x.0.0)** — breaking changes to stable API
 
 `@internal` exports are excluded from the stability commitment. Pin the minor version if you depend on them.
 
