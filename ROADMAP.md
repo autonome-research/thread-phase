@@ -7,14 +7,16 @@ Developer experience is part of lifecycle correctness. A safe runtime that canno
 ## Active roadmap documents
 
 - [`docs/developer-experience-roadmap.md`](./docs/developer-experience-roadmap.md) — known shortcomings, adoption priorities, future API direction, and DX acceptance criteria.
-- [`docs/unreleased-api-inventory.md`](./docs/unreleased-api-inventory.md) — verified stable additions since published v6.0.0 and release-line evidence.
-- [`MIGRATING.md`](./MIGRATING.md) — released migration guidance and the current unreleased candidate summary.
+- [`docs/unreleased-api-inventory.md`](./docs/unreleased-api-inventory.md) — verified stable additions that shipped in published v6.1.0 (relative to published v6.0.0) and release-line evidence.
+- [`MIGRATING.md`](./MIGRATING.md) — released migration guidance for the current published line.
 - [`packages/thread-phase/CHANGELOG.md`](./packages/thread-phase/CHANGELOG.md) — implemented changes by release.
 - [`docs/archive/roadmap-pre-v1.md`](./docs/archive/roadmap-pre-v1.md) — historical pre-v1 roadmap preserved for project context; no longer prescriptive.
 
-## Current candidate
+## Current published line
 
-The v6.1 forward-port candidate contains:
+**v6.1.0 is published.** `@autonome-research/thread-phase@6.1.0` is on npm, `packages/thread-phase/package.json` is `6.1.0`, and git tag `v6.1.0` exists. It is not a candidate.
+
+Published v6.1.0 includes:
 
 - bounded AgentEvent persistence with deterministic drains;
 - hardened subscriber failure observation;
@@ -24,24 +26,18 @@ The v6.1 forward-port candidate contains:
 - published-v5 declaration provenance and compatibility tests;
 - the v6.0 `node:sqlite`, `boundedFanout` skip/retry, and `oneShot` input behavior.
 
-The original v5.1 candidate was validated and reviewed but never published. Remote `master` had already advanced to published v6.0.0, so the work is being forward-ported onto `dd9f9a7` as v6.1.0. Initial merged validation passes build, typecheck, 538 core tests, 121 agents tests, 41 CLI tests, and repeated multiprocess SQLite migration tests. Exact-package validation and final integrated review remain pending.
+The original v5.1 candidate was validated and reviewed but never published. Remote `master` had already advanced to published v6.0.0, so that work was forward-ported onto `dd9f9a7` and shipped as v6.1.0.
 
-## P0 — release preparation
+## P0 — v6.1.0 release status
 
-Resolved release decisions:
+Completed:
 
-- v6.1.0 is the active release line.
+- v6.1.0 is the published release line (npm package and git tag).
 - unpublished candidate migrations remain collapsed into the single migration 5; development candidate databases are intentionally unsupported.
 - all locked packages require Node.js 22.5 or newer because core v6 uses `node:sqlite`.
+- forward-port merge, tag `v6.1.0`, and npm publication are done.
 
-Remaining release work:
-
-1. Complete and commit the reviewed forward-port merge.
-2. Validate declarations against the exact published v6.0.0 tarball.
-3. Run clean-install build, typecheck, full tests, package inspection, exact-tarball SQLite/CLI smoke, Pi smoke, and production audit on supported Node runtimes.
-4. Produce a v6.1.0 release checklist and final integrated review.
-5. Push a reviewed v6.1 candidate and replace the obsolete draft v5.1 PR.
-6. Obtain separate human decisions for merge, tag, and publication.
+Remaining P0 merge/tag/publication work from the candidate era is finished. GitHub Releases is still empty despite existing tags; that is tracked separately in #8 and does not make 6.1.0 unpublished.
 
 ## P1 — adoption-critical developer experience
 
