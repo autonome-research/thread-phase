@@ -37,6 +37,7 @@ import type { ClaudeCodeAgentConfig } from './claude-code/index.js';
 import type { CodexAgentConfig } from './codex/index.js';
 import type { CodexCliAgentConfig } from './codex-cli/index.js';
 import type { HermesAgentConfig } from './hermes/index.js';
+import type { GrokBotAgentConfig } from './grok-bot/index.js';
 import type { OpenClawAgentConfig } from './openclaw/index.js';
 import type { PiAgentConfig } from './pi/index.js';
 
@@ -169,6 +170,15 @@ export const injectMemory = {
       prompt: `Context from prior interactions:\n${memory}\n\nCurrent request: ${cfg.prompt}`,
     };
   },
+
+  /** Prepend memory to the Grok Bot turn prompt. */
+  grokBot(cfg: GrokBotAgentConfig, memory: string): GrokBotAgentConfig {
+    if (!memory) return cfg;
+    return {
+      ...cfg,
+      prompt: `Context from prior interactions:\n${memory}\n\nCurrent request: ${cfg.prompt}`,
+    };
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -234,5 +244,11 @@ export const injectResume = {
       return { ...cfg, resumeSessionFile: token.path };
     }
     return cfg;
+  },
+
+  /** Grok Bot resumes with a product-owned opaque conversation token. */
+  grokBot(cfg: GrokBotAgentConfig, token: ResumeToken): GrokBotAgentConfig {
+    if (token.kind !== 'opaque') return cfg;
+    return { ...cfg, resumeToken: token.data };
   },
 };

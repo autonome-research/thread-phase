@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- `grokBotAgent`, an honest bridge to a host-supplied Cursor/Grok Bot invoke API with turn streaming, remote cancellation, human-gate events, opaque resumption, timeout bounds, and the standard AgentAdapter lifecycle. No public Grok Bot CLI or invoke API is assumed.
+
 ## [6.1.0] — 2026-07-22
 
 - Locked-version release alongside the additive core v6.1 lifecycle and event APIs.
