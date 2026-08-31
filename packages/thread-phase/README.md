@@ -223,6 +223,44 @@ export default schedule({ intervalMs: 15 * 60_000 }, async () => {
 });
 ```
 
+## Context curator (opt-in)
+
+`@autonome-research/thread-phase/context` ships two ways to shape the message list before it reaches the model:
+
+1. The default **`ResultCapper` + `DeterministicCompressor`** path. Fixed-policy: cap individual tool results at a char budget; replace older tool results with opaque markers once the message count grows. Composes directly with `TokenBudgetTracker`.
+
+2. The **curator substrate** — per-message tag store, pluggable reduction strategies, send-time apply pipeline. Use when an outer process (a "curator" agent on a shadow copy, a heuristic, anything) decides per-message what to drop or reduce, separately from threshold-driven compression.
+
+```ts
+import {
+  applyCuratorMarks,
+  MARKED_DROP,
+  REDUCED,
+  reduceHeadTail,
+} from '@autonome-research/thread-phase/context';
+
+// Whoever decides shapes the maps:
+const messageTags = new Map<string, Set<string>>();
+const reducedContent = new Map<string, string>();
+
+// Mark a long tool result for reduction, store the reduced version:
+messageTags.set(msgId, new Set([REDUCED]));
+reducedContent.set(msgId, reduceHeadTail(originalContent));
+
+// At send time, transform the message list before passing to the model:
+const view = applyCuratorMarks(messages, messageTags, reducedContent);
+// view contains the same messages with marked_drop entries removed and
+// reduced entries' content swapped. Original messages array untouched.
+```
+
+Strategies: `reduceHeadTail`, `reduceFirstNChars`, `reduceSchemaOnly`, `reduceSummarize` (async, LLM-backed via the package's `openai` peer dep). All are pure functions that take a string and return a string; compose your own with the same signature.
+
+The substrate is additive — it composes with the existing two-layer compression rather than replacing it. Pick whichever fits the policy: opaque-marker replacement for the simple case, per-message marks when you want auditable, per-message decisions (and a separate process to make them).
+
+The curator substrate addresses one of the gaps noted under *Out of scope* above: the bundled compressor uses opaque markers, which loses semantic detail. Per-message reductions via the curator substrate let you keep the message slot but shrink the content, preserving role/`toolCallId` and giving the model a smaller-but-faithful view.
+
+See [`src/context/curator/`](./src/context/curator/) for the full API.
+
 ## Patterns
 
 In `@autonome-research/thread-phase/patterns`:
