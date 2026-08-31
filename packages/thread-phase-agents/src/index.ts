@@ -24,6 +24,15 @@ export { codexAgent, type CodexAgentConfig } from './codex/index.js';
 export { codexCliAgent, type CodexCliAgentConfig } from './codex-cli/index.js';
 export { claudeCodeAgent, type ClaudeCodeAgentConfig } from './claude-code/index.js';
 export { piAgent, type PiAgentConfig } from './pi/index.js';
+export {
+  grokBotAgent,
+  type GrokBotAgentConfig,
+  type GrokBotInvokeClient,
+  type GrokBotInvokeEvent,
+  type GrokBotInvokeOptions,
+  type GrokBotInvokeRequest,
+  type GrokBotInvokeRun,
+} from './grok-bot/index.js';
 
 // Pre-built inject callbacks for withMemory / withThread.
 export { injectMemory, injectResume } from './injectors.js';

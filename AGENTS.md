@@ -126,7 +126,7 @@ The substrate ships across three packages + a few subpaths. This table is the **
 | **Raw inference loop**: `runAgentWithTools`, `loadInferenceConfig`, `createInferenceClient`, `ToolRegistry` | `@autonome-research/thread-phase` |
 | **Triggers**: `TimerTrigger`, `Trigger`, `TriggerEvent`, `runTrigger`, `RunTriggerHandle` | `@autonome-research/thread-phase/triggers` |
 | **Patterns**: `whileCondition`, `match`, `withRetry`, `subPipeline`, `subPipelineOf`, `runSubPipeline`, `boundedFanout`, `boundedFanoutOf`, `parallelPhases`, `intentGate` | `@autonome-research/thread-phase/patterns` |
-| **Pre-built agents**: `claudeCodeAgent`, `codexAgent`, `codexCliAgent`, `hermesAgent`, `openClawAgent`, `anthropicAgent`, `piAgent`, `acpAgent` | `@autonome-research/thread-phase-agents` |
+| **Pre-built agents**: `claudeCodeAgent`, `codexAgent`, `codexCliAgent`, `hermesAgent`, `openClawAgent`, `anthropicAgent`, `piAgent`, `grokBotAgent`, `acpAgent` | `@autonome-research/thread-phase-agents` |
 | **Chain-builder utilities**: `createEventBus`, `pipeAgentEventsToJobStore`, `createThread`, `appendEvent`, `withMemory`, `withThread`, `isSteerable` | `@autonome-research/thread-phase-agents` (re-exported from core) |
 | **Adapter-consumer types**: `AgentEvent`, `AgentRun`, `AgentRunResult`, `AgentEventBus`, `Thread`, `AgentAdapterMeta`, `AgentCapabilities` | `@autonome-research/thread-phase-agents` (re-exported from core) |
 | **Cross-adapter rendering** (when chaining different adapters): `threadToTranscript`, `threadToMessages`, `threadToAcpPrompt`, `threadToClaudeCodePrompt`, `threadToCodexInput`, `threadToAnthropicMessages` | `@autonome-research/thread-phase-agents` |
@@ -1110,6 +1110,7 @@ import {
   anthropicAgent,
   codexAgent,
   claudeCodeAgent,
+  grokBotAgent,
 } from 'thread-phase-agents';
 ```
 

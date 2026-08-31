@@ -36,7 +36,7 @@ thread-phase run hello
 | Package | Purpose |
 |---|---|
 | [`@autonome-research/thread-phase`](./packages/thread-phase) | Library: `Phase`, `runPipeline`, `Trigger`, `JobRunner`, patterns, helpers (`oneShot` / `schedule` / `hook`). |
-| [`@autonome-research/thread-phase-agents`](./packages/thread-phase-agents) | Adapter implementations for claude-code, codex, hermes, openclaw, pi, Anthropic, ACP chassis. |
+| [`@autonome-research/thread-phase-agents`](./packages/thread-phase-agents) | Adapter implementations for claude-code, codex, hermes, openclaw, pi, Grok Bot, Anthropic, and the ACP chassis. |
 | [`@autonome-research/thread-phase-cli`](./packages/thread-phase-cli) | `thread-phase` bin + auto-loader. Depends on the other two — installing this gets the whole runtime. |
 
 Locked versions across all three.

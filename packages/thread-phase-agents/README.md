@@ -20,6 +20,7 @@ npm install @autonome-research/thread-phase-agents @autonome-research/thread-pha
 | `codexAgent` | `OPENAI_API_KEY` env var (Responses API direct) | `npm install openai` |
 | `anthropicAgent` | `ANTHROPIC_API_KEY` env var | `npm install @anthropic-ai/sdk` |
 | `piAgent` | pi config under `~/.pi/agent/`; Node.js >=22.19.0 | `npm install @earendil-works/pi-coding-agent` |
+| `grokBotAgent` | Cursor/Grok Bot product invoke API client | — |
 
 The Pi SDK currently requires Node.js 22.19.0 or newer; other adapters and core thread-phase retain the package's broader Node support.
 
@@ -27,7 +28,7 @@ Calling an adapter without its SDK installed throws a clear `... requires the op
 
 ## What's in here
 
-Seven adapter implementations plus a shared ACP chassis:
+Eight adapter implementations plus a shared ACP chassis:
 
 - **`acpAgent`** — the [Agent Client Protocol](https://agentclientprotocol.com/) chassis. Spawns any ACP-speaking subprocess, parses JSON-RPC over stdio, drives `initialize → session/new → session/prompt → session/cancel`. Other ACP-based adapters compose on top.
 - **`hermesAgent`** — wraps `hermes acp`. Inherits the ACP chassis.
@@ -37,6 +38,13 @@ Seven adapter implementations plus a shared ACP chassis:
 - **`codexCliAgent`** — subprocess wrapper around `codex exec --json`. Uses codex's own auth (ChatGPT subscription OAuth typically).
 - **`claudeCodeAgent`** — subprocess + JSONL streaming. Forgiving parser falls back to `native` events for unknown shapes.
 - **`piAgent`** — in-process via `@earendil-works/pi-coding-agent`. The only adapter where `SteerableAgentRun.steer()` and `.followUp()` work natively at runtime (pi accepts mid-stream steering).
+- **`grokBotAgent`** — bridge to a Cursor/Grok Bot invoke API supplied by the host product. Maps turn messages, tools, human gates, cancellation, and opaque conversation resumption into canonical events.
+
+### Grok Bot invoke API requirement
+
+Grok Bot does not currently expose a public `grokbot` executable or a public Node invoke API. `grokBotAgent` therefore requires an authenticated `GrokBotInvokeClient` in its config; Cursor/Grok Bot owns account authentication plus start/stream/cancel transport. The adapter does not accept a pasted bot token and does not emulate invocation with files or scheduled routines. If Grok Bot exposes ACP, prefer the existing ACP chassis instead.
+
+The client contract is intentionally small: `startRun()` returns the remote event stream, an opaque run id, and a real idempotent `cancel()` operation. This lets product integrations land without changing pipeline code while avoiding claims that Grok Bot is callable from `PATH` today.
 
 ## Using an adapter
 
@@ -151,7 +159,7 @@ const result = await run.result;
 
 - `piAgent` supports both `steer()` (mid-generation injection) and `followUp()` (queued additional turn).
 - `hermesAgent` / `openClawAgent` / `acpAgent` support `followUp()` (ACP's `session/prompt` is discrete — multiple prompts on one session). `steer()` rejects with a capability error.
-- All other adapters (`claudeCodeAgent`, `codexCliAgent`, `codexAgent`, `anthropicAgent`) are not steerable. `isSteerable(run)` returns `false`.
+- All other adapters (`claudeCodeAgent`, `codexCliAgent`, `codexAgent`, `anthropicAgent`, `grokBotAgent`) are not steerable. `isSteerable(run)` returns `false`.
 
 ### Cross-adapter handoff with Thread
 

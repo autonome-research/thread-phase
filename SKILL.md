@@ -8,7 +8,7 @@ description: Use when the user asks to build a structured agent pipeline, compos
 Three npm packages, all at the same locked version (v3.x):
 
 - **`@autonome-research/thread-phase`** — the framework: `Phase`, `runPipeline`, `runAgentWithTools`, `JobRunner`, `Trigger`, the convenience helpers (`oneShot` / `schedule` / `hook`), plus the `AgentAdapter` protocol under the `/agents` subpath.
-- **`@autonome-research/thread-phase-agents`** — adapter implementations for ready agents: `claudeCodeAgent`, `codexCliAgent`, `codexAgent`, `hermesAgent`, `openClawAgent`, `anthropicAgent`, `piAgent`, plus the shared ACP chassis. Heavy SDKs are **optional peer deps** (install only the ones you use).
+- **`@autonome-research/thread-phase-agents`** — adapter implementations for ready agents: `claudeCodeAgent`, `codexCliAgent`, `codexAgent`, `hermesAgent`, `openClawAgent`, `anthropicAgent`, `piAgent`, `grokBotAgent`, plus the shared ACP chassis. Heavy SDKs are **optional peer deps** (install only the ones you use).
 - **`@autonome-research/thread-phase-cli`** — bin + auto-loader. Single install pulls in the other two.
 
 ```bash
@@ -97,7 +97,7 @@ Single source of truth. If an import fails, look here first.
 | **Raw inference loop**: `runAgentWithTools`, `loadInferenceConfig`, `createInferenceClient`, `ToolRegistry` | `@autonome-research/thread-phase` |
 | **Triggers**: `TimerTrigger`, `Trigger`, `TriggerEvent`, `runTrigger`, `RunTriggerHandle` | `@autonome-research/thread-phase/triggers` |
 | **Patterns**: `whileCondition`, `match`, `withRetry`, `subPipeline`, `subPipelineOf`, `runSubPipeline`, `boundedFanout`, `boundedFanoutOf`, `parallelPhases`, `intentGate` | `@autonome-research/thread-phase/patterns` |
-| **Pre-built agents**: `claudeCodeAgent`, `codexAgent`, `codexCliAgent`, `hermesAgent`, `openClawAgent`, `anthropicAgent`, `piAgent`, `acpAgent` | `@autonome-research/thread-phase-agents` |
+| **Pre-built agents**: `claudeCodeAgent`, `codexAgent`, `codexCliAgent`, `hermesAgent`, `openClawAgent`, `anthropicAgent`, `piAgent`, `grokBotAgent`, `acpAgent` | `@autonome-research/thread-phase-agents` |
 | **Chain-builder utilities**: `createEventBus`, `pipeAgentEventsToJobStore`, `createThread`, `appendEvent`, `withMemory`, `withThread`, `isSteerable` | `@autonome-research/thread-phase-agents` (re-exported) |
 | **Adapter-consumer types**: `AgentEvent`, `AgentRun`, `AgentRunResult`, `AgentEventBus`, `Thread`, `AgentAdapterMeta`, `AgentCapabilities` | `@autonome-research/thread-phase-agents` (re-exported) |
 | **Cross-adapter rendering**: `threadToTranscript`, `threadToMessages`, `threadToAcpPrompt`, `threadToClaudeCodePrompt`, `threadToCodexInput`, `threadToAnthropicMessages` | `@autonome-research/thread-phase-agents` |
@@ -682,7 +682,7 @@ import {
   acpAgent, createAcpAdapter,
   hermesAgent, openClawAgent,
   anthropicAgent, codexAgent, codexCliAgent,
-  claudeCodeAgent, piAgent,
+  claudeCodeAgent, piAgent, grokBotAgent,
   // Pre-built inject callbacks
   injectMemory, injectResume,
   // Cross-adapter Thread → adapter-input renderers

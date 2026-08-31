@@ -6,7 +6,18 @@ import type { AnthropicAgentConfig } from '../src/anthropic/index.js';
 import type { CodexAgentConfig } from '../src/codex/index.js';
 import type { ClaudeCodeAgentConfig } from '../src/claude-code/index.js';
 import type { HermesAgentConfig } from '../src/hermes/index.js';
+import type { GrokBotAgentConfig, GrokBotInvokeClient } from '../src/grok-bot/index.js';
 import type { OpenClawAgentConfig } from '../src/openclaw/index.js';
+
+const grokClient: GrokBotInvokeClient = {
+  async startRun() {
+    throw new Error('not invoked by injector tests');
+  },
+};
+
+function grokConfig(prompt: string): GrokBotAgentConfig {
+  return { agentId: 'agent-test', prompt, client: grokClient };
+}
 
 describe('injectMemory', () => {
   it('inference splices memory into config.config.systemPrompt', () => {
@@ -125,6 +136,13 @@ describe('injectMemory', () => {
     expect(injectMemory.hermes(hermes, 'mem').prompt).toContain('mem');
     expect(injectMemory.openClaw(openClaw, 'mem').prompt).toContain('mem');
   });
+
+  it('grokBot prepends memory to the turn prompt', () => {
+    const cfg = grokConfig('do X');
+    const out = injectMemory.grokBot(cfg, 'mem');
+    expect(out.prompt).toContain('mem');
+    expect(out.prompt).toContain('do X');
+  });
 });
 
 describe('injectResume', () => {
@@ -183,5 +201,11 @@ describe('injectResume', () => {
     const h: HermesAgentConfig = { cwd: '/tmp', prompt: 'hi' };
     const token: ResumeToken = { kind: 'response-id', id: 'r', provider: 'openai' };
     expect(injectResume.hermes(h, token).resumeSessionId).toBeUndefined();
+  });
+
+  it('grokBot applies opaque conversation tokens', () => {
+    const cfg = grokConfig('hi');
+    const token: ResumeToken = { kind: 'opaque', data: 'conversation-1' };
+    expect(injectResume.grokBot(cfg, token).resumeToken).toBe('conversation-1');
   });
 });
