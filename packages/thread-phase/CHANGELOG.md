@@ -4,9 +4,15 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+## [6.2.0] — 2026-10-01
+
 ### Added
 
-- Added `systemOne(name, options)` and `SystemOneOptions` on the core `/typesafe` subpath for TypeSafe System One evaluation phases. Uses a host-owned official SDK client, preserves typed Choice/Score/Noul answers, forwards pipeline cancellation, and emits answers/model/usage as a normal `data` event after applying the result to context. `@typesafe-ai/sdk@^0.6.0` is an optional peer; existing imports and the agent protocol are unchanged. Includes transport-mocked tests, type-inference checks and a routing example. This additive public API requires the next minor release; it is not in published v6.1.0.
+- Added `systemOne(name, options)` and `SystemOneOptions` on the core `/typesafe` subpath for TypeSafe System One evaluation phases. Uses a host-owned official SDK client, preserves typed Choice/Score/Noul answers, forwards pipeline cancellation, and emits answers/model/usage as a normal `data` event after applying the result to context. `@typesafe-ai/sdk@^0.6.0` is an optional peer; existing imports and the agent protocol are unchanged. Includes transport-mocked tests, type-inference checks and a routing example. This additive public API is new in v6.2.0; it is not in v6.1.0.
+
+### Maintenance
+
+- Refreshed the source lockfile's transitive `fast-uri` dependency from 3.1.4 to 3.1.8 to address the production audit advisories. Runtime dependency ranges are unchanged.
 
 ## [6.1.0] — 2026-07-22
 

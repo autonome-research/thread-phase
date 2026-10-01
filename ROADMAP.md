@@ -12,9 +12,11 @@ Developer experience is part of lifecycle correctness. A safe runtime that canno
 - [`packages/thread-phase/CHANGELOG.md`](./packages/thread-phase/CHANGELOG.md) — implemented changes by release.
 - [`docs/archive/roadmap-pre-v1.md`](./docs/archive/roadmap-pre-v1.md) — historical pre-v1 roadmap preserved for project context; no longer prescriptive.
 
-## Current published line
+## Current release lines
 
-**v6.1.0 is published.** `@autonome-research/thread-phase@6.1.0` is on npm, `packages/thread-phase/package.json` is `6.1.0`, and git tag `v6.1.0` exists. It is not a candidate.
+**v6.2.0 adds optional TypeSafe System One evaluation phases.** The source tag and package artifacts include `/typesafe`, typed results, cancellation, tests, and a runnable example. All three package manifests are locked to `6.2.0`. npm publication is pending authentication; see the [v6.2.0 release checklist](./docs/releases/v6.2.0-release-checklist.md).
+
+**v6.1.0 remains the published npm line** until that publication completes. Its git tag is unchanged.
 
 Published v6.1.0 includes:
 
@@ -37,7 +39,7 @@ Completed:
 - all locked packages require Node.js 22.5 or newer because core v6 uses `node:sqlite`.
 - forward-port merge, tag `v6.1.0`, and npm publication are done.
 
-Remaining P0 merge/tag/publication work from the candidate era is finished. GitHub Releases is still empty despite existing tags; that is tracked separately in #8 and does not make 6.1.0 unpublished.
+Remaining P0 merge/tag/publication work from the v6.1 candidate era is finished. Historical GitHub Release backfilling is tracked separately in #8 and does not make 6.1.0 unpublished.
 
 ## P1 — adoption-critical developer experience
 

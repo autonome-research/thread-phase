@@ -41,8 +41,10 @@ thread-phase run hello
 
 Locked versions across all three.
 
-Unreleased core support: [TypeSafe System One evaluation phases](./packages/thread-phase/README.md#typesafe-system-one-evaluations)
+New in v6.2.0: [TypeSafe System One evaluation phases](./packages/thread-phase/README.md#typesafe-system-one-evaluations)
 via the optional `/typesafe` subpath. Typed Choice/Score/Noul decisions, not an agent adapter; no Pi extension changes.
+The v6.2.0 source tag and release assets include this support; npm publication is pending authentication.
+See the [release checklist](./docs/releases/v6.2.0-release-checklist.md).
 
 ## Docs
 

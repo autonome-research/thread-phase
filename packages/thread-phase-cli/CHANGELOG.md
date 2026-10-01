@@ -4,6 +4,10 @@ All notable changes to this package are documented here.
 
 ## [Unreleased]
 
+## [6.2.0] — 2026-10-01
+
+- Locked-version release consuming core v6.2.0 with optional TypeSafe System One evaluation phases. CLI behavior is unchanged.
+
 ## [6.1.0] — 2026-07-22
 
 - Locked-version release consuming the additive core v6.1 lifecycle APIs. CLI behavior is unchanged.

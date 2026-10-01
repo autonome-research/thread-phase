@@ -71,7 +71,7 @@ result.executedToolCalls;  // [{ id, name: 'add', input: { a: 17, b: 25 } }]
 
 ## TypeSafe System One evaluations
 
-**Unreleased — planned for the next minor release.** Core's optional
+**Added in v6.2.0.** Core's optional
 `@autonome-research/thread-phase/typesafe` subpath provides `systemOne(name, options)`
 for structured decisions, not conversational agents. Install `@typesafe-ai/sdk@^0.6.0`
 and set `TYPESAFE_API_KEY` in the host environment. Other core imports do not require

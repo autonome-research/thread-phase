@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [6.2.0] — 2026-10-01
+
+- Locked-version release alongside core TypeSafe System One support. No adapter behavior changes; TypeSafe is a core evaluation phase, not an AgentAdapter.
+
 ## [6.1.0] — 2026-07-22
 
 - Locked-version release alongside the additive core v6.1 lifecycle and event APIs.

@@ -116,5 +116,6 @@ These tier rules cover only the `/agents` subpath split. The other public surfac
 - `@autonome-research/thread-phase` main entry (`.`): all stable from v3.0.0 onward. Same semver rules as Tier A above.
 - `@autonome-research/thread-phase/patterns`: all stable. `boundedFanoutOf` was promoted in v3.3.2.
 - `@autonome-research/thread-phase/triggers`, `/context`, `/session`, `/tools`: all stable.
+- `@autonome-research/thread-phase/typesafe`: stable from v6.2.0; requires the optional TypeSafe SDK for SDK clients/types, without loading it through existing core entry points.
 - `@autonome-research/thread-phase/agents/test-utils`: explicitly testing-only; mock adapter shapes may change as the test-utils surface evolves.
 - `@autonome-research/thread-phase-agents`: every named adapter export (`claudeCodeAgent`, `codexAgent`, etc.) is stable. The thread-bridge helpers and injectors are stable. Some internal adapter implementation details remain `@internal` — those are noted at the export site.
