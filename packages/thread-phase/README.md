@@ -69,6 +69,66 @@ result.usage;              // { promptTokens, completionTokens, totalTokens }
 result.executedToolCalls;  // [{ id, name: 'add', input: { a: 17, b: 25 } }]
 ```
 
+## TypeSafe System One evaluations
+
+**Unreleased — planned for the next minor release.** Core's optional
+`@autonome-research/thread-phase/typesafe` subpath provides `systemOne(name, options)`
+for structured decisions, not conversational agents. Install `@typesafe-ai/sdk@^0.6.0`
+and set `TYPESAFE_API_KEY` in the host environment. Other core imports do not require
+or load that SDK.
+
+```ts
+import { choice, TypeSafeClient } from '@typesafe-ai/sdk';
+import { systemOne } from '@autonome-research/thread-phase/typesafe';
+import type { BasePipelineContext } from '@autonome-research/thread-phase';
+
+interface Ctx extends BasePipelineContext {
+  ticket: string;
+  department?: 'billing' | 'technical';
+}
+
+const triage = systemOne('triage', {
+  client: new TypeSafeClient({ logLevel: 'off' }), // reads TYPESAFE_API_KEY
+  request: (ctx: Ctx) => ({
+    state: { ticket: ctx.ticket },
+    questions: {
+      department: choice('Which team?', { billing: null, technical: null }),
+    },
+  }),
+  requestOptions: { timeout: 5000, retry: { maxRetries: 1 } },
+  onResult: (result, ctx) => { ctx.department = result.answers.department.choice; },
+});
+// Compose triage with any other Phase, match, intentGate, or JobRunner.
+```
+
+- `request(ctx)` selects the state/model/questions to send; it may be async.
+  Choice labels, Score rubric keys, and named answers retain the SDK's inferred
+  types. Noul is a probability, **not a boolean**; Score may be fractional.
+- `onResult(result, ctx)` is awaited and writes results to context (or sets
+  `ctx.stop`). After it succeeds, a `data` event at `${name}.result` contains
+  `{ answers, model, usage }`. Usage retains `input_tokens` and `output_tokens`.
+  A `phase` event announces evaluation start. There are no synthetic agent events.
+- `ctx.signal` is forwarded to the SDK, including its retries. `requestOptions`
+  accepts the SDK's timeout, retry and headers options, but cannot override the
+  signal. SDK timeouts are **per attempt**; use a pipeline signal with
+  `AbortSignal.timeout(...)` for a total transport budget. Async callbacks must
+  cooperate with `ctx.signal` themselves. Cancellation cannot undo callback side effects.
+- SDK request validation, HTTP errors, timeout and callback failures propagate;
+  no default answers or success result event are fabricated. No extra retry layer
+  is added. Disable SDK retries if an outer `withRetry` owns the retry budget.
+  Response typing follows the SDK contract, not additional runtime schema validation.
+- The phase keeps the authenticated client in its closure, not serialized state.
+  It does not emit requests or client configuration. Answers **are logged** by
+  event consumers, so treat their labels/rubrics as potentially sensitive. Never
+  put credentials in context, request state, questions or custom error messages;
+  SDK debug logging can expose request/response bodies.
+
+For a standalone call or an `intentGate.classify` callback, use
+`client.systemOne(request, { signal: ctx.signal })` directly. There is no need for
+an `AgentAdapter`, conversation thread, or new kernel primitive.
+See [the runnable Choice/Score/Noul routing example](./examples/typesafe-triage.ts)
+and [TypeSafe's API reference](https://docs.typesafe.ai/api).
+
 ## Architecture
 
 Three primitives plus one extension surface.

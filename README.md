@@ -41,6 +41,9 @@ thread-phase run hello
 
 Locked versions across all three.
 
+Unreleased core support: [TypeSafe System One evaluation phases](./packages/thread-phase/README.md#typesafe-system-one-evaluations)
+via the optional `/typesafe` subpath. Typed Choice/Score/Noul decisions, not an agent adapter; no Pi extension changes.
+
 ## Docs
 
 - [`AGENTS.md`](./AGENTS.md) — full guide for LLM agents generating thread-phase code.

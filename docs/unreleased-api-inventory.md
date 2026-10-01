@@ -1,3 +1,13 @@
+# Stable API Inventory
+
+## Unreleased additions after v6.1.0
+
+- Core subpath `@autonome-research/thread-phase/typesafe`: `systemOne(name, options)` and `SystemOneOptions<TCtx, Q>`.
+- Optional peer `@typesafe-ai/sdk@^0.6.0`; no SDK dependency from existing entry points.
+- Additive stable API: requires the next minor release, not a v6.1.x patch. No Pi extension or AgentAdapter changes.
+
+The remaining inventory below records the already-published v6.1.0 additions.
+
 # v6.1.0 Stable API Inventory
 
 Baseline: published `@autonome-research/thread-phase@6.0.0`

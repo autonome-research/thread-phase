@@ -16,6 +16,7 @@
     "./agents/authoring": "./dist/agents/authoring/index.js",
     "./agents/test-utils": "./dist/agents/test-utils/index.js",
     "./triggers": "./dist/triggers/index.js",
+    "./typesafe": "./dist/typesafe.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -37,15 +38,20 @@
   "devDependencies": {
     "@honcho-ai/sdk": "^2.1.1",
     "@types/node": "^22.0.0",
+    "@typesafe-ai/sdk": "^0.6.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10"
   },
   "peerDependencies": {
+    "@typesafe-ai/sdk": "^0.6.0",
     "cron-parser": "^4.0.0 || ^5.0.0",
     "vitest": "^2.1.0 || ^3.0.0 || ^4.0.0"
   },
   "peerDependenciesMeta": {
+    "@typesafe-ai/sdk": {
+      "optional": true
+    },
     "cron-parser": {
       "optional": true
     },

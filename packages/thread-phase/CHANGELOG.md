@@ -4,6 +4,10 @@ All notable changes to thread-phase will be documented here. The format is based
 
 ## [Unreleased]
 
+### Added
+
+- Added `systemOne(name, options)` and `SystemOneOptions` on the core `/typesafe` subpath for TypeSafe System One evaluation phases. Uses a host-owned official SDK client, preserves typed Choice/Score/Noul answers, forwards pipeline cancellation, and emits answers/model/usage as a normal `data` event after applying the result to context. `@typesafe-ai/sdk@^0.6.0` is an optional peer; existing imports and the agent protocol are unchanged. Includes transport-mocked tests, type-inference checks and a routing example. This additive public API requires the next minor release; it is not in published v6.1.0.
+
 ## [6.1.0] — 2026-07-22
 
 ### Agent event dispatch
